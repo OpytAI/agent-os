@@ -1,43 +1,12 @@
-load("//bazel:mc_grammar.bzl", "mc_grammar", "mc_syntax_pack")
+load("@twigz//bazel:grammar.bzl", "twigz_pack")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files([
-    "lua.grammar",
-    "luau.grammar",
-    "families/lua-core.grammar",
-])
-
-sh_test(
-    name = "format_test",
-    srcs = ["format_test.sh"],
-    args = [
-        "$(location //bazel/tools/mc-grammar-gen:mc-grammar-fmt)",
-        "--check",
-        "$(location :families/lua-core.grammar)",
-        "$(location :lua.grammar)",
-        "$(location :luau.grammar)",
-    ],
-    data = [
-        ":families/lua-core.grammar",
-        ":lua.grammar",
-        ":luau.grammar",
-        "//bazel/tools/mc-grammar-gen:mc-grammar-fmt",
-    ],
-)
-
-mc_grammar(
-    name = "lua",
-    language = "lua",
-    modules = {"families/lua-core.grammar": "lua.core"},
-    root = "lua.grammar",
-)
-
-mc_syntax_pack(
+twigz_pack(
     name = "syntax_pack",
     grammars = [
-        ":lua",
-        ":luau",
+        "@twigz//grammars:lua",
+        "@twigz//grammars:luau",
     ],
 )
 
@@ -48,9 +17,15 @@ filegroup(
 )
 
 filegroup(
-    name = "syntax_registry_zig",
+    name = "syntax_pack_scanners",
     srcs = [":syntax_pack"],
-    output_group = "registry_zig",
+    output_group = "scanners",
+)
+
+filegroup(
+    name = "syntax_registry_json",
+    srcs = [":syntax_pack"],
+    output_group = "registry_json",
 )
 
 filegroup(
@@ -71,9 +46,10 @@ filegroup(
     output_group = "report",
 )
 
-mc_grammar(
-    name = "luau",
-    language = "luau",
-    modules = {"families/lua-core.grammar": "lua.core"},
-    root = "luau.grammar",
+genrule(
+    name = "syntax_registry_zig",
+    srcs = [":syntax_registry_json"],
+    outs = ["registry.zig"],
+    cmd = "$(execpath //bazel/tools/syntax-registry-zig) $(location :syntax_registry_json) $@",
+    tools = ["//bazel/tools/syntax-registry-zig"],
 )

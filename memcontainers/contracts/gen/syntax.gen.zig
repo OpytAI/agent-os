@@ -1,6 +1,6 @@
 // @generated from contracts/syntax.kdl by //contracts/codegen:projector — do not edit.
 pub const PROTOCOL_VERSION: u32 = 1;
-pub const VOCABULARY_VERSION: u32 = 1;
+pub const VOCABULARY_VERSION: u32 = 2;
 pub const GRAMMAR_IR_VERSION: u32 = 2;
 pub const SEMANTIC_KIND_MODULE: u32 = 1;
 pub const SEMANTIC_KIND_DECLARATION: u32 = 2;
@@ -21,6 +21,9 @@ pub const SEMANTIC_KIND_TABLE: u32 = 16;
 pub const SEMANTIC_KIND_FIELD: u32 = 17;
 pub const SEMANTIC_KIND_OPERATOR: u32 = 18;
 pub const SEMANTIC_KIND_COMMENT: u32 = 19;
+pub const SEMANTIC_KIND_CLASS: u32 = 20;
+pub const SEMANTIC_KIND_NAMESPACE: u32 = 21;
+pub const SEMANTIC_KIND_STRING: u32 = 22;
 pub const SEMANTIC_ROLE_NAME: u32 = 1;
 pub const SEMANTIC_ROLE_BODY: u32 = 2;
 pub const SEMANTIC_ROLE_PARAMETERS: u32 = 3;

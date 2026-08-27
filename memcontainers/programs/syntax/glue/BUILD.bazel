@@ -16,14 +16,14 @@ zig_library(
 
 zig_binary(
     name = "syntax_raw",
-    srcs = ["scanner.zig"],
     csrcs = [
-        "@tree_sitter//:runtime_c",
+        "@twigz//:tree_sitter_runtime_c",
         "//memcontainers/wasi-adapter:close_shim.c",
         "//memcontainers/programs/syntax/grammars:syntax_pack_csrcs",
+        "//memcontainers/programs/syntax/grammars:syntax_pack_scanners",
     ],
     extra_srcs = [
-        "@tree_sitter//:runtime_support",
+        "@twigz//:tree_sitter_runtime_support",
     ],
     linkopts = ["-lc"],
     main = "entry.zig",
@@ -35,7 +35,7 @@ zig_binary(
         "//memcontainers/sysroot/zig:mc",
         "//memcontainers/sysroot/zig:svc",
         "//memcontainers/sysroot/zig:sys",
-        "@tree_sitter//:runtime_headers",
+        "@twigz//:tree_sitter_headers",
     ],
 )
 

@@ -29,7 +29,7 @@ filegroup(
         "//third_party/firecracker:firecracker.MODULE.bazel",
         "//third_party/luauc:luauc.MODULE.bazel",
         "//third_party/sqlite:sqlite.MODULE.bazel",
-        "//third_party/tree-sitter:tree-sitter.MODULE.bazel",
+        "//third_party/twigz:twigz.MODULE.bazel",
     ],
     visibility = ["//visibility:public"],
 )

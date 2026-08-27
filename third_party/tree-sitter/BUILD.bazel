@@ -1,7 +1,0 @@
-exports_files([
-    "BUILD.tree-sitter.bazel",
-    "SYSTEM.md",
-    "tree-sitter.MODULE.bazel",
-])
-
-exports_files(glob(["patches/*.patch"]))

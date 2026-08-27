@@ -1,0 +1,17 @@
+# Twigz — grammar compiler, packer, and Tree-sitter runtime. AgentOS consumes
+# public grammars, pack C, and Tree-sitter filegroups; AgentOS owns the
+# registry projector, /bin/syntax service, and e2e.
+#
+# Commit-locked 0.0.0 archive_override: bump commit + strip_prefix + integrity
+# together.
+
+TWIGZ_COMMIT = "3019911e54c1c87985335eb35db751ff6f1cc84f"
+TWIGZ_INTEGRITY = "sha256-F2yXpDtLnVk4EztOw/Tk6jT+oYxwKGUTTxiMlcvJW4c="
+
+bazel_dep(name = "twigz", version = "0.0.0")
+archive_override(
+    module_name = "twigz",
+    integrity = TWIGZ_INTEGRITY,
+    strip_prefix = "twigz-" + TWIGZ_COMMIT,
+    url = "https://github.com/OpytAI/twigz/archive/" + TWIGZ_COMMIT + ".tar.gz",
+)

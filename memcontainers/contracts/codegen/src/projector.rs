@@ -2732,7 +2732,7 @@ fn rust_vocabulary_ident(value: &str) -> String {
 
 /// Host generators must consume the same parsed contract model as every runtime projection. The
 /// constants above are sufficient for wire users; these compact descriptors additionally retain
-/// the semantic constraints that `mc-grammar-gen` validates while elaborating an owned grammar.
+/// the semantic constraints that grammar compilers validate while elaborating an owned grammar.
 fn emit_rust_vocabulary_descriptors(nodes: &[Node]) -> String {
     let roles = nodes
         .iter()

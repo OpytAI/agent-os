@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 pub const PROTOCOL_VERSION: u32 = 1;
-pub const VOCABULARY_VERSION: u32 = 1;
+pub const VOCABULARY_VERSION: u32 = 2;
 pub const GRAMMAR_IR_VERSION: u32 = 2;
 pub const SEMANTIC_KIND_MODULE: u32 = 1;
 pub const SEMANTIC_KIND_DECLARATION: u32 = 2;
@@ -24,6 +24,9 @@ pub const SEMANTIC_KIND_TABLE: u32 = 16;
 pub const SEMANTIC_KIND_FIELD: u32 = 17;
 pub const SEMANTIC_KIND_OPERATOR: u32 = 18;
 pub const SEMANTIC_KIND_COMMENT: u32 = 19;
+pub const SEMANTIC_KIND_CLASS: u32 = 20;
+pub const SEMANTIC_KIND_NAMESPACE: u32 = 21;
+pub const SEMANTIC_KIND_STRING: u32 = 22;
 pub const SEMANTIC_ROLE_NAME: u32 = 1;
 pub const SEMANTIC_ROLE_BODY: u32 = 2;
 pub const SEMANTIC_ROLE_PARAMETERS: u32 = 3;
@@ -157,6 +160,25 @@ const SEMANTIC_KIND_COMMENT_ROLES: &[SemanticRoleSpec] = &[
 ];
 const SEMANTIC_KIND_COMMENT_TRAITS: &[SemanticTraitSpec] = &[
 ];
+const SEMANTIC_KIND_CLASS_ROLES: &[SemanticRoleSpec] = &[
+    SemanticRoleSpec { name: "name", id: 1, required: true },
+    SemanticRoleSpec { name: "body", id: 2, required: true },
+];
+const SEMANTIC_KIND_CLASS_TRAITS: &[SemanticTraitSpec] = &[
+    SemanticTraitSpec { name: "declaration", id: 1 },
+    SemanticTraitSpec { name: "scope", id: 2 },
+];
+const SEMANTIC_KIND_NAMESPACE_ROLES: &[SemanticRoleSpec] = &[
+    SemanticRoleSpec { name: "name", id: 1, required: false },
+    SemanticRoleSpec { name: "body", id: 2, required: true },
+];
+const SEMANTIC_KIND_NAMESPACE_TRAITS: &[SemanticTraitSpec] = &[
+    SemanticTraitSpec { name: "scope", id: 2 },
+];
+const SEMANTIC_KIND_STRING_ROLES: &[SemanticRoleSpec] = &[
+];
+const SEMANTIC_KIND_STRING_TRAITS: &[SemanticTraitSpec] = &[
+];
 pub const SEMANTIC_KINDS: &[SemanticKindSpec] = &[
     SemanticKindSpec { name: "module", id: 1, roles: SEMANTIC_KIND_MODULE_ROLES, traits: SEMANTIC_KIND_MODULE_TRAITS },
     SemanticKindSpec { name: "declaration", id: 2, roles: SEMANTIC_KIND_DECLARATION_ROLES, traits: SEMANTIC_KIND_DECLARATION_TRAITS },
@@ -177,6 +199,9 @@ pub const SEMANTIC_KINDS: &[SemanticKindSpec] = &[
     SemanticKindSpec { name: "field", id: 17, roles: SEMANTIC_KIND_FIELD_ROLES, traits: SEMANTIC_KIND_FIELD_TRAITS },
     SemanticKindSpec { name: "operator", id: 18, roles: SEMANTIC_KIND_OPERATOR_ROLES, traits: SEMANTIC_KIND_OPERATOR_TRAITS },
     SemanticKindSpec { name: "comment", id: 19, roles: SEMANTIC_KIND_COMMENT_ROLES, traits: SEMANTIC_KIND_COMMENT_TRAITS },
+    SemanticKindSpec { name: "class", id: 20, roles: SEMANTIC_KIND_CLASS_ROLES, traits: SEMANTIC_KIND_CLASS_TRAITS },
+    SemanticKindSpec { name: "namespace", id: 21, roles: SEMANTIC_KIND_NAMESPACE_ROLES, traits: SEMANTIC_KIND_NAMESPACE_TRAITS },
+    SemanticKindSpec { name: "string", id: 22, roles: SEMANTIC_KIND_STRING_ROLES, traits: SEMANTIC_KIND_STRING_TRAITS },
 ];
 
 extern crate alloc;

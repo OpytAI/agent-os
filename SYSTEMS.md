@@ -1065,13 +1065,9 @@ same content/code split as the Luau batteries (universal stdlib embedded in the 
 flavor's `.luau` libs (VFS layers): code is the binary, assets are layered VFS content.
 
 **syntax** is the structural-code engine shipped as part of the default `loom` programmability layer.
-Parser generation stays on the host: AgentOS's Rust `mc-grammar-gen` parses an owned declarative
-DSL into a typed Grammar IR, validates semantic vocabulary references from `contracts/syntax.kdl`, and
-feeds a pinned, JSON-only slice of Tree-sitter's Rust generator. A host pack action preserves separate
-Lua/Luau automata while interning only byte-identical immutable table payloads, and projects semantic IR
-into native symbol/field-ID tables. No JavaScript runtime or community grammar participates. The guest
-`/bin/syntax` takes the C-API-through-Zig lane: it links the generic Tree-sitter C runtime, generated
-parser pack, and the shared external scanner behind one lazy, isolated resident service. The generated
+Parser generation stays on the host in `@twigz`. AgentOS packs lua+luau only, projects pack
+`registry.json` into `registry.zig`, and links Tree-sitter C plus generated scanners with
+`zig_binary.csrcs`. The guest `/bin/syntax` is one lazy, isolated resident service. The generated
 binary protocol and semantic constants come from the contract projector in Rust, Zig, and Luau,
 satisfying B2 across all three faces. Concrete CSTs remain lossless and language-specific; generated
 native semantic tables provide the explicitly versioned common vocabulary without runtime JSON. See
@@ -1792,7 +1788,6 @@ agent-os/                      ← the repository root: a Bazel/deps/docs shell
 │   ├── release_wasm.bzl       #   the size/opt wasm transition (opt + panic=abort + LTO)
 │   ├── wasm_opt.bzl           #   the final-link Binaryen policy shared by kernel + every guest
 │   ├── wasm32_build_test.bzl  #   the wasm32 build-test rule
-│   ├── mc_grammar.bzl         #   reusable grammar/projector boundary
 │   ├── mc_box.bzl             #   the wasi→mc conversion (mc_box / mc_wasi_program)
 │   ├── mc_program.bzl         #   stamp + attest a guest (mc_program / mc_service_layer / cc_*)
 │   ├── ts.bzl                 #   repository TypeScript project convention
@@ -1872,7 +1867,7 @@ output, `_wasm` is the configured wasm artifact, `_release` is the compiler's re
 the final public program uses its installed name. Tests use `:test` only when they are the package's single
 obvious test; otherwise they end in `_test`, with compile-only gates named `build_test`. `_gen`, `_sync`,
 `_layer`, `_bin`, and `_lib` retain their literal roles. Kebab-case is reserved for user-facing command or
-installed binary names (`mc-grammar-gen`, `luau-analyze`); `_inner`, `_impl`, dots, and
+installed binary names (`luau-analyze`); `_inner`, `_impl`, dots, and
 numeric/double-underscore suffixes are reserved for private targets emitted by macros. Generated npm
 labels follow their upstream names. The
 legacy `mcbox-*` labels are the sole grandfathered product family because they preserve cross-lane label

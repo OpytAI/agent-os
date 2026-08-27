@@ -83,12 +83,6 @@ source_formatter(
     tool = ":stylua",
 )
 
-source_formatter(
-    name = "format_grammar",
-    language = "grammar",
-    tool = "//bazel/tools/mc-grammar-gen:mc-grammar-fmt",
-)
-
 multirun(
     name = "format",
     commands = [
@@ -97,7 +91,6 @@ multirun(
         ":format_zig",
         ":format_elixir",
         ":format_luau",
-        ":format_grammar",
     ],
     jobs = 4,
     keep_going = True,
@@ -112,7 +105,6 @@ multirun(
         ":format_zig.check",
         ":format_elixir.check",
         ":format_luau.check",
-        ":format_grammar.check",
     ],
     jobs = 4,
     keep_going = True,

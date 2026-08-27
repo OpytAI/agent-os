@@ -185,8 +185,6 @@ For a task-level transformation, validate the actual candidate source:
 For repository changes to the parser stack, run:
 
 ```sh
-bazel test //bazel/tools/mc-grammar-gen:dsl_test
-bazel test //memcontainers/programs/syntax/grammars:format_test
 bazel test //memcontainers/tests/e2e:core --test_arg=syntax
 ```
 

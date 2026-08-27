@@ -6,13 +6,9 @@ const svc = @import("svc");
 const sys = @import("sys");
 const wire = @import("syntax_zig");
 const registry = @import("syntax_registry");
-const scanner = @import("scanner.zig");
 const c = @cImport({
     @cInclude("tree_sitter/api.h");
 });
-comptime {
-    _ = scanner;
-}
 
 const alloc = std.heap.c_allocator;
 const SERVICE_NAME = "syntax";

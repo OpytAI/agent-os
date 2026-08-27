@@ -59,14 +59,6 @@ crate.from_cargo(
     manifests = ["//memcontainers/lib/parse:Cargo.toml"],
 )
 
-# Native parser-generator. tree-sitter-generate is a host build tool; its
-# std/regex graph must not feature-unify with the kernel or any guest engine.
-crate.from_cargo(
-    name = "grammar_gen_crates",
-    cargo_lockfile = "//bazel/tools/mc-grammar-gen:Cargo.lock",
-    manifests = ["//bazel/tools/mc-grammar-gen:Cargo.toml"],
-)
-
 # NIF (std, native): rustler for the BEAM host shim
 # (//memcontainers/hosts/wasmtime/nif). Own lock so rustler never feature-unifies
 # with the host's wasmtime graph. The `host` crate it wraps is a Bazel dep
@@ -76,4 +68,4 @@ crate.from_cargo(
     cargo_lockfile = "//memcontainers/hosts/wasmtime/nif:Cargo.lock",
     manifests = ["//memcontainers/hosts/wasmtime/nif:Cargo.toml"],
 )
-use_repo(crate, "crates", "grammar_gen_crates", "host_crates", "nif_crates", "parse_crates", "typst_crates")
+use_repo(crate, "crates", "host_crates", "nif_crates", "parse_crates", "typst_crates")

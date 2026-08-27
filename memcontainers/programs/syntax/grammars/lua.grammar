@@ -1,8 +1,0 @@
-grammar lua "5.4.0"
-
-use lua.core
-start source_file
-
-source_file = body:_statement*
-  => module(body)
-     derives scope

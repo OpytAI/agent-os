@@ -1,0 +1,7 @@
+load("@rules_zig//zig:defs.bzl", "zig_binary")
+
+zig_binary(
+    name = "syntax-registry-zig",
+    main = "src/main.zig",
+    visibility = ["//visibility:public"],
+)

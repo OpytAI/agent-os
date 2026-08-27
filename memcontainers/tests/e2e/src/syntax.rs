@@ -76,3 +76,65 @@ doc:close()
         "lua\t5.4.0\r\nluau\t0.725.0\r\n"
     );
 }
+
+/// Quoted Lua strings must report vocabulary kind 22 (`SEMANTIC_KIND_STRING`).
+#[test]
+fn syntax_lua_quoted_string_is_kind_22() {
+    let mut s = boot_loom();
+    s.host
+        .write_file(
+            "/tmp/kind22.luau",
+            br#"local syntax = require("syntax")
+local wire = require("syntax_wire")
+local doc = syntax.open("lua", "return \"hello\"")
+local found = 0
+for node in doc:tree() do
+  if node.semantic_kind == wire.SEMANTIC_KIND_STRING then
+    found += 1
+    print(node.semantic_kind, node.concrete_kind, doc:text(node.range))
+  end
+end
+print(found)
+doc:close()
+"#,
+        )
+        .expect("write kind22 script");
+    let out = s.run_for_output_heavy("luau /tmp/kind22.luau");
+    assert!(
+        out.contains("22\tquoted_string\t\"hello\"\r\n")
+            || out.contains("22\tquoted_string\thello\r\n"),
+        "quoted string semantic_kind 22:\n{out}"
+    );
+}
+
+/// Lua long brackets are scanner-driven; `[[…]]` / `[==[…]==]` must still parse.
+#[test]
+fn syntax_lua_parses_long_brackets() {
+    let mut s = boot_loom();
+    s.host
+        .write_file(
+            "/tmp/long_brackets.luau",
+            br#"local syntax = require("syntax")
+local src = "local s = [=[hello]=]\nlocal t = [==[\nmore\n]==]\n"
+local doc = syntax.open("lua", src)
+print("diags", #doc:diagnostics())
+local found = 0
+for node in doc:tree() do
+  if node.concrete_kind == "long_string" then
+    found += 1
+    print(node.concrete_kind, doc:text(node.range))
+  end
+end
+print("count", found)
+doc:close()
+"#,
+        )
+        .expect("write long brackets script");
+    let out = s.run_for_output_heavy("luau /tmp/long_brackets.luau");
+    assert!(out.contains("hello"), "long-bracket capture:\n{out}");
+    assert!(out.contains("more"), "nested long-bracket capture:\n{out}");
+    assert!(
+        out.contains("count\t2\r\n"),
+        "two long_string nodes:\n{out}"
+    );
+}

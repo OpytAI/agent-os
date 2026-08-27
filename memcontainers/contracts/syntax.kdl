@@ -1,12 +1,12 @@
 // contracts/syntax.kdl — syntax platform vocabulary + resident-service protocol.
 //
-// This is the single language-neutral boundary shared by the native Rust grammar generator,
-// the Zig /bin/syntax service, and /lib/luau/syntax.luau (SYSTEMS.md B2). The projector emits
-// the binary message codecs; mc-grammar-gen reads the vocabulary declarations when validating
-// each grammar's semantic map. Message frames are [id:u16][version:u8][fields...].
+// This is the single language-neutral boundary shared by the Zig /bin/syntax service,
+// /lib/luau/syntax.luau, and the AgentOS registry projector that reads twigz pack
+// registry.json (SYSTEMS.md B2). The projector emits the binary message codecs.
+// Message frames are [id:u16][version:u8][fields...].
 
 protocol-version 1
-vocabulary-version 1
+vocabulary-version 2
 grammar-ir-version 2
 
 // Stable semantic concepts. IDs are append-only; removed concepts remain reserved.
@@ -29,6 +29,9 @@ semantic-kind "table" id=16
 semantic-kind "field" id=17 { role "name" required=0; role "value" required=1; }
 semantic-kind "operator" id=18 { role "left" required=0; role "right" required=0; }
 semantic-kind "comment" id=19
+semantic-kind "class" id=20 { role "name" required=1; role "body" required=1; trait "declaration"; trait "scope"; }
+semantic-kind "namespace" id=21 { role "name" required=0; role "body" required=1; trait "scope"; }
+semantic-kind "string" id=22
 
 semantic-role "name" id=1
 semantic-role "body" id=2
