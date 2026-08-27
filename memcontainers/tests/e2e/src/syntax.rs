@@ -132,6 +132,10 @@ doc:close()
         .expect("write long brackets script");
     let out = s.run_for_output_heavy("luau /tmp/long_brackets.luau");
     assert!(
+        out.contains("diags\t0\r\n"),
+        "long brackets must parse with no diagnostics:\n{out}"
+    );
+    assert!(
         out.contains("[[hello]]"),
         "zero-equals long bracket:\n{out}"
     );
