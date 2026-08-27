@@ -33,8 +33,8 @@ archive_override(
 
 # utilz — Unix utilities in Zig. Commit-locked 0.0.0 archive_override:
 # bump commit + strip_prefix + integrity together.
-UTILZ_COMMIT = "82c754b518addceb7f9a9c8cad819aaf02e9b7aa"
-UTILZ_INTEGRITY = "sha256-j9fAxGmnjUjxjJQpjiullBQuNmt46h5mbEcCkbobaB0="
+UTILZ_COMMIT = "2218ecfccd005640bdc0297b42d00568543eae45"
+UTILZ_INTEGRITY = "sha256-gb4eiQaE6ieEUyA+8JoMuq2h6bGs57BOJ2ZPTy7p+9g="
 
 bazel_dep(name = "utilz", version = "0.0.0")
 archive_override(

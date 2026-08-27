@@ -1,7 +1,13 @@
-load("@rules_zig//zig:defs.bzl", "zig_binary")
+load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_test")
 
 zig_binary(
     name = "syntax-registry-zig",
+    extra_srcs = ["src/project.zig"],
     main = "src/main.zig",
     visibility = ["//visibility:public"],
+)
+
+zig_test(
+    name = "syntax-registry-zig_test",
+    main = "src/project.zig",
 )

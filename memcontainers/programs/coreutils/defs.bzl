@@ -1,3 +1,4 @@
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure_binary", "zig_library")
 load("@utilz//bazel:defs.bzl", "utilz_library")
 load("//bazel:wasm_opt.bzl", "wasm_opt")
@@ -75,6 +76,11 @@ def coreutils_box(name, tier, tier_section, set_kind):
         outs = [name + ".attested"],
         tools = ["//bazel/tools/mc-attest"],
         cmd = "$(execpath //bazel/tools/mc-attest) $(execpath :%s_opt) && touch $@" % name,
+    )
+
+    build_test(
+        name = name + "_attest_test",
+        targets = [":" + name + ".attest"],
     )
 
     native.genrule(

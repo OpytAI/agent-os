@@ -135,38 +135,35 @@ fn env_sets_var_for_command() {
 }
 
 /// WHY: wiping `/env` after spawn would destroy the guest environment. GUARANTEES: after
-/// `env FOO=bar printenv FOO`, `/env` still exists and `printenv` still works.
+/// `env FOO=bar printenv FOO`, `/env` still exists and a planted live name still reads.
 #[test]
 fn env_leaves_guest_env_dir() {
     let mut s = boot_posix();
+    assert_eq!(
+        s.run_for_output("echo keep >/env/KEEP; printenv KEEP"),
+        "keep\r\n"
+    );
     assert_eq!(s.run_for_output("env FOO=bar printenv FOO"), "bar\r\n");
-    let listing = s.run_for_output("ls /env");
-    assert!(
-        listing.contains("PATH"),
-        "ls /env must still list the guest environment, got:\n{listing}"
-    );
-    let path = s.run_for_output("printenv PATH");
-    assert!(
-        !path.is_empty() && !path.contains("No such file"),
-        "printenv PATH must still work, got:\n{path}"
-    );
+    s.host.stat("/env").expect("/env must still exist");
+    assert_eq!(s.run_for_output("printenv KEEP"), "keep\r\n");
 }
 
-/// WHY: `-i` must not leak names that were in `/env` before the command. GUARANTEES:
-/// `env -i PATH=/bin printenv` reports `PATH=/bin` and not a planted `SECRET`.
+/// WHY: `-i` must not leak names that were in the live shell `/env` before the command.
+/// GUARANTEES: `env -i PATH=/bin printenv` is exactly `PATH=/bin`.
 #[test]
 fn env_ignore_environment_keeps_only_assignments() {
     let mut s = boot_posix();
-    s.host
-        .write_file("/env/SECRET", b"hidden")
-        .expect("plant SECRET");
-    let out = s.run_for_output("env -i PATH=/bin printenv");
+    let path = s.run_for_output("printenv PATH");
     assert!(
-        out.contains("PATH=/bin"),
-        "expected PATH=/bin in env -i listing, got:\n{out}"
+        !path.is_empty() && !path.contains("No such file"),
+        "live PATH must exist before env -i, got:\n{path}"
     );
-    assert!(
-        !out.contains("SECRET") && !out.contains("hidden"),
-        "env -i must not leak SECRET, got:\n{out}"
+    assert_eq!(
+        s.run_for_output("printf hidden >/env/SECRET; printenv SECRET"),
+        "hidden\r\n"
+    );
+    assert_eq!(
+        s.run_for_output("env -i PATH=/bin printenv"),
+        "PATH=/bin\r\n"
     );
 }

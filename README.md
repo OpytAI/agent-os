@@ -18,9 +18,9 @@
     <img alt="SDK: JavaScript" src="https://img.shields.io/badge/SDK-Node.js%20%7C%20Bun%20%7C%20Browser-3178c6">
 <!-- BEGIN generated:image-size-badges -->
     <br>
-    <img alt="Image size: minimal 920 KiB" src="https://img.shields.io/static/v1?label=minimal&amp;message=920%20KiB&amp;color=2e7d32">
+    <img alt="Image size: minimal 930 KiB" src="https://img.shields.io/static/v1?label=minimal&amp;message=930%20KiB&amp;color=2e7d32">
     <img alt="Image size: posix 1.9 MiB" src="https://img.shields.io/static/v1?label=posix&amp;message=1.9%20MiB&amp;color=2e7d32">
-    <img alt="Image size: loom 5.2 MiB" src="https://img.shields.io/static/v1?label=loom&amp;message=5.2%20MiB&amp;color=d99a08">
+    <img alt="Image size: loom 5.3 MiB" src="https://img.shields.io/static/v1?label=loom&amp;message=5.3%20MiB&amp;color=d99a08">
     <img alt="Image size: atlas 6.2 MiB" src="https://img.shields.io/static/v1?label=atlas&amp;message=6.2%20MiB&amp;color=1565c0">
     <img alt="Image size: paper 32 MiB" src="https://img.shields.io/static/v1?label=paper&amp;message=32%20MiB&amp;color=1565c0">
 <!-- END generated:image-size-badges -->

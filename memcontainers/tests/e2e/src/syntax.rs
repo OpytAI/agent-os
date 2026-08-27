@@ -94,17 +94,17 @@ for node in doc:tree() do
     print(node.semantic_kind, node.concrete_kind, doc:text(node.range))
   end
 end
-print(found)
+print("found", found)
 doc:close()
 "#,
         )
         .expect("write kind22 script");
     let out = s.run_for_output_heavy("luau /tmp/kind22.luau");
     assert!(
-        out.contains("22\tquoted_string\t\"hello\"\r\n")
-            || out.contains("22\tquoted_string\thello\r\n"),
+        out.contains("22\tquoted_string\t\"hello\"\r\n"),
         "quoted string semantic_kind 22:\n{out}"
     );
+    assert!(out.contains("found\t1\r\n"), "one kind-22 node:\n{out}");
 }
 
 /// Lua long brackets are scanner-driven; `[[…]]` / `[==[…]==]` must still parse.
@@ -115,7 +115,7 @@ fn syntax_lua_parses_long_brackets() {
         .write_file(
             "/tmp/long_brackets.luau",
             br#"local syntax = require("syntax")
-local src = "local s = [=[hello]=]\nlocal t = [==[\nmore\n]==]\n"
+local src = "local x = [[hello]]\nlocal s = [=[hello]=]\nlocal t = [==[\nmore\n]==]\n--[[\nlong comment\n]]\n"
 local doc = syntax.open("lua", src)
 print("diags", #doc:diagnostics())
 local found = 0
@@ -131,10 +131,14 @@ doc:close()
         )
         .expect("write long brackets script");
     let out = s.run_for_output_heavy("luau /tmp/long_brackets.luau");
+    assert!(
+        out.contains("[[hello]]"),
+        "zero-equals long bracket:\n{out}"
+    );
     assert!(out.contains("hello"), "long-bracket capture:\n{out}");
     assert!(out.contains("more"), "nested long-bracket capture:\n{out}");
     assert!(
-        out.contains("count\t2\r\n"),
-        "two long_string nodes:\n{out}"
+        out.contains("count\t3\r\n"),
+        "three long_string nodes:\n{out}"
     );
 }

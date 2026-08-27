@@ -195,8 +195,7 @@ fn sigNum(s: Sig) i32 {
 
 // ---------------------------------------------------------------- errno mapping
 //
-// Map the projected mc errno names into nutils' error set. Anything outside this set maps to
-// EUNKNOWN rather than guessing.
+// Map projected mc errno names into utilz.sys.Error. Anything else is EUNKNOWN.
 
 fn mcErr(e: i32) Error {
     return switch (e) {
@@ -319,8 +318,8 @@ pub fn link(target: []const u8, link_path: []const u8) Error!void {
 }
 
 pub fn unlink(path: []const u8) Error!void {
-    // kernel convention: unlink also removes empty directories (the coreutils architecture) -- the
-    // glue's `mc_sys_unlink` is used unconditionally for files and directories alike.
+    // kernel convention: unlink also removes empty directories — `mc_sys_unlink`
+    // is used for files and directories alike.
     try check(mc_sys_unlink(path.ptr, @intCast(path.len)));
 }
 
@@ -373,7 +372,7 @@ pub fn getcwd(buf: []u8) Error!usize {
 // ---------------------------------------------------------------- proc
 
 pub fn spawn(argv_blob: []const u8, stdin: Fd, stdout: Fd, stderr: Fd) Error!Pid {
-    // nutils' `sys.spawn` has no tier parameter (the coreutils architecture), so it inherits the caller's tier;
+    // utilz.sys.spawn has no tier parameter, so it inherits the caller's tier;
     // the kernel remains the enforcement point for anything stricter.
     var out_pid: u32 = 0;
     try check(mc_sys_spawn(argv_blob.ptr, @intCast(argv_blob.len), stdin, stdout, stderr, constants.TIER_INHERIT, &out_pid));
@@ -389,8 +388,7 @@ pub fn waitpid(pid: Pid) Error!i32 {
     return @bitCast(status);
 }
 
-/// Non-blocking wait (opts=1, mc-glue's nohang bit). `got == 0` means "no child ready
-/// yet" (the coreutils architecture) rather than an error.
+/// Non-blocking wait (opts=1, mc-glue's nohang bit). `got == 0` means no child is ready.
 pub fn waitpidNohang(pid: Pid) Error!?i32 {
     var status: u32 = 0;
     var got: u32 = 0;

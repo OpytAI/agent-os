@@ -1742,8 +1742,8 @@ coreutils, the kernel control channel, the flavors, the resident-service primiti
 sub-second) and `//memcontainers/tests/e2e:extended` (the heavy domain services, SQLite and typst, whose
 real compiles and queries run for millions of fuel slices and boot the large `atlas`/`paper` images). The
 split lets CI gate the fast invariants without paying the domain compiles. The one legitimate native-test
-home is `shcore`, because it is pure logic, not the kernel; its Zig tests are still declared and run as
-a Bazel target. Conformance walks each guest's imports against
+home is the shcore repo (`bazel test //...` there), because it is pure logic, not the kernel. AgentOS
+gates `/bin/sh` with e2e `--test_arg=shell`. Conformance walks each guest's imports against
 the contract. Two designed-in amplifiers leverage determinism: record/replay (record the bridge-input
 transcript and a final memory hash; a replay diffs the hash) and differential fuzzing (every crash
 reproducible from a seed).

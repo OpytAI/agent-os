@@ -1,8 +1,8 @@
 // contracts/syntax.kdl — syntax platform vocabulary + resident-service protocol.
 //
-// This is the single language-neutral boundary shared by the Zig /bin/syntax service,
-// /lib/luau/syntax.luau, and the AgentOS registry projector that reads twigz pack
-// registry.json (SYSTEMS.md B2). The projector emits the binary message codecs.
+// This is the single language-neutral boundary shared by /bin/syntax, /lib/luau/syntax.luau,
+// and contract codegen (SYSTEMS.md B2). Codegen emits the binary message codecs from this
+// file. The registry projector reads pack registry.json, not this KDL.
 // Message frames are [id:u16][version:u8][fields...].
 
 protocol-version 1
