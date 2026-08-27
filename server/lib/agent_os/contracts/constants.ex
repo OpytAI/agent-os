@@ -1,6 +1,36 @@
 # @generated from contracts/constants.kdl by //contracts/codegen:projector — do not edit.
 defmodule AgentOS.Contracts.Constants do
 
+  # open-flags
+  def o_read, do: 1
+  def o_write, do: 2
+  def o_create, do: 4
+  def o_trunc, do: 8
+  def o_append, do: 16
+
+  # signal
+  def sighup, do: 1
+  def sigint, do: 2
+  def sigkill, do: 9
+  def sigterm, do: 15
+  def sigchld, do: 17
+  def sigcont, do: 18
+  def sigtstp, do: 20
+  def sig_dfl, do: 0
+  def sig_ign, do: 1
+  def stopped_status_base, do: 65536
+  def sigquit, do: 3
+  def sigusr1, do: 10
+  def sigusr2, do: 12
+  def sigstop, do: 19
+
+  # tier
+  def tier_inherit, do: 0
+  def tier_full, do: 1
+  def tier_read_write, do: 2
+  def tier_read_only, do: 3
+  def tier_isolated, do: 4
+
   # syscall ABI version: (major << 16) | minor
   def sys_abi_major, do: 1
   def sys_abi_minor, do: 7
@@ -30,13 +60,6 @@ defmodule AgentOS.Contracts.Constants do
   def etimedout, do: 73
   def exdev, do: 75
 
-  # tier
-  def tier_inherit, do: 0
-  def tier_full, do: 1
-  def tier_read_write, do: 2
-  def tier_read_only, do: 3
-  def tier_isolated, do: 4
-
   # capability
   def cap_fs_read, do: 1
   def cap_fs_write, do: 2
@@ -58,13 +81,6 @@ defmodule AgentOS.Contracts.Constants do
       _ -> 0
     end
   end
-
-  # open-flags
-  def o_read, do: 1
-  def o_write, do: 2
-  def o_create, do: 4
-  def o_trunc, do: 8
-  def o_append, do: 16
 
   # seek
   def seek_set, do: 0
@@ -98,22 +114,6 @@ defmodule AgentOS.Contracts.Constants do
   def pollerr, do: 8
   def pollhup, do: 16
   def poll_block, do: -1
-
-  # signal
-  def sighup, do: 1
-  def sigint, do: 2
-  def sigquit, do: 3
-  def sigkill, do: 9
-  def sigusr1, do: 10
-  def sigusr2, do: 12
-  def sigterm, do: 15
-  def sigchld, do: 17
-  def sigcont, do: 18
-  def sigstop, do: 19
-  def sigtstp, do: 20
-  def sig_dfl, do: 0
-  def sig_ign, do: 1
-  def stopped_status_base, do: 65536
 
   # serve-op
   def serve_op_open, do: 0
