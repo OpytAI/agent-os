@@ -48,8 +48,8 @@ archive_override(
 )
 
 # shcore — embed a Unix shell anywhere. Same pin rule as gitz/utilz.
-SHCORE_COMMIT = "9e7599d68e7cbe786b105c29c1688ddcfcac5fbf"
-SHCORE_INTEGRITY = "sha256-qdhez6daoJ4fTlZPadyRVNb2xz+p/D2XKdjFZD7B45A="
+SHCORE_COMMIT = "2817e8c9eb98ad9bec8f6c8d787ca6cad66cd865"
+SHCORE_INTEGRITY = "sha256-SlDvHw+OXUyNDBqjtzBzXEtpfMZLuYnLcIZgVUEd0TQ="
 
 bazel_dep(name = "shcore", version = "0.0.0")
 archive_override(

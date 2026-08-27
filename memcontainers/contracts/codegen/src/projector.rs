@@ -2,9 +2,11 @@
 //! language's binding to stdout (SYSTEMS.md). The single tool behind every
 //! projection; `abi_library` invokes it once per (module, language) pair.
 //!
-//! Invocation:  projector --module <m> --lang <l> --contract <path.kdl>
+//! Invocation:  projector --module <m> --lang <l> --contract <path.kdl> [--contract <path.kdl> ...]
 //!   module = constants | mc | env | ctl | wire | llb | syntax | sidecar | browser | runner | snapshot | shell
 //!   lang   = rust | zig | ts | elixir | luau | md | asyncapi | openapi      (which projection)
+//!   Repeat `--contract` merges files in order: same grouping name folds children;
+//!   a child with a conflicting value is a hard error.
 //!
 //! Design (why this shape — C1):
 //!   - DETERMINISM (A7/B2): same inputs → byte-identical output. No clock, no env,
@@ -28,7 +30,7 @@ use std::process::ExitCode;
 // KDL model + reader (a minimal subset tailored to contracts/*.kdl)
 // ===========================================================================
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum Val {
     Int(i64),
     Str(String),
@@ -3691,41 +3693,105 @@ end\n",
 }
 
 // ===========================================================================
+// contract merge (repeatable --contract)
+// ===========================================================================
+
+fn merge_into(dst: &mut Vec<Node>, src: Vec<Node>) -> Result<(), String> {
+    for node in src {
+        merge_node_into(dst, node)?;
+    }
+    Ok(())
+}
+
+fn merge_node_into(dst: &mut Vec<Node>, incoming: Node) -> Result<(), String> {
+    // Rows (`syscall "open"`, `message "Foo"`) repeat a node name with different
+    // args; only arg-less grouping nodes (`signal { … }`) merge by name.
+    if incoming.args.is_empty() {
+        if let Some(existing) = dst
+            .iter_mut()
+            .find(|n| n.name == incoming.name && n.args.is_empty())
+        {
+            return merge_same_name(existing, incoming);
+        }
+    }
+    dst.push(incoming);
+    Ok(())
+}
+
+fn merge_same_name(dst: &mut Node, src: Node) -> Result<(), String> {
+    let grouped = !dst.children.is_empty() || !src.children.is_empty();
+    if grouped {
+        if dst.children.is_empty() != src.children.is_empty() {
+            return Err(format!(
+                "contract conflict on `{}`: grouping vs leaf",
+                dst.name
+            ));
+        }
+        if dst.args != src.args || dst.props != src.props {
+            return Err(format!(
+                "contract conflict on grouping `{}`: arguments differ",
+                dst.name
+            ));
+        }
+        merge_into(&mut dst.children, src.children)
+    } else if dst.args != src.args || dst.props != src.props {
+        Err(format!(
+            "contract conflict on `{}`: {:?} vs {:?}",
+            dst.name, dst.args, src.args
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+// ===========================================================================
 // main
 // ===========================================================================
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
-    let (mut lang, mut module, mut contract) = (None, None, None);
+    let (mut lang, mut module) = (None, None);
+    let mut contracts = Vec::new();
     let mut i = 1;
     while i + 1 < args.len() {
         match args[i].as_str() {
             "--lang" => lang = Some(args[i + 1].clone()),
             "--module" => module = Some(args[i + 1].clone()),
-            "--contract" => contract = Some(args[i + 1].clone()),
+            "--contract" => contracts.push(args[i + 1].clone()),
             _ => {}
         }
         i += 2;
     }
-    let (Some(lang), Some(module), Some(contract)) = (lang, module, contract) else {
+    let (Some(lang), Some(module)) = (lang, module) else {
         eprintln!(
-            "usage: projector --module <constants|mc|env|ctl|wire|llb|syntax|sidecar|browser|runner|snapshot|shell|git> --lang <rust|zig|ts|elixir|luau|md|asyncapi|openapi> --contract <path.kdl>"
+            "usage: projector --module <constants|mc|env|ctl|wire|llb|syntax|sidecar|browser|runner|snapshot|shell|git> --lang <rust|zig|ts|elixir|luau|md|asyncapi|openapi> --contract <path.kdl> [--contract <path.kdl> ...]"
         );
         return ExitCode::FAILURE;
     };
+    if contracts.is_empty() {
+        eprintln!("projector: --contract is required");
+        return ExitCode::FAILURE;
+    }
 
-    let src = match std::fs::read_to_string(&contract) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("projector: cannot read {contract}: {e}");
+    let mut nodes = Vec::new();
+    for contract in &contracts {
+        let src = match std::fs::read_to_string(contract) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("projector: cannot read {contract}: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        if let Err(e) = merge_into(&mut nodes, parse(&tokenize(&src))) {
+            eprintln!("projector: {e}");
             return ExitCode::FAILURE;
         }
-    };
-    let file = std::path::Path::new(&contract)
+    }
+    let contract = contracts.last().unwrap();
+    let file = std::path::Path::new(contract)
         .file_name()
         .map(|f| f.to_string_lossy().into_owned())
         .unwrap_or_else(|| contract.clone());
-    let nodes = parse(&tokenize(&src));
 
     let out = match module.as_str() {
         "constants" => emit_constants(&lang, &nodes, &file),

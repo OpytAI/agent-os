@@ -1,7 +1,8 @@
 // contracts/constants.kdl — shared constants for all four boundaries.
 //
-// Single source of truth (B2). The projector (//contracts/codegen:projector) emits
-// these into Rust, Zig, and TS; drift is a failed diff_test, in every language.
+// Single source of truth (B2), merged with @shcore//:shell_abi.kdl (open flags,
+// POSIX signals, TIER_INHERIT). The projector emits the union into Rust, Zig,
+// and TS; drift is a failed diff_test, in every language.
 //
 // Values are the FROZEN `mc` ABI, transcribed from memcontainers crates/abi/src/lib.rs.
 // Do NOT renumber: the `mc` surface is a compatibility contract shared with
@@ -57,7 +58,6 @@ errno {
 // `Isolated` is the only fully deterministic tier.
 // ---------------------------------------------------------------------------
 tier {
-    TIER_INHERIT    0
     TIER_FULL       1
     TIER_READ_WRITE 2
     TIER_READ_ONLY  3
@@ -108,15 +108,6 @@ tier-caps {
     TIER_READ_WRITE "CAP_FS_READ CAP_FS_WRITE CAP_AMBIENT CAP_SCRATCH"
     TIER_READ_ONLY  "CAP_FS_READ CAP_AMBIENT CAP_SCRATCH"
     TIER_ISOLATED   "CAP_FS_READ"
-}
-
-// Open flags for mc_sys_open (a bitmask).
-open-flags {
-    O_READ   1
-    O_WRITE  2
-    O_CREATE 4
-    O_TRUNC  8
-    O_APPEND 16
 }
 
 // `whence` values for mc_sys_lseek.
@@ -173,24 +164,13 @@ poll {
     POLL_BLOCK -1  // timeout_ms sentinel: block until ready
 }
 
-// Signals + dispositions used by the kernel, shell, and coreutils adapters. Numbers match POSIX. A
-// terminated task's exit status is 128 + signo; a stopped child's waitpid status
-// is STOPPED_STATUS_BASE + signo (out of the 0..=255 exit range, a WIFSTOPPED stand-in).
+// Additional signals the kernel uses. POSIX numbers, dispositions, and
+// STOPPED_STATUS_BASE are in @shcore//:shell_abi.kdl.
 signal {
-    SIGHUP  1
-    SIGINT  2
     SIGQUIT 3
-    SIGKILL 9
     SIGUSR1 10
     SIGUSR2 12
-    SIGTERM 15
-    SIGCHLD 17
-    SIGCONT 18
     SIGSTOP 19
-    SIGTSTP 20
-    SIG_DFL 0   // default action
-    SIG_IGN 1   // ignore
-    STOPPED_STATUS_BASE 65536  // 0x1_0000
 }
 
 // Guest-served filesystem opcodes (servedfs) + READDIR entry kinds. A served

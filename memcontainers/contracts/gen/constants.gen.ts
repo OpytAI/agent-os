@@ -1,5 +1,35 @@
 // @generated from contracts/constants.kdl by //contracts/codegen:projector — do not edit.
 
+// open-flags
+export const O_READ = 1;
+export const O_WRITE = 2;
+export const O_CREATE = 4;
+export const O_TRUNC = 8;
+export const O_APPEND = 16;
+
+// signal
+export const SIGHUP = 1;
+export const SIGINT = 2;
+export const SIGKILL = 9;
+export const SIGTERM = 15;
+export const SIGCHLD = 17;
+export const SIGCONT = 18;
+export const SIGTSTP = 20;
+export const SIG_DFL = 0;
+export const SIG_IGN = 1;
+export const STOPPED_STATUS_BASE = 65536;
+export const SIGQUIT = 3;
+export const SIGUSR1 = 10;
+export const SIGUSR2 = 12;
+export const SIGSTOP = 19;
+
+// tier
+export const TIER_INHERIT = 0;
+export const TIER_FULL = 1;
+export const TIER_READ_WRITE = 2;
+export const TIER_READ_ONLY = 3;
+export const TIER_ISOLATED = 4;
+
 // syscall ABI version: (major << 16) | minor
 export const SYS_ABI_MAJOR = 1;
 export const SYS_ABI_MINOR = 7;
@@ -29,13 +59,6 @@ export const ESRCH = 71;
 export const ETIMEDOUT = 73;
 export const EXDEV = 75;
 
-// tier
-export const TIER_INHERIT = 0;
-export const TIER_FULL = 1;
-export const TIER_READ_WRITE = 2;
-export const TIER_READ_ONLY = 3;
-export const TIER_ISOLATED = 4;
-
 // capability
 export const CAP_FS_READ = 1;
 export const CAP_FS_WRITE = 2;
@@ -57,13 +80,6 @@ export function tierCaps(tier: number): number {
     default: return 0;
   }
 }
-
-// open-flags
-export const O_READ = 1;
-export const O_WRITE = 2;
-export const O_CREATE = 4;
-export const O_TRUNC = 8;
-export const O_APPEND = 16;
 
 // seek
 export const SEEK_SET = 0;
@@ -97,22 +113,6 @@ export const POLLOUT = 4;
 export const POLLERR = 8;
 export const POLLHUP = 16;
 export const POLL_BLOCK = -1;
-
-// signal
-export const SIGHUP = 1;
-export const SIGINT = 2;
-export const SIGQUIT = 3;
-export const SIGKILL = 9;
-export const SIGUSR1 = 10;
-export const SIGUSR2 = 12;
-export const SIGTERM = 15;
-export const SIGCHLD = 17;
-export const SIGCONT = 18;
-export const SIGSTOP = 19;
-export const SIGTSTP = 20;
-export const SIG_DFL = 0;
-export const SIG_IGN = 1;
-export const STOPPED_STATUS_BASE = 65536;
 
 // serve-op
 export const SERVE_OP_OPEN = 0;

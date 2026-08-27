@@ -60,6 +60,7 @@ filegroup(
 abi_library(
     name = "constants",
     contract = "constants.kdl",
+    extra_contracts = ["@shcore//:shell_abi_kdl"],
     langs = [
         "rust",
         "zig",

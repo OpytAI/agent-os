@@ -28,8 +28,12 @@ _EXT = {
     "openapi": "openapi.yaml",
 }
 
-def abi_library(name, contract, langs):
-    """Project `contract` into each of `langs`. `name` is the module id (mc/env/ctl/wire/constants)."""
+def abi_library(name, contract, langs, extra_contracts = []):
+    """Project `contract` into each of `langs`. `name` is the module id (mc/env/ctl/wire/constants).
+
+    `extra_contracts` are additional KDL files, merged in listed order before `contract`.
+    Same grouping name folds children; a child with a conflicting value fails the projector.
+    """
     sync_targets = []
     for lang in langs:
         ext = _EXT[lang]
@@ -38,7 +42,8 @@ def abi_library(name, contract, langs):
 
         # The projector emits one (module, lang) to stdout. Deterministic: same inputs
         # → byte-identical output, so the diff gate below is stable (A7/B2).
-        projector_srcs = [contract]
+        contracts = extra_contracts + [contract]
+        projector_srcs = list(contracts)
         if name == "wire":
             projector_srcs.append("control.kdl")
             projector_srcs.append("sidecar.kdl")
@@ -48,10 +53,10 @@ def abi_library(name, contract, langs):
             srcs = projector_srcs,
             outs = [out],
             tools = ["//memcontainers/contracts/codegen:projector"],
-            cmd = "$(location //memcontainers/contracts/codegen:projector) --module {m} --lang {l} --contract $(location {c}) > $@".format(
+            cmd = "$(location //memcontainers/contracts/codegen:projector) --module {m} --lang {l} {flags} > $@".format(
                 m = name,
                 l = lang,
-                c = contract,
+                flags = " ".join(["--contract $(location %s)" % src for src in contracts]),
             ),
         )
 
