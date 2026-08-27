@@ -125,3 +125,48 @@ fn cp_copies_a_file() {
         b"copy me\n"
     );
 }
+
+/// WHY: `/bin/env` mutates the guest `/env` overlay in place. GUARANTEES: `FOO=bar` is
+/// visible to the spawned command (`printenv FOO` prints `bar`).
+#[test]
+fn env_sets_var_for_command() {
+    let mut s = boot_posix();
+    assert_eq!(s.run_for_output("env FOO=bar printenv FOO"), "bar\r\n");
+}
+
+/// WHY: wiping `/env` after spawn would destroy the guest environment. GUARANTEES: after
+/// `env FOO=bar printenv FOO`, `/env` still exists and `printenv` still works.
+#[test]
+fn env_leaves_guest_env_dir() {
+    let mut s = boot_posix();
+    assert_eq!(s.run_for_output("env FOO=bar printenv FOO"), "bar\r\n");
+    let listing = s.run_for_output("ls /env");
+    assert!(
+        listing.contains("PATH"),
+        "ls /env must still list the guest environment, got:\n{listing}"
+    );
+    let path = s.run_for_output("printenv PATH");
+    assert!(
+        !path.is_empty() && !path.contains("No such file"),
+        "printenv PATH must still work, got:\n{path}"
+    );
+}
+
+/// WHY: `-i` must not leak names that were in `/env` before the command. GUARANTEES:
+/// `env -i PATH=/bin printenv` reports `PATH=/bin` and not a planted `SECRET`.
+#[test]
+fn env_ignore_environment_keeps_only_assignments() {
+    let mut s = boot_posix();
+    s.host
+        .write_file("/env/SECRET", b"hidden")
+        .expect("plant SECRET");
+    let out = s.run_for_output("env -i PATH=/bin printenv");
+    assert!(
+        out.contains("PATH=/bin"),
+        "expected PATH=/bin in env -i listing, got:\n{out}"
+    );
+    assert!(
+        !out.contains("SECRET") && !out.contains("hidden"),
+        "env -i must not leak SECRET, got:\n{out}"
+    );
+}
