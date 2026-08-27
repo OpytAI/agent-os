@@ -41,11 +41,7 @@ fn stamp_server(args: &[String]) -> Result<(), String> {
     let commit = stable_commit(&args[2])?;
     let module = load_module_graph(&args[3])?;
     let gitz = module_pin(&module, "archive_override", "module_name", "gitz")?;
-    let gitz_commit = gitz
-        .url
-        .rsplit_once("/archive/")
-        .and_then(|(_, tail)| tail.strip_suffix(".tar.gz"))
-        .filter(|value| is_hex(value, 40))
+    let gitz_commit = archive_commit(&gitz.url)
         .ok_or("Gitz archive URL does not contain a 40-hex commit")?;
     let integrity = gitz
         .integrity
@@ -156,6 +152,12 @@ fn is_hex(value: &str, len: usize) -> bool {
     value.len() == len && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+fn archive_commit(url: &str) -> Option<&str> {
+    url.rsplit_once("/archive/")
+        .and_then(|(_, tail)| tail.strip_suffix(".tar.gz"))
+        .filter(|value| is_hex(value, 40))
+}
+
 /// Read the root MODULE.bazel and every `include("//pkg:file")` slice it names.
 /// Pins may live in those slices; the stamp tool must see the same graph Bazel does.
 fn load_module_graph(root: &str) -> Result<String, String> {
@@ -209,6 +211,7 @@ fn include_to_path(label: &str) -> Result<PathBuf, String> {
     })
 }
 
+#[derive(Debug)]
 struct Pin {
     url: String,
     sha256: Option<String>,
@@ -216,6 +219,7 @@ struct Pin {
 }
 
 fn module_pin(text: &str, function: &str, key: &str, wanted: &str) -> Result<Pin, String> {
+    let bindings = collect_bindings(text);
     let mut in_block = false;
     let mut matched = false;
     let mut url = None;
@@ -233,15 +237,15 @@ fn module_pin(text: &str, function: &str, key: &str, wanted: &str) -> Result<Pin
         if !in_block {
             continue;
         }
-        let trimmed = line.trim();
-        if let Some(value) = assignment(trimmed, key) {
+        let trimmed = strip_starlark_comment(line.trim());
+        if let Some(value) = assignment(trimmed, key, &bindings) {
             matched = value == wanted;
-        } else if let Some(value) = assignment(trimmed, "integrity") {
-            integrity = Some(value.into());
-        } else if let Some(value) = assignment(trimmed, "sha256") {
-            sha256 = Some(value.into());
-        } else if trimmed.starts_with("url = ") || trimmed.starts_with("urls = ") {
-            url = quoted_value(trimmed).map(str::to_owned);
+        } else if let Some(value) = assignment(trimmed, "integrity", &bindings) {
+            integrity = Some(value);
+        } else if let Some(value) = assignment(trimmed, "sha256", &bindings) {
+            sha256 = Some(value);
+        } else if let Some(value) = url_assignment(trimmed, &bindings) {
+            url = Some(value);
         } else if trimmed == ")" {
             if matched {
                 return Ok(Pin {
@@ -258,16 +262,127 @@ fn module_pin(text: &str, function: &str, key: &str, wanted: &str) -> Result<Pin
     ))
 }
 
-fn assignment<'a>(line: &'a str, key: &str) -> Option<&'a str> {
-    line.strip_prefix(key)
-        .and_then(|rest| rest.strip_prefix(" = "))
-        .and_then(quoted_value)
+/// `NAME = "quoted"` bindings used by `archive_override` fields. Concatenated
+/// `url` / `strip_prefix` and bare `integrity = NAME` resolve through this map.
+fn collect_bindings(text: &str) -> BTreeMap<String, String> {
+    let mut bindings = BTreeMap::new();
+    for line in text.lines() {
+        let trimmed = strip_starlark_comment(line.trim());
+        if let Some((name, value)) = simple_string_binding(trimmed) {
+            bindings.insert(name, value);
+        }
+    }
+    bindings
 }
 
-fn quoted_value(line: &str) -> Option<&str> {
-    let start = line.find('"')? + 1;
-    let end = line[start..].find('"')? + start;
-    Some(&line[start..end])
+fn simple_string_binding(line: &str) -> Option<(String, String)> {
+    let (name, rhs) = split_assign(line)?;
+    if !is_ident(name) {
+        return None;
+    }
+    let (value, rest) = parse_quoted(rhs)?;
+    let rest = rest.trim();
+    let rest = rest.strip_prefix(',').unwrap_or(rest).trim();
+    if !rest.is_empty() {
+        return None;
+    }
+    Some((name.to_owned(), value))
+}
+
+fn assignment(line: &str, key: &str, bindings: &BTreeMap<String, String>) -> Option<String> {
+    let rest = line
+        .strip_prefix(key)
+        .and_then(|rest| rest.strip_prefix(" = "))?;
+    eval_string_expr(rest, bindings)
+}
+
+fn url_assignment(line: &str, bindings: &BTreeMap<String, String>) -> Option<String> {
+    let rest = line
+        .strip_prefix("urls = ")
+        .or_else(|| line.strip_prefix("url = "))?;
+    eval_string_expr(rest, bindings)
+}
+
+fn eval_string_expr(expr: &str, bindings: &BTreeMap<String, String>) -> Option<String> {
+    let expr = expr.trim();
+    let expr = expr.strip_suffix(',').unwrap_or(expr).trim();
+    if expr.is_empty() {
+        return None;
+    }
+    if expr.starts_with('[') {
+        return parse_quoted(expr).map(|(value, _)| value);
+    }
+    let mut out = String::new();
+    let mut rest = expr;
+    let mut first = true;
+    loop {
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            return Some(out);
+        }
+        if !first {
+            rest = rest.strip_prefix('+')?.trim_start();
+        }
+        first = false;
+        if rest.starts_with('"') {
+            let (value, next) = parse_quoted(rest)?;
+            out.push_str(&value);
+            rest = next;
+            continue;
+        }
+        let (ident, next) = take_ident(rest)?;
+        out.push_str(bindings.get(ident)?);
+        rest = next;
+    }
+}
+
+fn split_assign(line: &str) -> Option<(&str, &str)> {
+    let (name, rest) = line.split_once(" = ")?;
+    is_ident(name).then_some((name, rest))
+}
+
+fn is_ident(value: &str) -> bool {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(c) if c == '_' || c.is_ascii_alphabetic() => {
+            chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+        }
+        _ => false,
+    }
+}
+
+fn take_ident(input: &str) -> Option<(&str, &str)> {
+    let end = input
+        .char_indices()
+        .find(|(_, c)| *c != '_' && !c.is_ascii_alphanumeric())
+        .map(|(i, _)| i)
+        .unwrap_or(input.len());
+    let ident = &input[..end];
+    if ident.is_empty() || !is_ident(ident) {
+        return None;
+    }
+    Some((ident, &input[end..]))
+}
+
+fn parse_quoted(input: &str) -> Option<(String, &str)> {
+    let start = input.find('"')? + 1;
+    let rel_end = input[start..].find('"')?;
+    Some((
+        input[start..start + rel_end].to_owned(),
+        &input[start + rel_end + 1..],
+    ))
+}
+
+fn strip_starlark_comment(line: &str) -> &str {
+    let mut in_string = false;
+    for (i, b) in line.bytes().enumerate() {
+        match b {
+            b'"' => in_string = !in_string,
+            b'#' if !in_string => return line[..i].trim_end(),
+            _ => {}
+        }
+    }
+    line
 }
 
 fn tar_files(bytes: &[u8], root: &str) -> Result<BTreeMap<String, String>, String> {
@@ -408,6 +523,42 @@ http_archive(
 )
 "#;
 
+    const CONST_MODULE: &str = r#"
+GITZ_COMMIT = "0123456789abcdef0123456789abcdef01234567"  # pin
+GITZ_INTEGRITY = "sha256-abc="
+UTILZ_COMMIT = "abcdef0123456789abcdef0123456789abcdef01"
+UTILZ_INTEGRITY = "sha256-utilz="
+SHCORE_COMMIT = "1234567890abcdef1234567890abcdef12345678"
+SHCORE_INTEGRITY = "sha256-shcore="
+TWIGZ_COMMIT = "fedcba9876543210fedcba9876543210fedcba98"
+TWIGZ_INTEGRITY = "sha256-twigz="
+
+archive_override(
+    module_name = "gitz",
+    integrity = GITZ_INTEGRITY,  # SRI
+    strip_prefix = "gitz-" + GITZ_COMMIT,
+    url = "https://github.com/OpytAI/gitz/archive/" + GITZ_COMMIT + ".tar.gz",
+)
+archive_override(
+    module_name = "utilz",
+    integrity = UTILZ_INTEGRITY,
+    strip_prefix = "utilz-" + UTILZ_COMMIT,
+    url = "https://github.com/OpytAI/utilz/archive/" + UTILZ_COMMIT + ".tar.gz",
+)
+archive_override(
+    module_name = "shcore",
+    integrity = SHCORE_INTEGRITY,
+    strip_prefix = "shcore-" + SHCORE_COMMIT,
+    url = "https://github.com/OpytAI/shcore/archive/" + SHCORE_COMMIT + ".tar.gz",
+)
+archive_override(
+    module_name = "twigz",
+    integrity = TWIGZ_INTEGRITY,
+    strip_prefix = "twigz-" + TWIGZ_COMMIT,
+    url = "https://github.com/OpytAI/twigz/archive/" + TWIGZ_COMMIT + ".tar.gz",
+)
+"#;
+
     #[test]
     fn reads_module_pins() {
         let gitz = module_pin(MODULE, "archive_override", "module_name", "gitz").unwrap();
@@ -415,6 +566,59 @@ http_archive(
         assert!(gitz.url.ends_with(".tar.gz"));
         let firecracker = module_pin(MODULE, "http_archive", "name", "firecracker").unwrap();
         assert_eq!(firecracker.sha256.as_deref(), Some("aaaa"));
+    }
+
+    #[test]
+    fn resolves_starlark_pin_consts() {
+        let gitz = module_pin(CONST_MODULE, "archive_override", "module_name", "gitz").unwrap();
+        assert_eq!(
+            gitz.url,
+            "https://github.com/OpytAI/gitz/archive/0123456789abcdef0123456789abcdef01234567.tar.gz",
+        );
+        assert_eq!(gitz.integrity.as_deref(), Some("sha256-abc="));
+        assert_eq!(
+            archive_commit(&gitz.url),
+            Some("0123456789abcdef0123456789abcdef01234567"),
+        );
+
+        let utilz = module_pin(CONST_MODULE, "archive_override", "module_name", "utilz").unwrap();
+        assert_eq!(
+            utilz.url,
+            "https://github.com/OpytAI/utilz/archive/abcdef0123456789abcdef0123456789abcdef01.tar.gz",
+        );
+        assert_eq!(utilz.integrity.as_deref(), Some("sha256-utilz="));
+
+        let shcore = module_pin(CONST_MODULE, "archive_override", "module_name", "shcore").unwrap();
+        assert_eq!(
+            archive_commit(&shcore.url),
+            Some("1234567890abcdef1234567890abcdef12345678"),
+        );
+        assert_eq!(shcore.integrity.as_deref(), Some("sha256-shcore="));
+
+        let twigz = module_pin(CONST_MODULE, "archive_override", "module_name", "twigz").unwrap();
+        assert_eq!(
+            archive_commit(&twigz.url),
+            Some("fedcba9876543210fedcba9876543210fedcba98"),
+        );
+        assert_eq!(twigz.integrity.as_deref(), Some("sha256-twigz="));
+    }
+
+    #[test]
+    fn const_pins_fail_when_binding_is_missing() {
+        let err = module_pin(
+            r#"
+archive_override(
+    module_name = "gitz",
+    integrity = GITZ_INTEGRITY,
+    url = "https://github.com/OpytAI/gitz/archive/" + GITZ_COMMIT + ".tar.gz",
+)
+"#,
+            "archive_override",
+            "module_name",
+            "gitz",
+        )
+        .unwrap_err();
+        assert!(err.contains("no URL"), "{err}");
     }
 
     #[test]
@@ -434,10 +638,13 @@ include("//third_party/firecracker:firecracker.MODULE.bazel")
         .unwrap();
         fs::write(
             bazel.join("zig.MODULE.bazel"),
-            r#"archive_override(
+            r#"GITZ_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+GITZ_INTEGRITY = "sha256-abc="
+archive_override(
     module_name = "gitz",
-    integrity = "sha256-abc=",
-    url = "https://github.com/OpytAI/gitz/archive/0123456789abcdef0123456789abcdef01234567.tar.gz",
+    integrity = GITZ_INTEGRITY,
+    strip_prefix = "gitz-" + GITZ_COMMIT,
+    url = "https://github.com/OpytAI/gitz/archive/" + GITZ_COMMIT + ".tar.gz",
 )
 "#,
         )
@@ -462,6 +669,10 @@ http_file(
         let graph = load_module_graph(dir.join("MODULE.bazel").to_str().unwrap()).unwrap();
         let gitz = module_pin(&graph, "archive_override", "module_name", "gitz").unwrap();
         assert_eq!(gitz.integrity.as_deref(), Some("sha256-abc="));
+        assert_eq!(
+            archive_commit(&gitz.url),
+            Some("0123456789abcdef0123456789abcdef01234567"),
+        );
         let firecracker = module_pin(&graph, "http_archive", "name", "firecracker").unwrap();
         assert_eq!(firecracker.sha256.as_deref(), Some("bbbb"));
         let kernel = module_pin(&graph, "http_file", "name", "firecracker_kernel").unwrap();
