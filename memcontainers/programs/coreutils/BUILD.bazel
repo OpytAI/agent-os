@@ -1,15 +1,8 @@
 load(":defs.bzl", "coreutils_box")
+load("//bazel/tools/size:defs.bzl", "size_limit")
 
-# programs/coreutils — Zig nutils-derived multicall boxes, pure mc from source. The target names stay
-# compatible with the former Rust lane so images and mc-roster consumers can flip without label churn.
-
-COREUTILS_SRCS = glob(
-    ["src/**/*.zig"],
-    exclude = [
-        "src/build_options/*.zig",
-        "src/main.zig",
-    ],
-)
+# programs/coreutils — AgentOS mc adapter over @utilz. Output labels stay
+# mcbox-*_opt so images and mc-roster do not churn.
 
 _TIERS = {
     "isolated": "isolated",
@@ -26,7 +19,6 @@ _SETS = {
 [
     coreutils_box(
         name = "mcbox-" + infix + tier,
-        srcs = COREUTILS_SRCS,
         set_kind = set_kind,
         tier = tier,
         tier_section = tier_section,
@@ -34,3 +26,10 @@ _SETS = {
     for tier, tier_section in _TIERS.items()
     for infix, set_kind in _SETS.items()
 ]
+
+# Measured 21553 bytes from `bazel build :mcbox-min-isolated_opt`; +4096 slack.
+size_limit(
+    name = "mcbox_min_isolated_size_limit",
+    file = ":mcbox-min-isolated_opt",
+    max_bytes = 25649,
+)

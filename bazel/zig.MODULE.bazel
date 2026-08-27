@@ -30,3 +30,16 @@ archive_override(
     strip_prefix = "gitz-fdf9124c2aab83b6c3297be4bae8045ada7661f8",
     url = "https://github.com/OpytAI/gitz/archive/fdf9124c2aab83b6c3297be4bae8045ada7661f8.tar.gz",
 )
+
+# utilz — Unix utilities in Zig. Commit-locked 0.0.0 archive_override:
+# bump commit + strip_prefix + integrity together.
+UTILZ_COMMIT = "82c754b518addceb7f9a9c8cad819aaf02e9b7aa"
+UTILZ_INTEGRITY = "sha256-j9fAxGmnjUjxjJQpjiullBQuNmt46h5mbEcCkbobaB0="
+
+bazel_dep(name = "utilz", version = "0.0.0")
+archive_override(
+    module_name = "utilz",
+    integrity = UTILZ_INTEGRITY,
+    strip_prefix = "utilz-" + UTILZ_COMMIT,
+    url = "https://github.com/OpytAI/utilz/archive/" + UTILZ_COMMIT + ".tar.gz",
+)

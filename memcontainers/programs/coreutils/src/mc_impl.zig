@@ -1,25 +1,21 @@
-//! The mc kernel backend (the coreutils architecture). This is the file that maps the
-//! applet-facing `sys` API to the generated `mc` kernel ABI. The errno numbers, stat
-//! layout, open flags, and constants (signals, poll events, seek whence, tiers) are
-//! projected from the frozen mc contract (`memcontainers/contracts/syscalls.kdl` +
-//! `constants.kdl`). Stat records are decoded through generated lengths, offsets, and node kinds.
-//!
-//! Calling convention: every arg is a wasm `i32` on the wire. The raw ABI is imported from
-//! //memcontainers/sysroot/zig:sys, whose `mc` module is generated from contracts/syscalls.kdl.
-//! This file keeps nutils' applet-facing `sys` API, but no longer owns hand-written externs.
+//! mc `sys.Impl` over the generated kernel ABI.
 
 const std = @import("std");
-const types = @import("types.zig");
-const Fd = types.Fd;
-const Pid = types.Pid;
-const Error = types.Error;
-const Whence = types.Whence;
-const Stat = types.Stat;
-const O = types.O;
-const Times = types.Times;
-const Sig = types.Sig;
-const Disp = types.Disp;
-const PollFd = types.PollFd;
+const utilz = @import("utilz");
+const sys = utilz.sys;
+const build_options = @import("build_options");
+const isolated = std.mem.eql(u8, build_options.tier, "isolated");
+const full = std.mem.eql(u8, build_options.tier, "full");
+const Fd = sys.Fd;
+const Pid = sys.Pid;
+const Error = sys.Error;
+const Whence = sys.Whence;
+const Stat = sys.Stat;
+const O = sys.O;
+const Times = sys.Times;
+const Sig = sys.Sig;
+const Disp = sys.Disp;
+const PollFd = sys.PollFd;
 
 const agent_sys = @import("sys");
 const raw = agent_sys.mc;
@@ -416,7 +412,7 @@ pub fn getpid() Pid {
 }
 
 /// Create a pipe (contract #32); returns the read/write fd pair.
-pub fn pipe() Error!types.Pipe {
+pub fn pipe() Error!sys.Pipe {
     var rfd: u32 = 0;
     var wfd: u32 = 0;
     try check(mc_sys_pipe(&rfd, &wfd));
@@ -535,7 +531,7 @@ var argv_slices: [128][:0]const u8 = undefined;
 /// NUL-joined blob from `mc_sys_args`, split like the glue's `lArgs` (skip empty
 /// pieces), then copied into local storage so each argument is independently
 /// NUL-terminated regardless of where the kernel's own NULs land.
-pub fn argsAlloc(gpa: anytype) Error![]const [:0]const u8 {
+pub fn argsAlloc(gpa: std.mem.Allocator) Error![]const [:0]const u8 {
     _ = gpa;
     var total: u32 = 0;
     _ = mc_sys_args(&args_raw, args_raw.len, &total); // glue discards the errno here too (lArgs)
@@ -555,4 +551,198 @@ pub fn argsAlloc(gpa: anytype) Error![]const [:0]const u8 {
         count += 1;
     }
     return argv_slices[0..count];
+}
+
+fn v_init(_: *anyopaque) void {
+    init();
+}
+fn v_exit(_: *anyopaque, code: u8) noreturn {
+    exit(code);
+}
+fn v_argsAlloc(_: *anyopaque, gpa: std.mem.Allocator) Error![]const [:0]const u8 {
+    return argsAlloc(gpa);
+}
+fn v_open(_: *anyopaque, path: []const u8, flags: O) Error!Fd {
+    return open(path, flags);
+}
+fn v_read(_: *anyopaque, fd: Fd, buf: []u8) Error!usize {
+    return read(fd, buf);
+}
+fn v_writeAll(_: *anyopaque, fd: Fd, bytes: []const u8) Error!void {
+    return writeAll(fd, bytes);
+}
+fn v_close(_: *anyopaque, fd: Fd) void {
+    close(fd);
+}
+fn v_lseek(_: *anyopaque, fd: Fd, off: i64, whence: Whence) Error!u64 {
+    return lseek(fd, off, whence);
+}
+fn v_stat(_: *anyopaque, path: []const u8) Error!Stat {
+    return stat(path);
+}
+fn v_lstat(_: *anyopaque, path: []const u8) Error!Stat {
+    return lstat(path);
+}
+fn v_readlink(_: *anyopaque, path: []const u8, buf: []u8) Error!usize {
+    return readlink(path, buf);
+}
+fn v_symlink(_: *anyopaque, target: []const u8, link_path: []const u8) Error!void {
+    if (comptime isolated) return error.ENOSYS;
+    return symlink(target, link_path);
+}
+fn v_link(_: *anyopaque, target: []const u8, link_path: []const u8) Error!void {
+    if (comptime isolated) return error.ENOSYS;
+    return link(target, link_path);
+}
+fn v_unlink(_: *anyopaque, path: []const u8) Error!void {
+    if (comptime isolated) return error.ENOSYS;
+    return unlink(path);
+}
+fn v_mkdir(_: *anyopaque, path: []const u8) Error!void {
+    if (comptime isolated) return error.ENOSYS;
+    return mkdir(path);
+}
+fn v_readdir(_: *anyopaque, path: []const u8, buf: []u8) Error!usize {
+    return readdir(path, buf);
+}
+fn v_rename(_: *anyopaque, old: []const u8, new: []const u8) Error!void {
+    if (comptime isolated) return error.ENOSYS;
+    return rename(old, new);
+}
+fn v_chmod(_: *anyopaque, path: []const u8, mode: u32) Error!void {
+    if (comptime isolated) return error.ENOSYS;
+    return chmod(path, mode);
+}
+fn v_utimes(_: *anyopaque, path: []const u8, times: ?Times) Error!void {
+    if (comptime isolated) return error.ENOSYS;
+    return utimes(path, times);
+}
+fn v_ftruncate(_: *anyopaque, fd: Fd, len: u64) Error!void {
+    return ftruncate(fd, len);
+}
+fn v_chdir(_: *anyopaque, path: []const u8) Error!void {
+    return chdir(path);
+}
+fn v_getcwd(_: *anyopaque, buf: []u8) Error!usize {
+    return getcwd(buf);
+}
+fn v_pipe(_: *anyopaque) Error!sys.Pipe {
+    return pipe();
+}
+fn v_spawn(_: *anyopaque, argv_blob: []const u8, stdin: Fd, stdout: Fd, stderr: Fd) Error!Pid {
+    if (comptime !full) return error.ENOSYS;
+    return spawn(argv_blob, stdin, stdout, stderr);
+}
+fn v_waitpid(_: *anyopaque, pid: Pid) Error!i32 {
+    return waitpid(pid);
+}
+fn v_waitpidNohang(_: *anyopaque, pid: Pid) Error!?i32 {
+    return waitpidNohang(pid);
+}
+fn v_kill(_: *anyopaque, pid: Pid, sig: Sig) Error!void {
+    return kill(pid, sig);
+}
+fn v_getpid(_: *anyopaque) Pid {
+    return getpid();
+}
+fn v_nice(_: *anyopaque, inc: i32) Error!i32 {
+    return nice(inc);
+}
+fn v_sigdisp(_: *anyopaque, sig: Sig, disp: Disp) Error!void {
+    return sigdisp(sig, disp);
+}
+fn v_isatty(_: *anyopaque, fd: Fd) bool {
+    return isatty(fd);
+}
+fn v_timeRealtimeMs(_: *anyopaque) Error!i64 {
+    if (comptime isolated) return error.ENOSYS;
+    return timeRealtimeMs();
+}
+fn v_timeMonotonicMs(_: *anyopaque) Error!i64 {
+    if (comptime isolated) return error.ENOSYS;
+    return timeMonotonicMs();
+}
+fn v_sleepMs(_: *anyopaque, ms: i32) void {
+    if (comptime isolated) return;
+    sleepMs(ms);
+}
+fn v_randomBytes(_: *anyopaque, buf: []u8) Error!void {
+    if (comptime isolated) return error.ENOSYS;
+    return randomBytes(buf);
+}
+fn v_httpGet(_: *anyopaque, url: []const u8) Error!Fd {
+    if (comptime !full) return error.ENOSYS;
+    return httpGet(url);
+}
+fn v_httpRequest(_: *anyopaque, blob: []const u8) Error!Fd {
+    if (comptime !full) return error.ENOSYS;
+    return httpRequest(blob);
+}
+fn v_httpStatus(_: *anyopaque, fd: Fd) Error!u32 {
+    if (comptime !full) return error.ENOSYS;
+    return httpStatus(fd);
+}
+fn v_wsOpen(_: *anyopaque, url: []const u8) Error!Fd {
+    if (comptime !full) return error.ENOSYS;
+    return wsOpen(url);
+}
+fn v_poll(_: *anyopaque, fds: []PollFd, timeout_ms: i32) Error!usize {
+    return poll(fds, timeout_ms);
+}
+fn v_usesHostProcessEnviron(_: *anyopaque) bool {
+    return false;
+}
+
+const vtable = sys.VTable{
+    .init = v_init,
+    .exit = v_exit,
+    .argsAlloc = v_argsAlloc,
+    .open = v_open,
+    .read = v_read,
+    .writeAll = v_writeAll,
+    .close = v_close,
+    .lseek = v_lseek,
+    .stat = v_stat,
+    .lstat = v_lstat,
+    .readlink = v_readlink,
+    .symlink = v_symlink,
+    .link = v_link,
+    .unlink = v_unlink,
+    .mkdir = v_mkdir,
+    .readdir = v_readdir,
+    .rename = v_rename,
+    .chmod = v_chmod,
+    .utimes = v_utimes,
+    .ftruncate = v_ftruncate,
+    .chdir = v_chdir,
+    .getcwd = v_getcwd,
+    .pipe = v_pipe,
+    .spawn = v_spawn,
+    .waitpid = v_waitpid,
+    .waitpidNohang = v_waitpidNohang,
+    .kill = v_kill,
+    .getpid = v_getpid,
+    .nice = v_nice,
+    .sigdisp = v_sigdisp,
+    .isatty = v_isatty,
+    .timeRealtimeMs = v_timeRealtimeMs,
+    .timeMonotonicMs = v_timeMonotonicMs,
+    .sleepMs = v_sleepMs,
+    .randomBytes = v_randomBytes,
+    .httpGet = v_httpGet,
+    .httpRequest = v_httpRequest,
+    .httpStatus = v_httpStatus,
+    .wsOpen = v_wsOpen,
+    .poll = v_poll,
+    .usesHostProcessEnviron = v_usesHostProcessEnviron,
+};
+
+var impl_storage: sys.Impl = undefined;
+
+pub fn attach() void {
+    impl_storage = .{
+        .ptr = @ptrCast(&impl_storage),
+        .vtable = &vtable,
+    };
+    sys.attach(&impl_storage);
 }

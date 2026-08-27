@@ -92,7 +92,7 @@ under `memcontainers/`, the build machinery under `bazel/`.
 | 12  | **Guest sysroot & WASI adapter**             | The guest side of the ABI (Rust + Zig); WASI→mc shim                                         | `memcontainers/sysroot/`, `memcontainers/wasi-adapter/`                              | built                                                                                |
 | 13  | **Conformance & attestation**                | Build-time import-purity + tier-fit gates                                                    | `memcontainers/conformance/`, `bazel/tools/mc-attest`                                | built                                                                                |
 | 14  | **Shell**                                    | An OS-agnostic POSIX-ish Zig shell engine driving `/bin/sh`                                  | `memcontainers/shcore/`, `memcontainers/programs/sh/`                                | built                                                                                |
-| 15  | **Userland `/bin`**                          | Multicall coreutils, partitioned by tier                                                     | `memcontainers/programs/coreutils/`                                                  | built                                                                                |
+| 15  | **Userland `/bin`**                          | Zig multicall over `@utilz`; AgentOS owns mc attach, stamp, roster, images                   | `memcontainers/programs/coreutils/`                                                  | built                                                                                |
 | 16  | **Luau scripting**                           | The primary user-facing language; embedded + VFS batteries                                   | `memcontainers/programs/luau/`                                                       | built                                                                                |
 | 17  | **Domain engines & adapters**                | Heavy engines, owned syntax parsing, and the shared tool-adapter service                     | `memcontainers/programs/{sqlite,typst,syntax,adapters}/`, `memcontainers/lib/parse/` | built                                                                                |
 | 18  | **Images, flavors & packages**               | Content-addressed layered images; demand-loaded packages                                     | `memcontainers/images/`, `memcontainers/pkgcore/`, `bazel/tools/mc-roster`           | built                                                                                |
@@ -973,22 +973,18 @@ while lazy I/O is resolving.
 
 ### 10.2 The userland `/bin` (`programs/coreutils`)
 
-`/bin` is a Zig **multicall** userland derived from nutils. `main.zig` dispatches on the `argv[0]`
-basename, and every applet accepts the same `*Ctx` boundary. The source compiles directly against the
-generated Zig mc sysroot: it has no WASI import layer and no applet-local syscall declarations.
+`/bin` is a Zig **multicall** over `@utilz`. AgentOS owns mc `sys.Impl` attach, box
+`build_options`, stamp, roster, and images. `main.zig` attaches the mc backend and
+dispatches through `utilz.registry`. Applets compile against `utilz.sys`; the adapter
+does not use `import_name = "sys"` (that name is the AgentOS sysroot).
 
-`registry_data.zig` is the one applet roster. `registry.zig` pairs each row with its implementation,
-while `programs/coreutils/defs.bzl` reads the same data to stamp the `mc_applets` section and build image
-symlinks. The graph produces full and minimal boxes at each capability tier
-(`isolated`, `read-only`, `read-write`, `full`), so the code present in a box, its declared ceiling, and
-the commands linked into an image stay aligned.
-
-Applets own CLI policy; reusable algorithms live under `core/` and `engines/`—the shared option parser,
-text and filesystem facades, bounded spool, regex/glob/hash/archive/date/sort engines, and jq/awk/sed
-sub-languages. Native tests exercise pure logic, while real-artifact e2e boots the boxes through the
-kernel. [`programs/coreutils/DESIGN.md`](memcontainers/programs/coreutils/DESIGN.md) records the
-subsystem-level implementation decisions cited by source comments and is explicitly subordinate to
-this contract.
+`@utilz//src:registry_data.zig` is the applet roster. `utilz_library` plus per-box
+`build_options` keep excluded applets off the analysis graph. `defs.bzl` stamps the
+`mc_applets` section and image symlinks. The graph produces full and minimal boxes at
+each capability tier (`isolated`, `read-only`, `read-write`, `full`), so the code
+present in a box, its declared ceiling, and the commands linked into an image stay
+aligned. Native tests live in utilz; real-artifact e2e boots the boxes through the
+kernel.
 
 ### 10.3 Luau (`programs/luau`) — the primary scripting language
 

@@ -1,7 +1,8 @@
 load("@rules_zig//zig:defs.bzl", "zig_binary", "zig_configure_binary", "zig_library")
+load("@utilz//bazel:defs.bzl", "utilz_library")
 load("//bazel:wasm_opt.bzl", "wasm_opt")
 
-def coreutils_box(name, tier, tier_section, set_kind, srcs):
+def coreutils_box(name, tier, tier_section, set_kind):
     zig_library(
         name = name + "_build_options",
         main = "src/build_options/%s_%s.zig" % (tier, set_kind),
@@ -9,10 +10,15 @@ def coreutils_box(name, tier, tier_section, set_kind, srcs):
         tags = ["manual"],
     )
 
+    utilz_library(
+        name = name + "_lib",
+        build_options = ":" + name + "_build_options",
+    )
+
     zig_binary(
         name = name + "_raw",
         main = "src/main.zig",
-        srcs = srcs,
+        srcs = ["src/mc_impl.zig"],
         linkopts = [
             "-fno-entry",
             "-rdynamic",
@@ -20,6 +26,7 @@ def coreutils_box(name, tier, tier_section, set_kind, srcs):
         tags = ["manual"],
         deps = [
             ":" + name + "_build_options",
+            ":" + name + "_lib",
             "//memcontainers/sysroot/zig:sys",
         ],
     )
@@ -35,10 +42,10 @@ def coreutils_box(name, tier, tier_section, set_kind, srcs):
 
     native.genrule(
         name = name + "_applets",
-        srcs = ["src/registry_data.zig"],
+        srcs = ["@utilz//src:registry_data.zig"],
         outs = [name + ".applets"],
         tools = ["//bazel/tools/mc-applets"],
-        cmd = "$(execpath //bazel/tools/mc-applets) $(location src/registry_data.zig) %s %s $@" % (tier, set_kind),
+        cmd = "$(execpath //bazel/tools/mc-applets) $(location @utilz//src:registry_data.zig) %s %s $@" % (tier, set_kind),
         tags = ["manual"],
     )
 
