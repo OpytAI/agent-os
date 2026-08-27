@@ -52,7 +52,7 @@ zig_library(
     visibility = ["//visibility:public"],
     deps = [
         "//memcontainers/contracts:constants_zig",
-        "//memcontainers/sysroot/zig:mc",  # the shared mc syscall ABI (was a co-located mc.zig)
+        "//memcontainers/sysroot/zig:mc",  # generated mc syscall ABI
         "@luauc//luau:interpreter_headers",
     ],
 )
@@ -95,7 +95,7 @@ build_test(
 
 # The wasi→mc adapter as a SELF-CONTAINED staticlib, link-injected into luau (see :luau_raw deps).
 # luau is not a Rust crate, so it links the staticlib (which bundles the core funcs + panic_handler)
-# rather than the bare object the rust mc_box uses.
+# rather than the bare object `mc_wasi_program` uses.
 cc_object(
     name = "wasi_adapter_link",
     obj = "//memcontainers/wasi-adapter:wasi_adapter_staticlib",
@@ -178,12 +178,12 @@ zig_binary(
     deps = [
         "@luauc//luau:interpreter_headers",
         "//memcontainers/contracts:constants_zig",
-        "//memcontainers/sysroot/zig:mc",  # the shared mc syscall ABI (was a co-located mc.zig)
+        "//memcontainers/sysroot/zig:mc",  # generated mc syscall ABI
         "@luauc//luau:interpreter_wasm32_wasi",
         # The wasi→mc adapter, FORCE-LINKED as an object (cc_object): its __imported_wasi_* defs
         # override wasi-libc's import stubs, converting luau's wasi imports (fd_write, args_get, …)
         # to mc syscalls → a pure-mc guest. luau's wasi names are stable (zig wasi-libc), so one
-        # link converges (no trampoline rounds, unlike the rust mc_box).
+        # link converges (no trampoline rounds, unlike `mc_wasi_program`).
         ":wasi_adapter_link",
         ":glue_incs",
     ],

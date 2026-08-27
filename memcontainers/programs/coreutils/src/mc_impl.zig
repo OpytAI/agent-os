@@ -155,7 +155,7 @@ fn mc_sys_args(buf: [*]u8, cap: u32, out_total: *u32) i32 {
     return raw.mc_sys_args(raw.addr(buf), cap, raw.addr(out_total));
 }
 
-// ---------------------------------------------------------------- open() flags (contracts/constants.kdl, per the glue)
+// ---------------------------------------------------------------- open() flags (@shcore shell_abi.kdl, merged into constants)
 
 fn toOpenFlags(flags: O) i32 {
     var f: i32 = 0;
@@ -175,8 +175,8 @@ fn seekWhence(w: Whence) i32 {
     };
 }
 
-// signal numbers + dispositions (constants.kdl §143-157). The kernel accepts sig 0..31;
-// every name this adapter exposes is projected from the contract.
+// signal numbers + dispositions (@shcore shell_abi.kdl plus kernel extras in constants.kdl).
+// The kernel accepts sig 0..31; every name this adapter exposes is projected.
 fn sigNum(s: Sig) i32 {
     return switch (s) {
         .hup => constants.SIGHUP,

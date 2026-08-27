@@ -1,5 +1,5 @@
-// The safe-wrapper skin over the generated `mc_sys_*` imports, plus the
-// `entry!` / `declare_tier!` / `declare_budget!` glue and the `#[panic_handler]`.
+// The safe-wrapper skin over the generated `mc_sys_*` imports, plus `entry!`
+// and the `#[panic_handler]`. Tier/budget/service are stamped post-link.
 //
 // The raw imports cross the wire as `(…i32) -> i32`: every argument — including
 // guest pointers and lengths — is a wasm `i32`, and every call returns an `i32`
@@ -42,8 +42,7 @@ pub struct Stat {
 }
 
 impl Stat {
-    /// Owner-triad permission predicates (single subject = owner) — back `test`'s
-    /// `-r`/`-w`/`-x`.
+    /// POSIX owner-triad bits on this `Stat` (single subject = owner).
     pub fn readable(&self) -> bool {
         self.mode & 0o400 != 0
     }
@@ -1091,10 +1090,7 @@ pub fn eprint_bytes(b: &[u8]) {
 
 /// Print `text` to stdout and exit 0 — the canonical answer to `--help`/`-h`. Help
 /// is requested output, not an error, so it goes to **stdout** with a **success**
-/// exit (mirroring clap and `--help` everywhere). Allocation-free, so even the
-/// no-heap coreutils can use it. A guest wires this in as the very first thing
-/// `main` does, before parsing or any I/O — so help is side-effect-free even for
-/// tools like `agent`/`nohup`:
+/// exit. Allocation-free, for no_std Rust guests (`/bin/tools`, …):
 ///
 /// ```ignore
 /// if rt::wants_help(&argbuf[..n], true) { rt::emit_help(HELP); }
@@ -1106,8 +1102,8 @@ pub fn emit_help(text: &str) -> ! {
 
 /// Whether argv (a NUL-separated buffer from [`args_into`]) requests help: a long
 /// `--help` (always), or a bare `-h` when `h_is_help` is true — pass `false` for
-/// the few tools where `-h` is itself a real option (`sort`/`ls`, and `grep` among
-/// the WASI tools). Scans the operands after argv[0] and stops at `--`, so
+/// the few tools where `-h` is itself a real option (`sort`/`ls`/`grep`).
+/// Scans the operands after argv[0] and stops at `--`, so
 /// `rm -- --help` treats `--help` as a filename (POSIX). Allocation-free.
 pub fn wants_help(argbuf: &[u8], h_is_help: bool) -> bool {
     for tok in argv_tokens(argbuf).skip(1) {
@@ -1142,7 +1138,7 @@ fn argv_tokens(buf: &[u8]) -> impl Iterator<Item = &[u8]> + '_ {
 }
 
 /// A human message for a syscall errno, matching the kernel's filesystem wording so
-/// guest coreutils report errors the way native builtins do.
+/// no_std Rust guests report FS errors the same way.
 pub fn strerror(errno: i32) -> &'static str {
     match errno {
         ENOENT => "No such file or directory",
@@ -1170,10 +1166,9 @@ pub fn exit(code: i32) -> ! {
     loop {}
 }
 
-// A standalone no_std guest (wasm32-unknown) needs this panic handler. A coreutils box (SYSTEMS.md section 10.2)
-// is std-on-wasi — std already provides `panic_impl` there — so suppress ours under wasi to
-// avoid a duplicate lang item. The box still reaches the mc wrappers below; only the runtime
-// item differs.
+// A standalone no_std guest (wasm32-unknown) needs this panic handler. Std-wasi
+// guests (typst, adapters) already have std's `panic_impl`, so suppress ours
+// under wasi to avoid a duplicate lang item.
 #[cfg(not(target_os = "wasi"))]
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {

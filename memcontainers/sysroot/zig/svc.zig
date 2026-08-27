@@ -2,11 +2,11 @@
 //! respond syscalls and the kernel's `[kind][nhandles][session][req_id][caller][caller_caps][blob_len][blob]`
 //! request envelope, so a service binary writes only its DISPATCH: `serve` once, then loop `recv` →
 //! handle warm state → `respond`. The client side (connect/call) is each tool's own (a Lua binding for
-//! luau, a CLI for a service). Shared by the Zig services (sqlite today); a one-binary/two-modes
+//! luau, a CLI for a service). Shared by Zig services (sqlite, syntax); a one-binary/two-modes
 //! service's `_start` selects the serve loop vs the CLI by argv. SYSTEMS.md
 const std = @import("std");
 const mc = @import("mc");
-const constants = @import("constants_zig"); // the projected contract constants (constants.kdl)
+const constants = @import("constants_zig"); // projected constants (constants.kdl + @shcore)
 
 /// The SERVICE-mode argv[1] marker — the projected contract constant (one source: constants.kdl),
 /// re-exported so a service's `_start` selects serve-vs-CLI without copying the literal (codex #5).

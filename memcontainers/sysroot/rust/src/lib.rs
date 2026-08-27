@@ -12,9 +12,9 @@
 
 #![no_std]
 
-// The projected constants — errno, the `O_*` open flags, `TIER_*`, `SEEK_*`, `WNOHANG`,
-// the `SIG*` signals, the `CAP_*` bits — from the SAME constants.kdl the kernel derives
-// from (B2). Re-exported so a guest writes `rt::ENOENT` / `rt::O_READ`, never a hand-typed
+// The projected constants — errno, `O_*`, `TIER_*`, `SEEK_*`, `WNOHANG`, `SIG*`,
+// `CAP_*` — from `constants.kdl` merged with `@shcore//:shell_abi.kdl` (B2).
+// Re-exported so a guest writes `rt::ENOENT` / `rt::O_READ`, never a hand-typed
 // magic number that could drift from the kernel's.
 pub use constants_rust::*;
 

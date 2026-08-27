@@ -1,5 +1,5 @@
-//! Owned parser-stack E2E: generated Rust tables + C runtime + Zig service + generated binary Luau
-//! codec, all inside the real kernel. These tests deliberately cross every boundary in one call.
+//! Owned parser-stack E2E: `@twigz` packed C parsers/scanners + C runtime + Zig service +
+//! generated Luau codec, on the real kernel. These tests cross every boundary in one call.
 use crate::*;
 
 #[test]
@@ -107,7 +107,7 @@ doc:close()
     assert!(out.contains("found\t1\r\n"), "one kind-22 node:\n{out}");
 }
 
-/// Lua long brackets are scanner-driven; `[[…]]` / `[==[…]==]` must still parse.
+/// Lua long brackets go through the packed C scanner. A closed `[[…]]` / `[==[…]==]` tree has `diags==0`.
 #[test]
 fn syntax_lua_parses_long_brackets() {
     let mut s = boot_loom();

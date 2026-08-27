@@ -5,9 +5,9 @@ load("//bazel:wasm32_build_test.bzl", "wasm32_build_test")
 # the safe `mc` syscall surface every Rust wasm guest links. The `mc` import block is GENERATED from
 # contracts/syscalls.kdl — a guest `$emit` on the SAME `mc_syscall_table!` the kernel's
 # dispatch derives from (B2: a guest can't import a syscall the kernel doesn't serve, drift
-# = compile error). The ergonomic safe wrappers + the `entry!`/`declare_tier!`/
-# `declare_budget!` macros are PORTED over that generated boundary (generate the boundary,
-# port the comfort). Compiles to wasm32-unknown-unknown; consumed by //memcontainers/programs.
+# = compile error). The ergonomic safe wrappers + `entry!` are the hand-kept comfort
+# layer over that generated boundary. Tier/budget/service live in the BUILD (`mc_program`),
+# not in guest source. Compiles to wasm32-unknown-unknown; consumed by //memcontainers/programs.
 
 rust_library(
     name = "lib",

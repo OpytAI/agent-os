@@ -6,7 +6,7 @@
 use crate::boot_posix;
 
 /// WHY: a pipe wires one guest's stdout to the next's stdin through the kernel's pipe primitive.
-/// GUARANTEES: `a | b` routes bytes between two converted boxes, not just runs them serially.
+/// GUARANTEES: `a | b` pipes two PATH applets through a kernel pipe, not a temp file.
 #[test]
 fn pipe_routes_output_between_commands() {
     let mut s = boot_posix();

@@ -29,7 +29,7 @@ zig_library(
 )
 
 # The resident-service serve-loop scaffolding (serve / recv-envelope / respond) over the svc_* server
-# syscalls. A Zig service `@import("svc")` and writes only its dispatch (sqlite today).
+# syscalls. A Zig service `@import("svc")` and writes only its dispatch (sqlite, syntax, …).
 zig_library(
     name = "svc",
     main = "svc.zig",

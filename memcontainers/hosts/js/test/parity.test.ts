@@ -66,8 +66,8 @@ async function main(): Promise<void> {
     throw new Error(`exec mismatch: exit=${echo.exitCode} stdout=${JSON.stringify(stdout)}`);
   }
 
-  // The base fixture intentionally has no coreutils. Select its real `sh`
-  // executable directly and pass hostile/empty positional argv literally.
+  // Direct `sh -c` so hostile argv stays `$1`/`$2`/`$3`. `printf` is a PATH
+  // applet on this minimal image.
   const direct = await host.run("sh", [
     "-c",
     'printf "<%s>|<%s>|<%s>\\n" "$1" "$2" "$3"',

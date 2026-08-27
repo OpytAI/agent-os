@@ -7,7 +7,7 @@ exports_files(
 )
 
 # wasi-adapter — a guest-side WASI preview1 shim implemented over `mc_sys_*` (SYSTEMS.md),
-# ported from memcontainers crates/wasi/adapter. It DEFINES the `wasi_snapshot_preview1` functions
+# ported from the memcontainers WASI adapter. It DEFINES the `wasi_snapshot_preview1` functions
 # so the conversion link-injects it into a wasm32-wasi box and rewrites the box's WASI imports to
 # `mc` — the box then imports ONLY `mc` (A4: WASI exists only as a guest adapter, never in the
 # kernel). It uses the dependency-free generated bindings (constants_rust + mc_rust), never
@@ -44,8 +44,9 @@ genrule(
 
 # A SELF-CONTAINED staticlib of the adapter (crate-type=staticlib): rustc bundles the core funcs it
 # references (slice_index_fail, unwrap_failed, …) alongside its #[panic_handler], with NO liballoc
-# (the adapter is no_std + dependency-free). The rust mc_box link-injects the bare OBJECT (its Rust
-# box supplies core/alloc); the NON-Rust domain tools (luau/sqlite/typst) have no Rust runtime, so
+# (the adapter is no_std + dependency-free). The Rust `mc_wasi_program` lane link-injects the
+# bare OBJECT (its crate supplies core/alloc); the NON-Rust domain tools (luau/sqlite) have no
+# Rust runtime, so
 # they link THIS instead — luau's wasi imports pull the adapter member, which self-resolves.
 rust_static_library(
     name = "wasi_adapter_staticlib",

@@ -1,5 +1,3 @@
-// crates/kernel/src/wasm/mod.rs
-//
 // The user-space runtime: runs wasm32 programs in an embedded `wasmi`
 // interpreter as cooperative tasks.
 //
@@ -1821,8 +1819,8 @@ impl GuestProgram {
     /// node-kind values are projected from `contracts/constants.kdl`.
     fn write_stat_buf(&mut self, ret_stat: u32, md: &crate::vfs::Metadata) -> Fulfilled {
         // Stat blob layout (little-endian, 44 bytes). MUST stay in lockstep with
-        // the guest sysroot (`parse_stat`, `crates/sysroot`) and the WASI adapter
-        // (`parse_mc_stat`, `crates/wasi/adapter`):
+        // the guest sysroot (`parse_stat`, `memcontainers/sysroot/rust`) and the
+        // WASI adapter (`parse_mc_stat`, `memcontainers/wasi-adapter`):
         //   size@0 u64 · kind@8 u32 · nlink@12 u32 · mode@16 u32 ·
         //   mtime@20 i64 · atime@28 i64 · ctime@36 i64   (times = ms since epoch)
         let mut buf = [0u8; STAT_BUF_LEN];
@@ -4631,7 +4629,7 @@ pub fn declared_budget(bytes: &[u8]) -> Option<Budget> {
 }
 
 /// Read a program's declared capability tier from its (validated) `mc_tier` WASM custom section
-/// (emitted by `sysroot::declare_tier!`). `None` when absent — the program then inherits its parent's
+/// (appended by `mc-stamp` from BUILD attrs). `None` when absent — the program then inherits its parent's
 /// privilege unchanged. Malformed/duplicate is rejected earlier by [`inspect_guest_module`] at load,
 /// so an absent section here genuinely means "inherit", never "the section was corrupt".
 pub fn declared_tier(bytes: &[u8]) -> Option<Tier> {
@@ -4967,8 +4965,8 @@ pub fn resolve_program_lookup(ns: &Namespace, cwd: &str, cmd: &str, path: &str) 
     }
     for path in candidates {
         // Follow symlinks before opening: `ns.open`/`resolve` is purely lexical
-        // and a filesystem won't open a symlink node directly, so a busybox-style
-        // multicall link (`/bin/base64` -> `mcbox-ro`) would otherwise fail to
+        // and a filesystem won't open a symlink node directly, so a multicall
+        // link (`/bin/base64` → `mcbox-readonly`) would otherwise fail to
         // load. Canonicalizing here mirrors the guest open syscall, which also
         // canonicalizes first. A non-existent candidate canonicalizes to an error
         // — skip to the next PATH entry.

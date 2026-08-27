@@ -11,7 +11,7 @@ The source of truth is split deliberately:
   projector generates Rust, Zig, and Luau codecs/constants; consumers do not copy wire IDs.
 - `@twigz` owns `.grammar` authoring, scanners as `scan` productions, pack C, and the Tree-sitter
   runtime filegroups. AgentOS packs lua+luau only via `twigz_pack`.
-- `bazel/tools/syntax-registry-zig` projects pack `registry.json` into today's `registry.zig`
+- `bazel/tools/syntax-registry-zig` projects pack `registry.json` into `registry.zig`
   (`extern fn tree_sitter_*`, interned `syntax_zig` traits). twigz does not emit Zig.
 - `glue/` links the generic C runtime, generated parsers, and generated scanners behind Zig service
   lifecycle and resource policy. `/lib/luau/syntax.luau` is the typed guest client.
@@ -33,9 +33,8 @@ parser pack + Tree-sitter C runtime + generated scanners -> /bin/syntax
 
 Each language remains an independent Tree-sitter automaton. The packer deterministically renumbers
 implementation IDs, then interns only byte-identical action lists and small parse-table rows across
-the finished automata. It does not merge grammar states or broaden either language. Parser manifests,
-node schemas, and the sharing report remain host build outputs for provenance and inspection; they are
-not runtime assets.
+the finished automata. It does not merge grammar states or broaden either language. The guest
+consumes packed C parsers/scanners and `registry.json`; it does not ship semantic JSON.
 
 The service owns parser instances, source buffers, trees, queries, and document revisions in guest
 linear memory. Handles are session-owned. Node handles are monotonic and never recycled within a

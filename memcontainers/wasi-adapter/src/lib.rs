@@ -3,14 +3,12 @@
 //!
 //! ## Why this exists
 //!
-//! We want the `wasm32-wasip1` tool ecosystem (grep, jq, … eventually git) without
-//! teaching the kernel a second ABI. The leverage move is to **convert** each WASI
-//! binary into a pure-`mc` guest: this crate **defines** the `wasi_snapshot_preview1`
-//! functions, and the build pipeline **link-injects** it into a tool so its
-//! definitions override wasi-libc's imports. The converted module then imports only
-//! `mc.*` and is indistinguishable from a hand-written guest — the kernel,
-//! conformance checker, and capability/tier model are untouched. See
-//! `project_wasi_conversion_architecture`.
+//! C/C++ guests (Luau, SQLite, syntax) and Rust std-wasi services (typst, adapters)
+//! still compile to `wasm32-wasi`. This crate **defines** `wasi_snapshot_preview1`
+//! over `mc_sys_*`, and the build **link-injects** it so wasi-libc imports become
+//! `mc`. The converted module then imports only `mc.*` and is indistinguishable from
+//! a hand-written guest — the kernel, conformance checker, and capability/tier model
+//! are untouched. `/bin` applets and `/bin/sh` are Zig freestanding, not this lane.
 //!
 //! ## How it works
 //!
@@ -466,7 +464,7 @@ unsafe fn resolve(dirfd: i32, path_ptr: i32, path_len: i32, out: &mut [u8]) -> R
 // resolves relative paths against it. The kernel, however, gives each task a real
 // cwd. Bridge them: at startup — after wasi-libc has populated its preopens —
 // `chdir` the tool to the kernel's cwd, so a relative path the shell passes (e.g.
-// `grep foo bar.txt` from /home/user) resolves where the user expects. Registered
+// `luau script.luau`) resolves where the user expects. Registered
 // in `.init_array` so `__wasm_call_ctors` runs it before `main`; plain (lowest)
 // priority puts it after wasi-libc's own preopen constructor.
 extern "C" {

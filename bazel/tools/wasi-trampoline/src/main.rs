@@ -11,7 +11,7 @@
 //!
 //! One trampoline+relink usually clears it, but a relink can reveal a DEEPER binding (e.g.
 //! getrandom's wrapper resolving to the `wasi`-crate `random_get` only on the next link), so the
-//! Bazel conversion (see //wasi-adapter:defs.bzl `mc_box`) drives this to a FIXPOINT: each round
+//! Bazel conversion (`mc_wasi_program` in //bazel:mc_box.bzl) drives this to a FIXPOINT: each round
 //! links the adapter + every trampoline so far, then this tool reads the round's residue into the
 //! next trampoline, until a box imports only `mc`. Post-convergence rounds read zero residue, so
 //! their trampolines are empty and the rounds are byte-identical (Bazel caches them — the fixpoint

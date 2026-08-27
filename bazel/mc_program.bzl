@@ -67,9 +67,8 @@ McProgramInfo = provider(
 )
 
 def _mc_program_impl(ctx):
-    # 1. STAMP — append the kernel's load-time mc_tier + mc_budget custom sections. The Rust boxes
-    #    emit these via declare_tier!/declare_budget!; the zig/C++ tools cannot (Zig's linksection
-    #    makes a data segment, not a custom section), so //bazel/tools/mc-stamp does it post-link.
+    # 1. STAMP — append mc_tier + mc_budget (+ optional mc_service). Source macros do not emit
+    #    these; mc-stamp always writes them from BUILD attrs.
     stamped = ctx.actions.declare_file(ctx.label.name + ".wasm")
     ctx.actions.run(
         outputs = [stamped],

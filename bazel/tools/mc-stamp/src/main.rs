@@ -5,8 +5,8 @@
 //!
 //! A WASM custom section is `0x00 <uleb body_len> <uleb name_len> <name> <payload>`, appended to the
 //! module (the kernel's parser walks every top-level section, so trailing sections are found). The
-//! payload layouts are the load-time contract with the kernel (mirrors the sysroot's
-//! declare_tier!/declare_budget!/declare_service!): mc_tier = the raw UTF-8 tier; mc_budget =
+//! payload layouts are the load-time contract with the kernel (written by this tool from BUILD
+//! attrs): mc_tier = the raw UTF-8 tier; mc_budget =
 //! [u32 version=1][u64 mem][u64 fuel][u32 table], little-endian (24 bytes); mc_service = the raw
 //! UTF-8 service name (present only for a resident service, SYSTEMS.md); mc_applets is the
 //! newline-separated multicall roster consumed by `mc-roster`.

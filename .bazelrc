@@ -20,13 +20,13 @@ common --incompatible_strict_action_env
 common --copt=-w
 common --host_copt=-w
 
-# Host git engine: hermetic_cc zig-cc enables UBSan by default; libgit2
-# intentionally does unaligned loads (pack/hash). Disable so native git-engine
-# smoke/abi tests do not abort under zig-cc.
+# zig cc enables UBSan by default. Native git-engine (and other C/Zig host
+# objects) do unaligned loads in pack/hash paths; disable so smoke/abi tests
+# do not abort under zig cc.
 build --copt=-fno-sanitize=undefined --host_copt=-fno-sanitize=undefined
 build --linkopt=-fno-sanitize=undefined --host_linkopt=-fno-sanitize=undefined
 
-# hermetic_cc zig cache lives under $HOME/.cache/zig; allow sandbox access.
+# Zig's global cache defaults under $HOME/.cache/zig; allow sandbox access.
 build --sandbox_add_mount_pair=/home
 # No global target platform: host-side tools (the contracts projector, the
 # wasmtime host, the Elixir server via its scoped transition) build for the

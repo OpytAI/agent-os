@@ -4,12 +4,12 @@
 //! terminal's ONLCR (kernel io.rs) adds the CR — exactly what the agent's xterm.js sees. Behavioral
 //! tests (mv/cp) run the command on the console, then verify the effect over the control channel.
 //!
-//! Each line proves the whole pipeline: console → `/bin/sh -c` → `/bin/<tool>` (the wasm32-wasi
-//! box CONVERTED to pure-mc, dispatched on argv[0]) → the sysroot/adapter → the kernel.
+//! Each line proves: console → `/bin/sh -c` → `/bin/<tool>` (a Zig `@utilz` applet in the
+//! per-tier mcbox, dispatched on argv[0]) → mc `sys.Impl` → the kernel.
 
 use crate::boot_posix;
 
-/// WHY: `cat` is the hand-written "from programs" representative (clap + the facade over //sysroot).
+/// WHY: `cat` is a `@utilz` applet in the read-only mcbox.
 /// GUARANTEES: it streams a file back byte-for-byte, ONLCR'd to CRLF on the terminal.
 #[test]
 fn cat_streams_a_file() {
@@ -20,17 +20,17 @@ fn cat_streams_a_file() {
     assert_eq!(s.run_for_output("cat /tmp/note"), "agent-os e2e\r\n");
 }
 
-/// WHY: `base64` is the uutils representative — the REAL `uu_base64::uumain` over the WASI→mc
-/// adapter. GUARANTEES: uutils' exact encoding, proving the converted box executes correctly.
+/// WHY: `base64` is a `@utilz` applet.
+/// GUARANTEES: RFC 4648 encoding of the file.
 #[test]
-fn base64_encodes_via_uutils() {
+fn base64_encodes_a_file() {
     let mut s = boot_posix();
     s.host.write_file("/tmp/in", b"hello").expect("write");
     assert_eq!(s.run_for_output("base64 /tmp/in"), "aGVsbG8=\r\n");
 }
 
-/// WHY: `grep` is the external-crate representative — ripgrep's engine. GUARANTEES: it selects
-/// exactly the matching lines, proving a third-party Rust crate stack runs in a converted box.
+/// WHY: `grep` is a `@utilz` applet.
+/// GUARANTEES: it prints only the matching lines.
 #[test]
 fn grep_selects_matching_lines() {
     let mut s = boot_posix();
@@ -40,10 +40,10 @@ fn grep_selects_matching_lines() {
     assert_eq!(s.run_for_output("grep ba /tmp/lines"), "bar\r\nbaz\r\n");
 }
 
-/// WHY: `sed` is the VENDORED+patched external tool (uutils sed fetched from crates.io). GUARANTEES:
-/// a real `s///` stream-edit, proving a fetched+patched crate converts to pure-mc and runs.
+/// WHY: `sed` is a `@utilz` applet.
+/// GUARANTEES: `s///` stream-edits the file.
 #[test]
-fn sed_substitutes_via_vendored_sed() {
+fn sed_substitutes() {
     let mut s = boot_posix();
     s.host
         .write_file("/tmp/sed-in", b"hello world\n")
@@ -54,8 +54,8 @@ fn sed_substitutes_via_vendored_sed() {
     );
 }
 
-/// WHY: `jq` is the crates.io external tool (the jaq engine). GUARANTEES: a JSON filter selects the
-/// value, proving the read-only box runs the jaq stack.
+/// WHY: `jq` is a `@utilz` applet in the read-only box.
+/// GUARANTEES: the filter prints the selected value.
 #[test]
 fn jq_filters_json() {
     let mut s = boot_posix();
@@ -65,8 +65,8 @@ fn jq_filters_json() {
     assert_eq!(s.run_for_output("jq .n /tmp/j.json"), "42\r\n");
 }
 
-/// WHY: `head` is a hand-written line filter (the streaming facade). GUARANTEES: `-N` selects the
-/// first N lines and nothing else.
+/// WHY: `head` is a `@utilz` applet.
+/// GUARANTEES: `-N` prints the first N lines.
 #[test]
 fn head_selects_first_lines() {
     let mut s = boot_posix();
@@ -76,19 +76,19 @@ fn head_selects_first_lines() {
     assert_eq!(s.run_for_output("head -2 /tmp/multi"), "alpha\r\nbeta\r\n");
 }
 
-/// WHY: `gzip` (flate2) is a read-WRITE external tool — it writes/removes files. GUARANTEES: a
-/// compress→decompress→cat round-trip recovers the original, proving the box both writes and reads.
+/// WHY: `gzip` is a read-write `@utilz` applet.
+/// GUARANTEES: compress → decompress recovers the original file.
 #[test]
 fn gzip_round_trips() {
     let mut s = boot_posix();
     s.host
-        .write_file("/tmp/gz", b"hello flate2 round-trip\n")
+        .write_file("/tmp/gz", b"hello gzip round-trip\n")
         .expect("write");
     s.run_for_output("gzip /tmp/gz"); // → /tmp/gz.gz, removes /tmp/gz (silent)
     s.run_for_output("gzip -d /tmp/gz.gz"); // → /tmp/gz (silent)
     assert_eq!(
         s.run_for_output("cat /tmp/gz"),
-        "hello flate2 round-trip\r\n"
+        "hello gzip round-trip\r\n"
     );
 }
 

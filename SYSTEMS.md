@@ -120,7 +120,7 @@ language-neutral contracts, and the Bazel graph.
    │ kernel.wasm                                                          │ │
    │   scheduler · capabilities · VFS + namespaces · pipes · services·net │ │
    │   runs guests via an embedded wasmi interpreter over the mc syscall  │ │
-   │   ABI:   GUEST = /bin/sh, coreutils, luau, sqlite, typst (Rust·Zig·C)│ │
+   │   ABI:   GUEST = sh·utilz (Zig), luau/sqlite (C+Zig), typst (Rust)   │ │
    └──────────────────────────────────────────────────────────────────────┘ │
    SERVED HOST ADAPTER ── wire protocol ──> SDK / clients (TS) ──────────────┘
 ```
@@ -136,7 +136,8 @@ The runtime nesting is **host → kernel.wasm → wasmi → guest.wasm**, with a
   owns the process table, scheduler, VFS, pipes, services, and the syscall surface, and it runs guests
   inside `wasmi`.
 - **Guest** — a user program run _inside_ the kernel. Any language that targets wasm32 can be a guest;
-  today that is Rust (shell, coreutils, typst), C/C++ (Luau), and C (SQLite).
+  today that is Zig (`/bin/sh`, `/bin` applets, Luau/SQLite/syntax glue), C/C++ (Luau), C (SQLite),
+  and Rust (typst).
 
 The kernel exposes **four frozen boundaries**, every one generated from a contract:
 
@@ -187,15 +188,15 @@ _everything is a file_, _fail-closed_.
 - **B2 — Contracts are language-neutral and projected into every language.** Drift is a failed diff
   test. All projections (Rust kernel, Zig shims, TS client) have a consumer from day one, so the
   projector is exercised across every language immediately.
-- **B3 — Vendor less, patch in place.** Third-party source enters via `http_archive` + patches; only
-  patch files and Zig glue live in-tree.
+- **B3 — Vendor less, patch in place.** Third-party source enters as Bazel modules
+  (`archive_override` or `http_archive`) plus patches; only pin files, patches, and glue live in-tree.
 - **B4 — Hermetic toolchains.** Rust, Zig, and JavaScript toolchains are pinned in Bazel. No host fonts, no
   host browser, no tool from `$PATH`. Final linked WebAssembly is post-link optimized by the pinned,
   portable Binaryen tool under the hermetic Node toolchain.
 - **B5 — Size is a test and a lever.** Each `kernel.wasm` carries a size budget; every shipped kernel
   and guest goes through the common post-link size policy; per-guest runtime budgets are enforced at exec.
-- **B6 — Real artifacts only.** No mocks; drive the real kernel through a real host against the real
-  internet.
+- **B6 — Real artifacts only.** No mocks; drive the real kernel through a real host. Tree-sitter
+  scanners are packed C from `@twigz`, not a second test lexer.
 - **B7 — Many implementations, one contract, parity-gated.** A kernel implementation ships only when it
   matches the others bit-for-bit on the shared suite. Two implementations of one contract is also a
   contract-ambiguity detector — anything the spec left underspecified shows up as a parity diff.
@@ -296,12 +297,15 @@ memcontainers/contracts/
 ├── control.kdl    # the `mc_ctl_*` host→kernel channel
 ├── wire.kdl       # the server↔client protocol
 ├── constants.kdl  # errno, capabilities, tiers, ABI version, the service marker
+│                  #   (ShellOs numbers merge in from @shcore shell_abi.kdl)
 ├── sidecar.kdl    # portable external-resource lifecycle and guest envelope
 ├── runner.kdl     # private provider↔runner framing
 ├── llb.kdl        # portable build graph
 ├── snapshot.kdl   # portable full/incremental snapshot format
 ├── shell.kdl      # shell context and completion vocabulary
 ├── syntax.kdl     # shared parser and semantic vocabulary
+├── git.kdl        # host git remotes / engine envelope
+├── browser.kdl    # browser sidecar / guest envelope
 ├── codegen/       # the projector (a dependency-free Rust binary)
 └── gen/           # the committed, diff-gated projections and protocol specifications
 ```
@@ -342,7 +346,7 @@ KDL node model and walks it with a per-language emitter. Its design choices are 
 
 Per language: Rust gets names, callback tables, typed codecs, and a `SYSCALL_CAPS` matrix. Zig gets
 descriptor tables, typed codecs, and concrete guest-side `extern "mc" fn` declarations generated from
-the syscall rows. TypeScript and Elixir get constants and typed codecs; Markdown gets a reference
+the syscall rows. TypeScript, Elixir, and Luau get constants and typed codecs; Markdown gets a reference
 table; wire also emits AsyncAPI and OpenAPI YAML.
 
 ### 3.3 Typed messages and schema projections
@@ -350,7 +354,7 @@ table; wire also emits AsyncAPI and OpenAPI YAML.
 Rows describe callable ABI surfaces. **Messages** describe typed byte payloads that travel over those
 surfaces. A `message` node has a stable id, a version, and a closed set of fields (`str`, `bytes`,
 `strmap`, integers, booleans, and lists of other messages). The projector emits canonical binary codecs
-for Rust, Zig, TypeScript, and Elixir: little-endian numbers, declaration-order fields, explicit
+for Rust, Zig, TypeScript, Elixir, and Luau: little-endian numbers, declaration-order fields, explicit
 presence bits for optional fields, sorted maps, and fail-closed decoders (`WrongMessage`,
 `UnsupportedVersion`, `Truncated`, `TrailingBytes`, `InvalidUtf8`, `InvalidPresence`,
 `NonCanonicalMap`). `control.kdl` owns the host-control messages; `llb.kdl` owns the portable build
@@ -419,8 +423,8 @@ and autocomplete fail explicitly in that state. This makes the image contract ho
 interactive, programmatic, and recovery behavior on one implementation.
 
 **Capabilities** are a `u8` bitset — exactly eight bits, by design (a ninth "is the moment to ask
-whether it is genuinely new authority"). The values are projected from `constants.kdl`, never
-hand-written:
+whether it is genuinely new authority"). The values are projected from `constants.kdl` merged with
+`@shcore//:shell_abi.kdl`, never hand-written:
 
 | Bit | Capability     | Gates                                        |
 | --- | -------------- | -------------------------------------------- |
@@ -865,9 +869,9 @@ The guest side of the syscall ABI, in two languages. The **`mc` import block is 
 syscall table the kernel's dispatch derives from, so a guest can never import a syscall the kernel does
 not serve. On top sits a **hand-written, deliberately not generated** safe-wrapper skin
 (`read`/`write_all`/`open`/`spawn`/… returning `Result<T, errno>`), plus the
-`entry!`/`declare_tier!`/`declare_budget!` macros. The philosophy: _generate the boundary, port the
+`entry!` macro. The philosophy: _generate the boundary, port the
 comfort_ — the generated externs already catch drift, and generating the ergonomic wrappers would demand
-rich per-argument metadata for no benefit. Load-time metadata (tier/budget/service) is no longer in
+rich per-argument metadata for no benefit. Load-time metadata (tier/budget/service) is not in
 source; it is declared in the build and stamped post-link, so the build graph is its single source.
 
 The Zig sysroot is the counterpart for the C/C++ guest lane. Zig comptime cannot synthesize callable
@@ -884,7 +888,7 @@ with `EINVAL`.
 
 ### 9.2 The WASI adapter
 
-To reuse the `wasm32-wasi` tool ecosystem (uutils, ripgrep, SQLite, typst) without teaching the kernel a
+To reuse the `wasm32-wasi` tool ecosystem (Luau, SQLite, typst) without teaching the kernel a
 second ABI, the WASI adapter _defines_ the `wasi_snapshot_preview1` functions (≈70 of them) over
 `mc_sys_*`, and the build **link-injects** it so its definitions override wasi-libc's imports. The
 converted module then imports **only `mc`** and is indistinguishable from a hand-written guest. Because
@@ -988,15 +992,16 @@ kernel.
 
 ### 10.3 Luau (`programs/luau`) — the primary scripting language
 
-Luau is built from pristine upstream plus a small in-tree patch set, compiled with `zig c++` to
-`wasm32-wasi`, WASI-rewritten to pure `mc`, and shipped in the `loom` flavor and up as `/bin/luau` (VM +
-compiler) and `/bin/luau-analyze` (the type checker). It is the user-facing language; `require("…")` is
-the default interface to everything, including SQLite and typst. The patches reroute Luau's `error`/`pcall`
-and the analyzer's throws through the kernel trap-unwind shim (the EH machinery of §4.3), and turn an
-analysis abort into a graceful exit so a result is never silently wrong.
+Luau's compiler/runtime is the `@luauc` module (pin file `third_party/luauc/luauc.MODULE.bazel`),
+compiled with `zig c++` to `wasm32-wasi`, WASI-rewritten to pure `mc`, and shipped in the `loom`
+flavor and up as `/bin/luau` (VM + compiler) and `/bin/luau-analyze` (the type checker). AgentOS owns
+the mc provider, batteries, and packaging. It is the user-facing language; `require("…")` is
+the default interface to everything, including SQLite and typst. The luauc patches reroute Luau's
+`error`/`pcall` and the analyzer's throws through the kernel trap-unwind shim (the EH machinery of
+§4.3), and turn an analysis abort into a graceful exit so a result is never silently wrong.
 
-The library model is a clean _code vs content_ split. Eighteen `.luau` **batteries** (`json`-adjacent
-helpers, `http`, `path`, `xlsx`, `docx`, `pptx`, `chart`, `zip`, …) are `@embedFile`'d into the binary and
+The library model is a clean _code vs content_ split. Embedded `.luau` **batteries** (`http`, `path`,
+`xlsx`, `docx`, `pptx`, `chart`, `zip`, …) are `@embedFile`'d into the binary and
 lazy-compiled on first `require`, so an unused library costs only bytes and works with zero image staging;
 native modules (`json`, `hash`, `encoding`, `deflate`, `re`) are registered at startup. `require`
 resolution is **cache → embedded → VFS `package.path`**: embedded always wins, so a flavor cannot shadow a
@@ -1015,11 +1020,12 @@ engine's own source language picks the lane, and the lane decides everything you
 
 - **Rust-native lane (the easy way in).** A Rust engine compiles against `//memcontainers/sysroot`, which
   already exposes the `mc_sys_*` wrappers (including `svc_*`). The service driver is **Rust** and calls
-  the engine's Rust API directly — the same lane as the coreutils boxes. **typst takes this lane.**
+  the engine's Rust API directly. **typst takes this lane.** `/bin` applets are Zig over `@utilz`, not
+  this lane.
 - **C-API-through-Zig lane (everything not Rust).** A C or C++ engine is reached through its **C API**,
   and the wrapper/driver is **Zig** — the C/C++→Zig glue lane Luau established. The Zig glue `@cImport`s
-  the engine's C header, drives its C functions, and calls `mc_sys_*` through the hand-kept `mc.zig`
-  extern shim. For a C++ engine the "route to C" is literal (its public API is forced to `extern "C"`);
+  the engine's C header, drives its C functions, and calls `mc_sys_*` through the generated
+  `memcontainers/sysroot/zig:mc` module. For a C++ engine the "route to C" is literal (its public API is forced to `extern "C"`);
   a C engine is already C. **SQLite takes this lane.** The rule, stated so it is not violated: the driver
   around a C/C++ engine is **never** a Rust FFI wrapper — that would be a redundant third lane. C/C++ →
   Zig (via the C API); Rust → Rust.
@@ -1058,7 +1064,7 @@ dominated by tens of MB of embedded default fonts. Instead the fonts are separat
 addressed `/usr/share/fonts` layer that the service scans **once at boot** into a warm `FontBook`; the
 binary stays small, the font layer is shared by content, and — because the warm `FontBook` lives in linear
 memory — a snapshot captures the loaded fonts, so a restored VM compiles at warm speed immediately. The
-engine declares `CAP_FS_READ` (to scan the font layer and read sources) in its tier. The lesson is
+engine is stamped `read-write` so it can scan fonts, read sources, and write the PDF. The lesson is
 general: _any_ engine with large embedded assets (templates, ICU data, model weights) should layer them as
 VFS content a warm service reads once — never bake megabytes of data into the code artifact. It is the
 same content/code split as the Luau batteries (universal stdlib embedded in the interpreter) versus a
@@ -1066,8 +1072,8 @@ flavor's `.luau` libs (VFS layers): code is the binary, assets are layered VFS c
 
 **syntax** is the structural-code engine shipped as part of the default `loom` programmability layer.
 Parser generation stays on the host in `@twigz`. AgentOS packs lua+luau only, projects pack
-`registry.json` into `registry.zig`, and links Tree-sitter C plus generated scanners with
-`zig_binary.csrcs`. The guest `/bin/syntax` is one lazy, isolated resident service. The generated
+`registry.json` into `registry.zig`, and links `@twigz` Tree-sitter C plus packed scanners with
+`zig_binary.csrcs`. There is no mock lexer. The guest `/bin/syntax` is one lazy, isolated resident service. The generated
 binary protocol and semantic constants come from the contract projector in Rust, Zig, and Luau,
 satisfying B2 across all three faces. Concrete CSTs remain lossless and language-specific; generated
 native semantic tables provide the explicitly versioned common vocabulary without runtime JSON. See
@@ -1083,8 +1089,9 @@ inputs. The hierarchy stacks:
 
 | Flavor      | Adds                                                    | For                              |
 | ----------- | ------------------------------------------------------- | -------------------------------- |
-| **minimal** | `sh`, the integral builtins, `pkgfsd`, `agent`, `tools` | building your own harness        |
-| **posix**   | + coreutils                                             | a shell for agents (e.g. RAG)    |
+| **base**    | `/bin/sh` plus pkgfsd/git/tools/adapters; no coreutils  | substrate, not a shipped flavor  |
+| **minimal** | + PATH applets (`echo`, `printf`, `pwd`, `true`, …)     | building your own harness        |
+| **posix**   | + the full `@utilz` box set                             | a shell for agents (e.g. RAG)    |
 | **loom**    | + Luau + the analyzer + Lua/Luau structural parsers     | programmability and code editing |
 | **paper**   | + a document compiler (typst)                           | the document domain              |
 | **atlas**   | + SQLite                                                | the data domain                  |
@@ -1227,7 +1234,7 @@ semantics independently.
 | **JS (browser / Node)**           | standard `WebAssembly`, `wasm32-freestanding`, zero imports | Gitz `memory.Storage` + `fs.Mem`; opaque engine snapshots |
 | **Server (Elixir control plane)** | native Zig **`git-engine` Port**                            | Gitz filesystem storage + `fs.Os`; durable rooted tree    |
 
-Both are built from the same backend-generic Zig core and immutable, integrity-verified Gitz commit.
+Both are built from the same backend-generic Zig core and the `@gitz` module pinned in `bazel/zig.MODULE.bazel`.
 The Wasm entrypoint and native Port loop are scalar/framing adapters with no Git decisions. Actual emitted
 artifacts run the same semantic fixtures; logical repository state must agree even though browser snapshot
 bytes and native directory representation do not.
@@ -1258,7 +1265,7 @@ transport accepts tar bytes; it is not an implementation compatibility layer.
 | Component                       | Location                                                                            |
 | ------------------------------- | ----------------------------------------------------------------------------------- |
 | Shared engine + artifact tests  | `memcontainers/lib/git-engine/`                                                     |
-| Immutable upstream dependency   | root `MODULE.bazel` Gitz `archive_override`                                         |
+| Immutable upstream dependency   | `bazel/zig.MODULE.bazel` Gitz `archive_override`                                    |
 | Generated engine contract       | `memcontainers/contracts/git.kdl` and projections                                   |
 | JS loader/mount/effect adapters | `memcontainers/sdk-js/core/src/git/`                                                |
 | Thin `/bin/git`                 | `memcontainers/programs/git/` (on **base** image)                                   |
@@ -1403,7 +1410,7 @@ defense in depth over Type B, never a substitute.
 | Synthetic `.git` metadata only     | No objects, config-write, journal, snapshot, or stream façade            |
 | BEAM owns Port + effects           | NIF is relay only                                                        |
 | Type B required; Type A future     | Engine hardening ships now; deployment sandbox remains explicit          |
-| Immutable dependency/provenance    | Remote integrity pin, exact Gitz commit, Apache-2.0 attribution          |
+| Immutable dependency/provenance    | `@gitz` pin in `bazel/zig.MODULE.bazel`; Apache-2.0 attribution          |
 | Host commit identity               | Explicit/injected policy data; engine invents no identity or time        |
 | Tenant cache policy                | No implicit mutable cross-tenant cache; credentials never cached         |
 
@@ -1717,8 +1724,9 @@ with declared inputs. The load-bearing edge: a test **`data`-depends** on the ex
 produce, so "did you rebuild?" is structurally impossible. Rust deps come from two separate lockfiles kept
 deliberately apart (a `no_std`/wasm32 set for the kernel, a native set for the host) so std
 feature-unification can't break the `no_std` kernel. Zig is in the graph from day one for the C/C++ guest
-lane via a hermetic `zig cc`/`c++` toolchain. Third-party source enters via `http_archive` + patches; only
-patches and Zig glue live in-tree. The whole story is one command: `bazel test //...` regenerates and
+lane via a hermetic `zig cc`/`c++` toolchain. Third-party source enters as Bazel modules
+(`archive_override` or `http_archive`) plus patches; only pin files, patches, and glue live in-tree.
+The whole story is one command: `bazel test //...` regenerates and
 diff-tests every projection, builds the kernel and guests and images, runs the suites against fresh
 artifacts, and checks the size budget.
 
@@ -1726,15 +1734,15 @@ Every wound of an imperative build becomes a graph edge: a `cargo test` against 
 `rust_test(data=[//…/kernel:kernel])`; image staging via `remove_dir_all` becomes `pkg_tar` (a pure
 function of inputs, no wipe, no order); hardcoded `../../target/...` guest paths become runfiles; two
 byte-identical tar implementations become one `pkg_tar` consumed by both the image and the tests;
-checked-in vendored C/C++ becomes `http_archive(patches=[…])` with the glue in Zig; generated-file
+checked-in vendored C/C++ becomes a pinned Bazel module with the glue in Zig; generated-file
 freshness becomes `write_source_files` + `diff_test`; the size budget becomes a real `size_limit` test; and
 cross-host behavior becomes a parity test over the same artifacts. The thing that stays imperative is honest and
 small: a few `bazel run` developer conveniences that orchestrate nothing about correctness.
 
 ### 14.2 Testing — no mocks, real artifacts
 
-The testing rule, inherited and made hermetic: **no mocks; drive the real `kernel.wasm` in a real host
-against the real internet.** A test boots the kernel with capture sinks and a fixed clock/seeded RNG, runs
+The testing rule, inherited and made hermetic: **no mocks; drive the real `kernel.wasm` in a real host.**
+A test boots the kernel with capture sinks and a fixed clock/seeded RNG, runs
 commands, and asserts on real stdout/stderr bytes and real exit codes — and because a kernel trap surfaces
 as an error from the host, _booting is itself a test._ The e2e suite lives in two targets that share one
 harness: `//memcontainers/tests/e2e:core` (the fast invariants — boot, line discipline, the shell, the
@@ -1778,7 +1786,7 @@ web app) sit outside the core.
 ```
 agent-os/                      ← the repository root: a Bazel/deps/docs shell
 ├── MODULE.bazel               # rules_rust + rules_zig + rules_js + rules_pkg; toolchains;
-│                              #   http_archive(luau, sqlite, …) WITH patches (B3); the crate universes
+│                              #   include() of bazel/*.MODULE.bazel and third_party pins (B3)
 ├── BUILD.bazel                # shared TS workspace config + generated README badge target
 ├── SYSTEMS.md  README.md      # this document; the quickstart
 │                              #   product API docs under docs/ (including docs/git.md)
@@ -1789,7 +1797,7 @@ agent-os/                      ← the repository root: a Bazel/deps/docs shell
 │   ├── wasm_opt.bzl           #   the final-link Binaryen policy shared by kernel + every guest
 │   ├── wasm32_build_test.bzl  #   the wasm32 build-test rule
 │   ├── mc_box.bzl             #   the wasi→mc conversion (`mc_wasi_program`)
-│   ├── mc_program.bzl         #   stamp + attest a guest (mc_program / mc_service_layer / cc_*)
+│   ├── mc_program.bzl         #   stamp + attest a guest (`mc_program` / `mc_service_layer`; zig cc)
 │   ├── ts.bzl                 #   repository TypeScript project convention
 │   ├── elixir_transition.bzl  #   scoped OTP target transitions
 │   ├── rust_e2e_test.bzl      #   the always-RELEASE-host e2e macro (core + extended)
@@ -1801,13 +1809,14 @@ agent-os/                      ← the repository root: a Bazel/deps/docs shell
 │       ├── mc-svc-manifest    #     generate /etc/services.d fragments from stamped sections
 │       ├── wasm-opt           #     stable label for the pinned portable Binaryen optimizer
 │       ├── size               #     the size_limit budget rule
+│       ├── syntax-registry-zig #    pack registry.json → guest registry.zig
 │       ├── wasi-trampoline / wasm-imports / smoke   #     the conversion + import-audit helpers
 │
 ├── platforms/                 # wasm32 platforms; toolchains are registered in MODULE.bazel (B4)
 │
 ├── third_party/               # ★ vendor LESS — only the dep fetch + patches live here (B3)
 │   ├── binaryen/               #   build definition for the host-only post-link optimizer
-│   ├── luau/  sqlite/          #   build definitions and patches for fetched upstream source
+│   ├── luauc/ sqlite/ twigz/   #   build definitions and patches for fetched upstream source
 │
 ├── benchmarks/                # embedded/native/browser/server cross-runtime performance harness
 ├── server/                    # Elixir/OTP VM control-plane library over the wasmtime NIF
@@ -1826,11 +1835,11 @@ agent-os/                      ← the repository root: a Bazel/deps/docs shell
     ├── programs/              #   the guest userland AND the service glue
     │   ├── coreutils/         #     the per-tier multicall /bin
     │   ├── git/               #     thin pure-mc /bin/git (host source plane; on base)
-    │   ├── sh/  pkgfsd/  tools/  examples/    #     the rest of /bin + the example services
+    │   ├── sh/  pkgfsd/  tools/  adapters/  examples/  browser/  # /bin + services
     │   ├── luau/              #     the Luau glue (Zig), batteries (.luau), skills
     │   ├── sqlite/            #     the SQLite service glue (Zig), require() lib, skill
     │   ├── typst/             #     the typst service glue (Rust), fonts extractor, lib, skill
-    │   └── syntax/            #     generated parsers + C runtime, Zig service, Luau lib, grammars
+    │   └── syntax/            #     @twigz packed C + Zig service + Luau lib
     ├── hosts/                 #   the two embedding LIBRARIES
     │   ├── wasmtime/          #     the Rust host (lib + CLI)
     │   └── js/                #     TS host for local Node.js/Bun and browser runtimes

@@ -1,4 +1,3 @@
-// crates/kernel/src/init.rs
 // Boot sequence — initialize system, load base image, mount filesystems.
 
 use alloc::boxed::Box;
@@ -128,11 +127,10 @@ pub fn boot_system() -> Result<(Namespace, Scheduler), BootError> {
 ///
 /// `mc_load_base_image` reports the FULL image length (copying only what fits the
 /// passed buffer), so we probe that length with a zero-length read, then read the
-/// whole image into a buffer sized to match. This avoids any fixed cap — a single
-/// converted WASI tool (e.g. `grep` on ripgrep's engine) is already ~1.8 MiB, and
-/// the image grows with each tool — without permanently reserving a worst-case
-/// buffer in the kernel's linear memory. Returns `Err` only when no image was
-/// provided (`with_image=false`).
+/// whole image into a buffer sized to match. This avoids any fixed cap — a
+/// flavor tarball is already megabytes and grows with each tool — without
+/// permanently reserving a worst-case buffer in the kernel's linear memory.
+/// Returns `Err` only when no image was provided (`with_image=false`).
 fn load_base_image() -> Result<Vec<u8>, BootError> {
     // Probe: a zero-length read copies nothing but returns the image length.
     let mut probe = [0u8; 1];

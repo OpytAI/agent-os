@@ -7,11 +7,12 @@ load("//bazel:mc_program.bzl", "mc_service_layer")
 # content-addressed and snapshots exact (A8). ONE pkg_tar is consumed by both the host CLI and
 # the e2e tests, so the two byte-identical tar implementations collapse into one.
 #
-# Three stacked layers, each inheriting the one below via pkg_tar `deps`:
+# Stacked pkg_tar layers, each inheriting the one below via `deps`:
 #   rootfs  — just /etc/profile (internal).
-#   base    — rootfs + /bin/{sh,pkgfsd,git,tools} + /svc/tools + /tools + /etc/services.d: the shared substrate.
-#   minimal — base + the four MINIMAL coreutils boxes (the curated ~15) + their /bin symlinks.
-#   posix   — base + the four FULL coreutils boxes (everything) + their /bin symlinks.
+#   base    — command-less substrate: /bin/{sh,pkgfsd,git,tools,adapters} + service/tool trees.
+#   minimal — base + the four MINIMAL @utilz boxes (curated applets, including echo/printf/pwd) + /bin symlinks.
+#   posix   — base + the four FULL @utilz boxes + /bin symlinks.
+#   later flavors (loom/atlas/paper) layer domain engines on posix.
 
 # rootfs — just /etc/profile (the kernel mounts it at /). The internal skeleton `base` layers onto.
 pkg_tar(
@@ -56,8 +57,8 @@ pkg_tar(
 # /svc/adapters (shared parser/invoker service for adapter-backed tools), /bin/pkgfsd (the /pkg
 # daemon), and /bin/git (thin pure-mc ctl porcelain + CAP_NET remotes). Base owns the service/tool
 # directories; service layers add only binaries and fragments.
-# A real but command-less shell, the substrate BOTH flavors build on (SYSTEMS.md) — NOT a shipped flavor
-# on its own (no coreutils — "make your own harness"); minimal/posix add a command set by layering on top.
+# A real but command-less shell, the substrate later flavors build on (SYSTEMS.md) — NOT a
+# shipped flavor on its own (no coreutils); minimal/posix add PATH applets by layering on top.
 pkg_tar(
     name = "base",
     files = {

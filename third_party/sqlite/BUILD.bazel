@@ -1,11 +1,8 @@
-# sqlite as a guest — fetch upstream, patch in place (SYSTEMS.md, B3; SYSTEMS.md). The SQLite
-# amalgamation enters via http_archive in sqlite.MODULE.bazel; ONLY our deltas
-# live in-tree:
-#   glue/                — the Zig serve loop + protocol + the close() shim, compiled by `zig cc`.
-#   BUILD.sqlite.bazel   — the build_file http_archive applies to the extracted source.
-# 3.51.0 has native SQLITE_WASI support, so there are no source patches — just the compile defines in
-# glue/BUILD.bazel. The build stamps mc_tier / mc_budget / mc_service so /bin/sqlite is both a one-shot
-# CLI and a resident service from ONE binary.
+# sqlite guest: amalgamation via sqlite.MODULE.bazel http_archive (no core patches).
+# Zig serve loop is //memcontainers/programs/sqlite/glue; this package only exports
+# BUILD.sqlite.bazel. 3.51.0 has native SQLITE_WASI support — compile defines live in
+# glue/BUILD.bazel. The build stamps mc_tier / mc_budget / mc_service so /bin/sqlite is
+# both a one-shot CLI and a resident service from one binary.
 
 # Exported so http_archive(build_file = "//third_party/sqlite:BUILD.sqlite.bazel") can apply it to the
 # extracted @sqlite source.

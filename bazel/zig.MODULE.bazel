@@ -1,4 +1,4 @@
-# Zig toolchain, C headers, skylib, and the Gitz module.
+# Zig toolchain, C headers, skylib, and the Gitz / utilz / shcore modules.
 #
 # Zig is the hermetic compiler for the shell, coreutils, sysroot, guest glue, and
 # C/C++ (sqlite via zig cc; Luau via the luauc module). rules_cc is only for
