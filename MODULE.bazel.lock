@@ -15934,12 +15934,13 @@
     "@@rules_zig+//zig:extensions.bzl%zig": {
       "general": {
         "bzlTransitiveDigest": "oxrJu3NnXBdT/VN4p2D6er1PDL1c8/0PQmvL3QUAeXQ=",
-        "usagesDigest": "abuyus1yUxG53MICnxFSaNuQNjcl03Il69u+oBuCi88=",
+        "usagesDigest": "fn40fkZYhsjmNYvOmz//BD3hjS/FaZnexfry27imfRU=",
         "recordedFileInputs": {
           "@@//zig_index.json": "d471c2650873cbf320e98f77ba39d0815a292e2fb4752c3a6a83b35403fb9a6e",
           "@@gitz+//zig_index.json": "d471c2650873cbf320e98f77ba39d0815a292e2fb4752c3a6a83b35403fb9a6e",
           "@@luauc+//zig_index.json": "d471c2650873cbf320e98f77ba39d0815a292e2fb4752c3a6a83b35403fb9a6e",
           "@@rules_zig+//zig/private/versions.json": "5d4313a411f05e581e74a08ff333a229289434dc15c6f4f1de1db09076d4aa81",
+          "@@shcore+//zig_index.json": "d471c2650873cbf320e98f77ba39d0815a292e2fb4752c3a6a83b35403fb9a6e",
           "@@utilz+//zig_index.json": "d471c2650873cbf320e98f77ba39d0815a292e2fb4752c3a6a83b35403fb9a6e"
         },
         "recordedDirentsInputs": {},

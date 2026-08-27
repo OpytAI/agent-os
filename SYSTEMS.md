@@ -91,7 +91,7 @@ under `memcontainers/`, the build machinery under `bazel/`.
 | 11  | **Snapshots & determinism**                  | `(memory)` capture/restore; quiescence; the seal                                             | `…/src/{persist,seal,sync}.rs` + host                                                | built                                                                                |
 | 12  | **Guest sysroot & WASI adapter**             | The guest side of the ABI (Rust + Zig); WASI→mc shim                                         | `memcontainers/sysroot/`, `memcontainers/wasi-adapter/`                              | built                                                                                |
 | 13  | **Conformance & attestation**                | Build-time import-purity + tier-fit gates                                                    | `memcontainers/conformance/`, `bazel/tools/mc-attest`                                | built                                                                                |
-| 14  | **Shell**                                    | An OS-agnostic POSIX-ish Zig shell engine driving `/bin/sh`                                  | `memcontainers/shcore/`, `memcontainers/programs/sh/`                                | built                                                                                |
+| 14  | **Shell**                                    | `@shcore` engine; AgentOS owns the mc `ShellOs` adapter as `/bin/sh`                         | `memcontainers/programs/sh/`                                                         | built                                                                                |
 | 15  | **Userland `/bin`**                          | Zig multicall over `@utilz`; AgentOS owns mc attach, stamp, roster, images                   | `memcontainers/programs/coreutils/`                                                  | built                                                                                |
 | 16  | **Luau scripting**                           | The primary user-facing language; embedded + VFS batteries                                   | `memcontainers/programs/luau/`                                                       | built                                                                                |
 | 17  | **Domain engines & adapters**                | Heavy engines, owned syntax parsing, and the shared tool-adapter service                     | `memcontainers/programs/{sqlite,typst,syntax,adapters}/`, `memcontainers/lib/parse/` | built                                                                                |
@@ -925,9 +925,9 @@ re-parking, pcall trap unwind/resume, and fuel-ceiling termination.
 
 ## 10. Systems 14–17 — The userland
 
-### 10.1 The shell (`shcore/`, `programs/sh`)
+### 10.1 The shell (`@shcore`, `programs/sh`)
 
-`shcore` is the canonical Zig OS-agnostic POSIX-ish shell core behind `/bin/sh`. It uses a pure
+`@shcore` is the canonical Zig OS-agnostic POSIX-ish shell core behind `/bin/sh`. It uses a pure
 front-end (lex → parse → expand/glob/arith) plus a blocking tree-walking executor, decoupled from the
 world by a single `ShellOs` boundary. The pure layers touch no syscalls; the guest `programs/sh`
 package binds that boundary to `sysroot/zig` and ships the full-tier `/bin/sh` wasm. The lexer does
@@ -1826,7 +1826,6 @@ agent-os/                      ← the repository root: a Bazel/deps/docs shell
     ├── kernel/rust/           #   the OS; wasmi is a native crate → kernel.wasm
     ├── sysroot/               #   the guest side of the ABI (Rust + Zig wrappers)
     ├── wasi-adapter/          #   WASI(preview1) → mc link-injected shim
-    ├── shcore/                #   the OS-agnostic Zig shell engine
     ├── pkgcore/               #   pure logic for pkgfsd (sha256, catalog, path/url)
     ├── lib/                   #   shared support libs (catalog compiler, json, parse, git-engine §11b)
     ├── programs/              #   the guest userland AND the service glue
