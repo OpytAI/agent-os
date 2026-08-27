@@ -14,6 +14,7 @@ def coreutils_box(name, tier, tier_section, set_kind):
     utilz_library(
         name = name + "_lib",
         build_options = ":" + name + "_build_options",
+        tags = ["manual"],
     )
 
     zig_binary(

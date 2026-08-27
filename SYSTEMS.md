@@ -1788,7 +1788,7 @@ agent-os/                      ← the repository root: a Bazel/deps/docs shell
 │   ├── release_wasm.bzl       #   the size/opt wasm transition (opt + panic=abort + LTO)
 │   ├── wasm_opt.bzl           #   the final-link Binaryen policy shared by kernel + every guest
 │   ├── wasm32_build_test.bzl  #   the wasm32 build-test rule
-│   ├── mc_box.bzl             #   the wasi→mc conversion (mc_box / mc_wasi_program)
+│   ├── mc_box.bzl             #   the wasi→mc conversion (`mc_wasi_program`)
 │   ├── mc_program.bzl         #   stamp + attest a guest (mc_program / mc_service_layer / cc_*)
 │   ├── ts.bzl                 #   repository TypeScript project convention
 │   ├── elixir_transition.bzl  #   scoped OTP target transitions

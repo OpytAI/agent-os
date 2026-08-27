@@ -28,24 +28,6 @@ filegroup(
     output_group = "registry_json",
 )
 
-filegroup(
-    name = "syntax_node_types",
-    srcs = [":syntax_pack"],
-    output_group = "node_types",
-)
-
-filegroup(
-    name = "syntax_manifests",
-    srcs = [":syntax_pack"],
-    output_group = "manifests",
-)
-
-filegroup(
-    name = "syntax_pack_report",
-    srcs = [":syntax_pack"],
-    output_group = "report",
-)
-
 genrule(
     name = "syntax_registry_zig",
     srcs = [":syntax_registry_json"],

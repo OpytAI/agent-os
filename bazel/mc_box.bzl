@@ -12,16 +12,14 @@ relinks Bazel caches, so the round cap is free past convergence. The whole pipel
 targets — no out-of-band xtask. Ported from memcontainers' `xtask::{build_wasi_adapter,
 convert_wasi_tool,generate_trampoline}` + `conformance::func_imports_full`.
 
-Two consumers ride the shared conversion (`_convert_to_mc`): `mc_box` packages the multi-applet
-coreutils busybox (its own in-source `mcbox!` tier stamp + the `mc-roster` /bin symlinks), and
 `mc_wasi_program` packages a SINGLE std-wasi tool as an mc program/SERVICE (SYSTEMS.md — e.g.
 typst), stamping mc_tier/mc_budget/mc_service from the build graph via `mc_program` (no roster).
+The Zig coreutils boxes do not use this file; they go through `utilz_library`.
 """
 
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
 load("//bazel:mc_program.bzl", "mc_program")
 load("//bazel:release_wasm.bzl", "release_wasm")
-load("//bazel:wasm_opt.bzl", "wasm_opt")
 
 # Trampoline+relink rounds before giving up. Matches memcontainers' xtask MAX_ROUNDS; a high cap
 # is cheap because post-convergence rounds are cached.
@@ -44,8 +42,8 @@ def _convert_to_mc(name, srcs, crate_root, crate_name, crate_features, deps, edi
     are throwaway (only their IMPORTS are read to build the next trampoline), and a flag like `-Cstrip`
     removes the `name` section `wasi-trampoline` needs to read those import symbols. The final-box flags
     don't change the import SET, so the trampolines built from the un-stripped rounds stay valid; the
-    flags (typst's `-zstack-size` + `-Cstrip`) then apply to the box that actually ships. Shared by
-    `mc_box` and `mc_wasi_program`; the caller adds packaging (roster vs. mc_program stamp)."""
+    flags (typst's `-zstack-size` + `-Cstrip`) then apply to the box that actually ships. Used by
+    `mc_wasi_program`; the caller adds mc_program stamp packaging."""
     adapter = "//memcontainers/wasi-adapter:wasi_adapter_obj"
     ident = name.replace("-", "_")
 
@@ -97,48 +95,12 @@ def _convert_to_mc(name, srcs, crate_root, crate_name, crate_features, deps, edi
         _round(rname, objs, box_visibility if last else None, extra_rustc_flags if last else [])
         prev = rname
 
-def mc_box(name, srcs, crate_root, crate_name, crate_features, deps, edition = "2021", compile_data = [], rounds = _MAX_ROUNDS, visibility = None):
-    """Build a wasm32-wasi guest crate and convert it to a pure-`mc` box named `name`, then attest it
-    and emit the `mc-roster` /bin symlinks (the multi-applet busybox lane — the coreutils).
-
-    `name` is the converged box (the final round). Intermediate rounds + trampolines are private
-    `<name>_r<k>` / `<name>_tramp<k>_*` targets. Build under `--platforms=//platforms:wasm32_wasi`.
-    """
-    _convert_to_mc(name, srcs, crate_root, crate_name, crate_features, deps, edition, compile_data, rounds, [], visibility)
-
-    # Attestation: surface the converged box under the opt+wasm32-wasi transition, post-link optimize
-    # it, then FAIL THE BUILD if its mc
-    # imports exceed its declared tier. //... reaches `<name>.attest`, so a mis-tiered box (an
-    # applet importing a syscall its tier cannot use — spawn/net/mount in read-only, …) is a build
-    # error, not a runtime surprise (the A9 default-deny gate, drift = build error).
-    release_wasm(name = name + "_release", lib = name, platform = "//platforms:wasm32_wasi")
-    wasm_opt(name = name + "_opt", wasm = ":" + name + "_release", visibility = visibility)
-    native.genrule(
-        name = name + ".attest",
-        srcs = [name + "_opt"],
-        outs = [name + ".attested"],
-        tools = ["//bazel/tools/mc-attest"],
-        cmd = "$(execpath //bazel/tools/mc-attest) $(execpath :%s_opt) && touch $@" % name,
-    )
-
-    # The roster → /bin symlinks: read the converged box's mc_applets section and emit
-    # /bin/<applet> → <box> symlinks — the SINGLE source for the staged /bin (no hand list, no
-    # drift from what the box dispatches). A flavor image layers `<name>_symlinks`.
-    native.genrule(
-        name = name + "_symlinks",
-        srcs = [name + "_opt"],
-        outs = [name + "_symlinks.tar"],
-        tools = ["//bazel/tools/mc-roster"],
-        cmd = "$(execpath //bazel/tools/mc-roster) $(execpath :%s_opt) %s $@" % (name, name),
-        visibility = visibility,
-    )
-
 def mc_wasi_program(name, srcs, crate_root, crate_name, deps, tier, service = "", mem = 0, fuel = 0, table = 0, crate_features = [], edition = "2021", compile_data = [], rounds = _MAX_ROUNDS, extra_rustc_flags = [], visibility = None):
     """A SINGLE std-wasi tool as an mc program/SERVICE (SYSTEMS.md — the Rust-std lane, e.g. typst):
-    convert the wasm32-wasi crate to a pure-`mc` box (the adapter + trampoline fixpoint, shared with
-    `mc_box`), transition it with `release_wasm`, then post-link optimize, stamp
+    convert the wasm32-wasi crate to a pure-`mc` box (the adapter + trampoline fixpoint),
+    transition it with `release_wasm`, then post-link optimize, stamp
     mc_tier/mc_budget/mc_service, and attest (`mc_program`,
-    whose validation action enforces import purity and tier fit). Unlike `mc_box` there is NO
+    whose validation action enforces import purity and tier fit). There is NO
     busybox roster — one tool, not a multi-applet box — and the metadata is declared in the BUILD (the
     `mc_rust_program` convention), not in the source. `service` (non-empty) stamps the mc_service section
     so `mc_service_layer` activates it. `extra_rustc_flags` ride only the final converged box, after
