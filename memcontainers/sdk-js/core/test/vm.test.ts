@@ -1,5 +1,6 @@
-// @mc/core embedded backend over @mc/host: a real `mc.create()` boots the SAME kernel.wasm + base.tar
-// the wasmtime e2e uses (passed as bytes, so no env/runfiles indirection through artifacts.ts), and the
+// @mc/core embedded backend over @mc/host: a real `mc.create()` boots the SAME kernel.wasm the
+// wasmtime e2e uses, plus the minimal image (echo/printf/pwd are PATH applets; base is
+// command-less). Bytes are passed in, so no env/runfiles indirection through artifacts.ts. The
 // Vm API runs a real command + a real fs round-trip. This exercises the SDK library through the
 // @mc/host → @mc/contracts package deps at RUNTIME — the layer the host-only parity test cannot reach.
 
@@ -1222,7 +1223,7 @@ async function main(): Promise<void> {
       await recorder.vm.fs.symlink("/home/user/recorded-dir/keep", "/home/user/recorded-link");
       await recorder.vm.fs.rm("/home/user/recorded-dir/remove");
       const liveExec = await recorder.vm.exec(
-        'pwd > exec-cwd; printf "$REC_ENV" > exec-env; read line; printf "$line" > exec-stdin',
+        'read line; export LINE="$line"; : > exec-cwd; export > exec-env',
         {
           cwd: "/home/user/recorded-dir",
           env: { REC_ENV: "record-env" },
@@ -1234,7 +1235,13 @@ async function main(): Promise<void> {
       }
       const liveDirect = await recorder.vm.run(
         "sh",
-        ["-c", 'printf "%s|%s" "$1" "$2" > recorded-direct', "direct-record", "literal arg", ""],
+        [
+          "-c",
+          'export ARG1="$1"; export ARG2="$2"; export > recorded-direct',
+          "direct-record",
+          "literal arg",
+          "",
+        ],
         { cwd: "/home/user/recorded-dir" },
       );
       if (liveDirect.exitCode !== 0) {
@@ -1252,7 +1259,6 @@ async function main(): Promise<void> {
         const link = await replay.fs.readText("/home/user/recorded-link");
         const cwd = await replay.fs.readText("/home/user/recorded-dir/exec-cwd");
         const env = await replay.fs.readText("/home/user/recorded-dir/exec-env");
-        const stdin = await replay.fs.readText("/home/user/recorded-dir/exec-stdin");
         const direct = await replay.fs.readText("/home/user/recorded-dir/recorded-direct");
         const mode = (await replay.fs.stat("/home/user/recorded-dir/keep")).mode;
         let removedMissing = false;
@@ -1264,15 +1270,15 @@ async function main(): Promise<void> {
         if (
           wrote !== "recorded\n" ||
           link !== "recorded\n" ||
-          cwd !== "/home/user/recorded-dir\n" ||
-          env !== "record-env" ||
-          stdin !== "record-stdin" ||
-          direct !== "literal arg|" ||
+          cwd !== "" ||
+          !env.includes("export REC_ENV=record-env") ||
+          !env.includes("export LINE=record-stdin") ||
+          !direct.includes("export ARG1=literal arg") ||
           mode !== 0o600 ||
           !removedMissing
         ) {
           throw new Error(
-            `record replay bytes mismatch: write=${JSON.stringify(wrote)} link=${JSON.stringify(link)} cwd=${JSON.stringify(cwd)} env=${JSON.stringify(env)} stdin=${JSON.stringify(stdin)} direct=${JSON.stringify(direct)} mode=${mode.toString(8)} removedMissing=${removedMissing}`,
+            `record replay bytes mismatch: write=${JSON.stringify(wrote)} link=${JSON.stringify(link)} cwd=${JSON.stringify(cwd)} env=${JSON.stringify(env)} direct=${JSON.stringify(direct)} mode=${mode.toString(8)} removedMissing=${removedMissing}`,
           );
         }
       } finally {
@@ -1310,9 +1316,10 @@ async function main(): Promise<void> {
     }
     console.log("phase: llb image algebra uses provenance and boots real bytes OK");
 
+    // Default llb.exec is read-write: it cannot spawn PATH applets (echo/printf/pwd).
     const execState = llb.exec(
       base,
-      'pwd > llb-cwd; printf "$LLB_FLAG" > llb-env; read line; printf "$line" > llb-stdin',
+      'read line; export LINE="$line"; : > llb-cwd; export > llb-env',
       {
         cwd: "/home/user",
         env: { LLB_FLAG: "present" },
@@ -1324,10 +1331,13 @@ async function main(): Promise<void> {
     try {
       const cwd = await execVm.fs.readText("/home/user/llb-cwd");
       const env = await execVm.fs.readText("/home/user/llb-env");
-      const stdin = await execVm.fs.readText("/home/user/llb-stdin");
-      if (cwd !== "/home/user\n" || env !== "present" || stdin !== "payload") {
+      if (
+        cwd !== "" ||
+        !env.includes("export LLB_FLAG=present") ||
+        !env.includes("export LINE=payload")
+      ) {
         throw new Error(
-          `llb exec options mismatch: cwd=${JSON.stringify(cwd)} env=${JSON.stringify(env)} stdin=${JSON.stringify(stdin)}`,
+          `llb exec options mismatch: cwd=${JSON.stringify(cwd)} env=${JSON.stringify(env)}`,
         );
       }
     } finally {
@@ -1335,22 +1345,13 @@ async function main(): Promise<void> {
     }
     console.log("phase: llb exec forwards cwd/env/stdin through typed ExecRequest");
 
-    const runState = llb.run(
-      base,
-      "sh",
-      [
-        "-c",
-        'read line; printf "%s|%s|%s|%s" "$1" "$2" "$RUN_FLAG" "$line" > llb-run',
-        "direct-llb",
-        "literal arg",
-        "",
-      ],
-      {
-        cwd: "/home/user",
-        env: { RUN_FLAG: "typed-env" },
-        stdin: "typed-stdin\n",
-      },
-    );
+    const runScript =
+      'read line; export LINE="$line"; export ARG1="$1"; export ARG2="$2"; export > llb-run';
+    const runState = llb.run(base, "sh", ["-c", runScript, "direct-llb", "literal arg", ""], {
+      cwd: "/home/user",
+      env: { RUN_FLAG: "typed-env" },
+      stdin: "typed-stdin\n",
+    });
     const runDefinition = await llb.toDefinition(runState, { store });
     const runOp = runDefinition.ops.find((op) => op.form === "direct");
     if (
@@ -1358,14 +1359,7 @@ async function main(): Promise<void> {
       !runOp ||
       runOp.cmd !== undefined ||
       JSON.stringify(runOp.argv.map(({ value }) => value)) !==
-        JSON.stringify([
-          "sh",
-          "-c",
-          'read line; printf "%s|%s|%s|%s" "$1" "$2" "$RUN_FLAG" "$line" > llb-run',
-          "direct-llb",
-          "literal arg",
-          "",
-        ])
+        JSON.stringify(["sh", "-c", runScript, "direct-llb", "literal arg", ""])
     ) {
       throw new Error(
         `llb direct Definition changed form or argv: ${JSON.stringify(runDefinition)}`,
@@ -1377,7 +1371,11 @@ async function main(): Promise<void> {
     const runVm = await mc.create({ kernel, image: runManifest, store, deterministic: true });
     try {
       const result = await runVm.fs.readText("/home/user/llb-run");
-      if (result !== "literal arg||typed-env|typed-stdin") {
+      if (
+        !result.includes("export ARG1=literal arg") ||
+        !result.includes("export RUN_FLAG=typed-env") ||
+        !result.includes("export LINE=typed-stdin")
+      ) {
         throw new Error(`llb direct replay changed argv/options: ${JSON.stringify(result)}`);
       }
     } finally {
@@ -1387,7 +1385,7 @@ async function main(): Promise<void> {
 
     const execEnvChanged = llb.exec(
       base,
-      'pwd > llb-cwd; printf "$LLB_FLAG" > llb-env; read line; printf "$line" > llb-stdin',
+      'read line; export LINE="$line"; : > llb-cwd; export > llb-env',
       {
         cwd: "/home/user",
         env: { LLB_FLAG: "changed" },
@@ -1403,7 +1401,7 @@ async function main(): Promise<void> {
     });
     try {
       const env = await execChangedVm.fs.readText("/home/user/llb-env");
-      if (env !== "changed") {
+      if (!env.includes("export LLB_FLAG=changed")) {
         throw new Error(`llb exec cache key ignored env: ${JSON.stringify(env)}`);
       }
     } finally {
@@ -2043,7 +2041,7 @@ async function main(): Promise<void> {
       );
     }
 
-    const mountedExec = llb.exec(base, "printf mounted > /home/user/llb-mounted-cache", {
+    const mountedExec = llb.exec(base, ": > /home/user/llb-mounted-cache", {
       mounts: [llb.cache("/mnt/build-cache")],
     });
     store.reset();
@@ -2062,14 +2060,14 @@ async function main(): Promise<void> {
     const mountedVm = await mc.create({ kernel, image: mountedFirst, store, deterministic: true });
     try {
       const mounted = await mountedVm.fs.readText("/home/user/llb-mounted-cache");
-      if (mounted !== "mounted") {
+      if (mounted !== "") {
         throw new Error(`llb cache-mounted exec bytes mismatch: ${JSON.stringify(mounted)}`);
       }
     } finally {
       await mountedVm.close();
     }
 
-    const netNode = llb.exec(base, "printf net > /tmp/llb-net", { net: true });
+    const netNode = llb.exec(base, ": > /tmp/llb-net", { net: true });
     store.reset();
     await llb.commit(netNode).asImage({ store, kernel });
     await llb.commit(netNode).asImage({ store, kernel });
@@ -2107,7 +2105,7 @@ async function main(): Promise<void> {
       warm: [
         {
           kind: "exec",
-          cmd: 'read line; printf "$WARM_FLAG:$line" > warm-marker',
+          cmd: 'read line; export LINE="$line"; export > warm-marker',
           cwd: "/home/user",
           env: { WARM_FLAG: "warm" },
           stdin: "stdin\n",
@@ -2159,7 +2157,7 @@ async function main(): Promise<void> {
     });
     try {
       const marker = await warmVm.fs.readText("/home/user/warm-marker");
-      if (marker !== "warm:stdin") {
+      if (!marker.includes("export WARM_FLAG=warm") || !marker.includes("export LINE=stdin")) {
         throw new Error(`llb warm snapshot marker mismatch: ${JSON.stringify(marker)}`);
       }
     } finally {
@@ -2330,8 +2328,8 @@ error("timed out waiting for restored warm sqlite child: " .. err)
     if (r.exitCode !== 0 || r.stdout.trim() !== "core-ok") {
       throw new Error(`vm.exec mismatch: exit=${r.exitCode} stdout=${JSON.stringify(r.stdout)}`);
     }
-    // The base fixture intentionally has no coreutils. Select its real `sh`
-    // executable directly and pass hostile/empty positional argv literally.
+    // Select the real `sh` executable directly and pass hostile/empty positional
+    // argv literally. printf is a PATH applet on minimal, not a shell builtin.
     const direct = await vm.run("sh", [
       "-c",
       'printf "<%s>|<%s>|<%s>\\n" "$1" "$2" "$3"',
