@@ -1794,7 +1794,7 @@ console.log("review complete — no egressing tool call was made");`,
           source: `const delivery = {
   id: "d7c4f9",
   action: "opened",
-  repository: { full_name: "opyt/agent-os" },
+  repository: { full_name: "OpytAI/agent-os" },
   issue: { number: 42, title: "Mounts differ in the shell" },
 };
 
