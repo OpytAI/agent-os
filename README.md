@@ -12,7 +12,7 @@
 
   <p>
     <a href="https://agentos.opyt.cloud"><img alt="Try AgentOS" src="https://img.shields.io/badge/try-AgentOS-f5c542"></a>
-    <a href="https://deepwiki.com/NarendraPatwardhan/agent-os"><img alt="Developer docs: DeepWiki" src="https://img.shields.io/badge/developer%20docs-DeepWiki-111111"></a>
+    <a href="https://deepwiki.com/OpytAI/agent-os"><img alt="Developer docs: DeepWiki" src="https://img.shields.io/badge/developer%20docs-DeepWiki-111111"></a>
     <a href="./LICENSE"><img alt="License: BSL 1.1" src="https://img.shields.io/badge/license-BSL%201.1-f5c542"></a>
     <img alt="Runtime: WebAssembly" src="https://img.shields.io/badge/runtime-WebAssembly-654ff0">
     <img alt="SDK: JavaScript" src="https://img.shields.io/badge/SDK-Node.js%20%7C%20Bun%20%7C%20Browser-3178c6">
@@ -253,5 +253,5 @@ Boot and command costs are wall-clock milliseconds. Full snapshot and restore ar
 | ------------------------------------------------------------ | ----------------------------------------------------------------------- |
 | [AgentOS by Example](https://agentos.opyt.cloud/#examples)   | Live, editable demonstrations running in the browser VM                 |
 | [JavaScript API reference](./docs/index.md)                  | Public methods, options, runtime behavior, browser elements, and errors |
-| [DeepWiki](https://deepwiki.com/NarendraPatwardhan/agent-os) | Architecture, implementation details, and contributor documentation     |
+| [DeepWiki](https://deepwiki.com/OpytAI/agent-os) | Architecture, implementation details, and contributor documentation     |
 | [SYSTEMS.md](./SYSTEMS.md)                                   | The source-of-truth system invariants and design contract               |

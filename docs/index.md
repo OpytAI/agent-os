@@ -9,7 +9,7 @@ pages answer “what does this method accept, return, retain, and require?” Ev
 JavaScript. TypeScript is optional and is not required to use the SDK.
 
 These are end-user docs for the public JavaScript API. For architecture, implementation details, and
-contributor documentation, see [AgentOS on DeepWiki](https://deepwiki.com/NarendraPatwardhan/agent-os).
+contributor documentation, see [AgentOS on DeepWiki](https://deepwiki.com/OpytAI/agent-os).
 
 ## Start here
 

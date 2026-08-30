@@ -868,7 +868,7 @@ const vm = await mc.create();
 await vm.luau(\`
   local tools = require("tools")
   local issues = tools.call("github.org.main.issues-list-for-repo", {
-    path = { owner = "NarendraPatwardhan", repo = "agent-os" },
+    path = { owner = "OpytAI", repo = "agent-os" },
     query = { per_page = 3, state = "all" },
   })
   assert(issues.ok, issues.err and issues.err.message)
@@ -888,7 +888,7 @@ await vm.luau(\`
         notes: [
           "call requires the caller's CAP_NET; discovery (list/search/describe) does not",
           "Large or binary results land under /tmp/tools/results (or --output /path)",
-          "The subject here is this very repo — DeepWiki answers from NarendraPatwardhan/agent-os",
+          "The subject here is this very repo — DeepWiki answers from OpytAI/agent-os",
         ],
         code: {
           language: "ts",
@@ -897,7 +897,7 @@ await vm.luau(\`
 await vm.exec("tools search wiki --limit 3 | jq -r '.items[].address'");
 await vm.exec(
   \`tools call deepwiki.org.main.ask_question \` +
-  \`'{"repoName":"NarendraPatwardhan/agent-os","question":"What is an image flavor? Answer in one sentence."}' \` +
+  \`'{"repoName":"OpytAI/agent-os","question":"What is an image flavor? Answer in one sentence."}' \` +
   \`| jq -r '.data.content[0].text'\`
 );`,
         },
@@ -941,7 +941,7 @@ await vm.exec("tools describe github.org.main.issues-create");`,
             secret: true,
             optional: true,
           },
-          { key: "owner", label: "Repo owner", value: "NarendraPatwardhan" },
+          { key: "owner", label: "Repo owner", value: "OpytAI" },
           { key: "repo", label: "Repo name", value: "agent-os" },
         ],
         summary:
@@ -1085,7 +1085,7 @@ await vm.luau(\`
 await vm.luau(\`
   local tools = require("tools")
   local res = tools.call("deepwiki.org.main.ask_question", {
-    repoName = "NarendraPatwardhan/agent-os",
+    repoName = "OpytAI/agent-os",
     question = "What is an image flavor, and how do layers relate to snapshots?",
   })
   assert(res.ok, res.err and res.err.message)
@@ -1185,7 +1185,7 @@ await vm.luau(\`
   local sqlite = require("sqlite")
 
   local res = tools.call("deepwiki.org.main.read_wiki_structure", {
-    repoName = "NarendraPatwardhan/agent-os",
+    repoName = "OpytAI/agent-os",
   })
   assert(res.ok, res.err and res.err.message)
 
@@ -1711,7 +1711,7 @@ await vm.close();`,
           source: `const vm = await mc.create();
 await vm.exec(
   \`tools call deepwiki.org.main.ask_question \` +
-  \`'{"repoName":"NarendraPatwardhan/agent-os","question":"Describe AgentOS in one sentence."}'\`
+  \`'{"repoName":"OpytAI/agent-os","question":"Describe AgentOS in one sentence."}'\`
 );`,
         },
       },

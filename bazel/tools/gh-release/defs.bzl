@@ -17,7 +17,7 @@ Like //bazel/tools/size, this is a tool-scoped Starlark macro: consumers just
 Usage:
     gh_release(
         name = "publish",
-        repo = "NarendraPatwardhan/agent-os",
+        repo = "OpytAI/agent-os",
         assets = {
             "//memcontainers/kernel/rust:kernel": "kernel.wasm",
             "//memcontainers/images:minimal":     "minimal.tar",
