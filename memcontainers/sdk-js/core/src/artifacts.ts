@@ -272,9 +272,9 @@ async function fetchArtifact(name: string): Promise<Uint8Array> {
   if (source) {
     base = source.endsWith("/") ? source : source + "/";
   } else if (version) {
-    base = `https://github.com/NarendraPatwardhan/agent-os/releases/download/${version}/`;
+    base = `https://github.com/OpytAI/agent-os/releases/download/${version}/`;
   } else {
-    base = `https://github.com/NarendraPatwardhan/agent-os/releases/latest/download/`;
+    base = `https://github.com/OpytAI/agent-os/releases/latest/download/`;
   }
   const url = new URL(name, base).href;
   const res = await fetch(url);

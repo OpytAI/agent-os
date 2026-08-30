@@ -31,6 +31,6 @@ gh_release(
         "//memcontainers/lib/catalog-compiler:wasm": "catalog-compiler.wasm",
         "//memcontainers/lib/git-engine:git_engine_browser_archive": "git-engine.tar",
     },
-    repo = "NarendraPatwardhan/agent-os",
+    repo = "OpytAI/agent-os",
     visibility = ["//visibility:public"],
 )

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="NarendraPatwardhan/agent-os"
+REPO="OpytAI/agent-os"
 DEFAULT_DIR="agent-os"
 
 MODE="${AGENTOS_MODE:-}"
