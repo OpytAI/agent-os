@@ -73,3 +73,7 @@ common --registry=https://raw.githubusercontent.com/rabbitmq/bazel-central-regis
 # such as //server:mix_test_impl.
 build:elixir --host_platform=//platforms:erlang_internal_platform
 build:elixir --platforms=//platforms:erlang_linux_26_2_platform
+
+# Machine-local output and Zig cache placement belongs in this ignored file.
+try-import %workspace%/user.bazelrc
+
