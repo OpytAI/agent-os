@@ -26,8 +26,6 @@ common --host_copt=-w
 build --copt=-fno-sanitize=undefined --host_copt=-fno-sanitize=undefined
 build --linkopt=-fno-sanitize=undefined --host_linkopt=-fno-sanitize=undefined
 
-# Zig's global cache defaults under $HOME/.cache/zig; allow sandbox access.
-build --sandbox_add_mount_pair=/home
 # No global target platform: host-side tools (the contracts projector, the
 # wasmtime host, the Elixir server via its scoped transition) build for the
 # autodetected host. //platforms:host_musl is an optional per-target platform
@@ -35,11 +33,6 @@ build --sandbox_add_mount_pair=/home
 # matching a prebuilt libwasmtime.a (wasmtime is built from @host_crates).
 # Kernel and guest targets transition to //platforms:wasm32_freestanding via
 # the Zig wasm toolchain regardless of this default.
-
-# Zig 0.16's `zig translate-c` (used by @cImport) resolves its cache from the
-# environment; rules_zig points ZIG_GLOBAL_CACHE_DIR under /tmp. Mount the real
-# /tmp into the sandbox so that cache is writable and shared across actions.
-build --sandbox_add_mount_pair=/tmp
 
 # Show what actually failed, not a wall of passing output.
 test --test_output=errors
