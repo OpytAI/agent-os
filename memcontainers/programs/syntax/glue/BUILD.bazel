@@ -61,8 +61,10 @@ mc_program(
 
 # Native semantic tables and the shared Lua-family parser pack make this a meaningful regression
 # boundary: growth must be explained by parser or service capability, not regenerated table drift.
+# Twigz 6e19f8f adds per-language numbers, strings, and Luau lexical forms. The optimized
+# service measured 434292 bytes. The ceiling is 450000.
 size_limit(
     name = "size_limit",
     file = ":syntax_opt",
-    max_bytes = 400000,
+    max_bytes = 450000,
 )

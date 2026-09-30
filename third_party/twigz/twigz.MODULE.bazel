@@ -5,8 +5,8 @@
 # Commit-locked 0.0.0 archive_override: bump commit + strip_prefix + integrity
 # together.
 
-TWIGZ_COMMIT = "767d8483bd238546bb548036b1b227a390c831db"
-TWIGZ_INTEGRITY = "sha256-R9CpdQM4/J0BEYCOD02EkDs0rrEUp+L7bZoxEoBjkmY="
+TWIGZ_COMMIT = "6e19f8f26f640ea255f8ede94e53ef8a3d61f7ec"
+TWIGZ_INTEGRITY = "sha256-D9bT9sa9alx04qex57y0GhelK5U5BslatWvexZMgkzw="
 
 bazel_dep(name = "twigz", version = "0.0.0")
 archive_override(

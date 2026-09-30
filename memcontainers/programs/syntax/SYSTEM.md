@@ -51,7 +51,7 @@ memory and startup are paid only after first use.
 
 - Twigz `//grammars:format_test` keeps first-party grammars canonical.
 - `//memcontainers/contracts:syntax_{rust,zig,luau}_sync_test` prevent checked-in projection drift.
-- `//memcontainers/programs/syntax/glue:size_limit` holds the optimized service at 400000 bytes.
+- `//memcontainers/programs/syntax/glue:size_limit` holds the optimized service at 450000 bytes.
 - `//memcontainers/tests/e2e:core --test_arg=syntax` crosses the real kernel, lazy service,
   generated Luau codec, C runtime, Zig glue, queries, incremental edits, guarded rewrites, stale
   handles, Lua long brackets, and quoted-string kind 22.
