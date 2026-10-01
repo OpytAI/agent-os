@@ -134,7 +134,7 @@ try {
   child.stdin.write(request(1, 2));
   const described = await readFrame();
   assertResponse(described, 1, 2);
-  assert.ok(described.includes(Buffer.from("31b716bfedd2bfbbd5711c0178d1930f777547e5")));
+  assert.ok(described.includes(Buffer.from("efdaa4a84f29b9a2384134aab188779ca8ecf6a7")));
 
   child.stdin.write(request(16, 3));
   assertResponse(await readFrame(), 16, 3);

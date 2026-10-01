@@ -168,7 +168,7 @@ assert.equal(new DataView(described.buffer).getUint16(8, true), 1);
 assert.equal(new DataView(described.buffer).getUint16(10, true), 0);
 assert.equal(new DataView(described.buffer).getUint32(12, true), 41);
 assert.equal(new DataView(described.buffer).getUint16(20, true), 2);
-assert.ok(new TextDecoder().decode(described).includes("31b716bfedd2bfbbd5711c0178d1930f777547e5"));
+assert.ok(new TextDecoder().decode(described).includes("efdaa4a84f29b9a2384134aab188779ca8ecf6a7"));
 
 const initialized = run(session, request(16, 42));
 assert.equal(new DataView(initialized.buffer).getUint16(10, true), 0);

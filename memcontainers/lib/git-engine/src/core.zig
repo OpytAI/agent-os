@@ -196,7 +196,7 @@ fn mergeConflictStyle(value: u16) !worktree_pkg.ConflictStyle {
     };
 }
 
-pub const gitz_commit = "31b716bfedd2bfbbd5711c0178d1930f777547e5";
+pub const gitz_commit = "efdaa4a84f29b9a2384134aab188779ca8ecf6a7";
 pub const slot_count: usize = 64;
 
 const HandleKind = enum(u3) { result = 1, session = 2, stream = 3, remote = 4, transaction = 5 };
