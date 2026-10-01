@@ -43,7 +43,7 @@ const readBoundedFile = repository_ops.readBoundedFile;
 const statusEntryLess = repository_ops.statusEntryLess;
 const submoduleEntryLess = repository_ops.submoduleEntryLess;
 
-pub const gitz_commit = "2f74ed6706fa99183ebd5490ed27a06e6971d36f";
+pub const gitz_commit = "31b716bfedd2bfbbd5711c0178d1930f777547e5";
 pub const slot_count: usize = 64;
 
 const HandleKind = enum(u3) { result = 1, session = 2, stream = 3, remote = 4, transaction = 5 };
