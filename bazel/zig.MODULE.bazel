@@ -23,8 +23,8 @@ use_repo(zig, "zig_toolchains")
 
 # Gitz — pure-Zig Git library (go-git v5.19.2 port). Commit-locked 0.0.0
 # archive_override: bump commit + integrity together.
-GITZ_COMMIT = "122466e6978390eda6d1a372be7fb8e291a042c7"
-GITZ_INTEGRITY = "sha256-cklKKkszennKrlxMf1QRyXPgCIPwBiaIJD0WsnsnfQw="
+GITZ_COMMIT = "2f74ed6706fa99183ebd5490ed27a06e6971d36f"
+GITZ_INTEGRITY = "sha256-eYamysV8xMIDBVhlh/3SMg2hMJaf7b0RbeJSDNGEx8s="
 
 bazel_dep(name = "gitz", version = "0.0.0")
 archive_override(
