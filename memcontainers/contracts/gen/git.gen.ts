@@ -43,6 +43,7 @@ export const OP_REMOTE_METADATA = 285 as const;
 export const OP_IGNORE_QUERY = 286 as const;
 export const OP_SPARSE = 287 as const;
 export const OP_SUBMODULE = 288 as const;
+export const OP_MERGE = 289 as const;
 export const OP_OBJECT = 512 as const;
 export const OP_REF = 528 as const;
 export const OP_REF_TRANSACTION = 529 as const;
@@ -93,6 +94,32 @@ export const RESET_SOFT = 1 as const;
 export const RESET_MIXED = 2 as const;
 export const RESET_HARD = 3 as const;
 export const RESET_MERGE = 4 as const;
+export const MERGE_STRATEGY_DEFAULT = 0 as const;
+export const MERGE_STRATEGY_ORT = 1 as const;
+export const MERGE_STRATEGY_RECURSIVE = 2 as const;
+export const MERGE_STRATEGY_RESOLVE = 3 as const;
+export const MERGE_STRATEGY_OCTOPUS = 4 as const;
+export const MERGE_STRATEGY_OURS = 5 as const;
+export const MERGE_STRATEGY_SUBTREE = 6 as const;
+export const MERGE_FF = 0 as const;
+export const MERGE_FF_NO_FF = 1 as const;
+export const MERGE_FF_ONLY = 2 as const;
+export const MERGE_FAVOR_NONE = 0 as const;
+export const MERGE_FAVOR_OURS = 1 as const;
+export const MERGE_FAVOR_THEIRS = 2 as const;
+export const MERGE_DIFF_HISTOGRAM = 0 as const;
+export const MERGE_DIFF_MYERS = 1 as const;
+export const MERGE_DIFF_MINIMAL = 2 as const;
+export const MERGE_DIFF_PATIENCE = 3 as const;
+export const MERGE_STYLE_MERGE = 0 as const;
+export const MERGE_STYLE_DIFF3 = 1 as const;
+export const MERGE_STYLE_ZDIFF3 = 2 as const;
+export const MERGE_OUTCOME_UP_TO_DATE = 1 as const;
+export const MERGE_OUTCOME_FAST_FORWARD = 2 as const;
+export const MERGE_OUTCOME_COMMITTED = 3 as const;
+export const MERGE_OUTCOME_CONFLICTS = 4 as const;
+export const MERGE_OUTCOME_UNCOMMITTED = 5 as const;
+export const MERGE_OUTCOME_ABORTED = 6 as const;
 export const STATUS_OK = 0 as const;
 export const STATUS_EFFECT = 1 as const;
 export const STATUS_ERROR = 2 as const;
@@ -2129,6 +2156,234 @@ export function decodeSubmoduleResult(bytes: Uint8Array): SubmoduleResult {
   return {
     generation: decoded_generation,
     entries: decoded_entries,
+  };
+}
+
+export interface MergeHead {
+  revision: string;
+}
+export const MERGE_HEAD_MSG_ID = 42;
+export const MERGE_HEAD_VERSION = 1;
+export function encodeMergeHead(msg: MergeHead): Uint8Array {
+  const out: number[] = [];
+  ctlPutU16(out, MERGE_HEAD_MSG_ID);
+  ctlPutU8(out, MERGE_HEAD_VERSION);
+  ctlPutStr(out, msg.revision);
+  return Uint8Array.from(out);
+}
+export function decodeMergeHead(bytes: Uint8Array): MergeHead {
+  const wire: CtlCursor = { bytes, off: 0 };
+  if (ctlReadU16(wire) !== MERGE_HEAD_MSG_ID) throw new WireError("wrong message id");
+  if (ctlReadU8(wire) !== MERGE_HEAD_VERSION) throw new WireError("unsupported message version");
+  const decoded_revision = ctlReadStr(wire);
+  if (wire.off !== bytes.length) throw new WireError("trailing bytes");
+  return {
+    revision: decoded_revision,
+  };
+}
+
+export interface MergeRequest {
+  action: number;
+  heads: MergeHead[];
+  strategy: number;
+  fast_forward: number;
+  favor: number;
+  diff_algorithm: number;
+  conflict_style: number;
+  find_renames: boolean;
+  no_commit: boolean;
+  allow_unrelated_histories: boolean;
+  rename_threshold?: number | null;
+  subtree_path?: string | null;
+  message?: string | null;
+  author?: Signature | null;
+  committer?: Signature | null;
+}
+export const MERGE_REQUEST_MSG_ID = 43;
+export const MERGE_REQUEST_VERSION = 1;
+export function encodeMergeRequest(msg: MergeRequest): Uint8Array {
+  const out: number[] = [];
+  ctlPutU16(out, MERGE_REQUEST_MSG_ID);
+  ctlPutU8(out, MERGE_REQUEST_VERSION);
+  ctlPutU16(out, msg.action);
+  ctlPutMessageList(out, msg.heads, encodeMergeHead);
+  ctlPutU16(out, msg.strategy);
+  ctlPutU16(out, msg.fast_forward);
+  ctlPutU16(out, msg.favor);
+  ctlPutU16(out, msg.diff_algorithm);
+  ctlPutU16(out, msg.conflict_style);
+  ctlPutBool(out, msg.find_renames);
+  ctlPutBool(out, msg.no_commit);
+  ctlPutBool(out, msg.allow_unrelated_histories);
+  if (msg.rename_threshold === undefined || msg.rename_threshold === null) {
+    ctlPutU8(out, 0);
+  } else {
+    ctlPutU8(out, 1);
+  ctlPutU16(out, msg.rename_threshold);
+  }
+  if (msg.subtree_path === undefined || msg.subtree_path === null) {
+    ctlPutU8(out, 0);
+  } else {
+    ctlPutU8(out, 1);
+  ctlPutStr(out, msg.subtree_path);
+  }
+  if (msg.message === undefined || msg.message === null) {
+    ctlPutU8(out, 0);
+  } else {
+    ctlPutU8(out, 1);
+  ctlPutStr(out, msg.message);
+  }
+  if (msg.author === undefined || msg.author === null) {
+    ctlPutU8(out, 0);
+  } else {
+    ctlPutU8(out, 1);
+  ctlPutBytes(out, encodeSignature(msg.author));
+  }
+  if (msg.committer === undefined || msg.committer === null) {
+    ctlPutU8(out, 0);
+  } else {
+    ctlPutU8(out, 1);
+  ctlPutBytes(out, encodeSignature(msg.committer));
+  }
+  return Uint8Array.from(out);
+}
+export function decodeMergeRequest(bytes: Uint8Array): MergeRequest {
+  const wire: CtlCursor = { bytes, off: 0 };
+  if (ctlReadU16(wire) !== MERGE_REQUEST_MSG_ID) throw new WireError("wrong message id");
+  if (ctlReadU8(wire) !== MERGE_REQUEST_VERSION) throw new WireError("unsupported message version");
+  const decoded_action = ctlReadU16(wire);
+  const decoded_heads = ctlReadMessageList(wire, decodeMergeHead);
+  const decoded_strategy = ctlReadU16(wire);
+  const decoded_fast_forward = ctlReadU16(wire);
+  const decoded_favor = ctlReadU16(wire);
+  const decoded_diff_algorithm = ctlReadU16(wire);
+  const decoded_conflict_style = ctlReadU16(wire);
+  const decoded_find_renames = ctlReadBool(wire);
+  const decoded_no_commit = ctlReadBool(wire);
+  const decoded_allow_unrelated_histories = ctlReadBool(wire);
+  let decoded_rename_threshold: number | undefined;
+  switch (ctlReadU8(wire)) {
+    case 0: decoded_rename_threshold = undefined; break;
+    case 1: decoded_rename_threshold = ctlReadU16(wire); break;
+    default: throw new WireError("invalid optional presence");
+  }
+  let decoded_subtree_path: string | undefined;
+  switch (ctlReadU8(wire)) {
+    case 0: decoded_subtree_path = undefined; break;
+    case 1: decoded_subtree_path = ctlReadStr(wire); break;
+    default: throw new WireError("invalid optional presence");
+  }
+  let decoded_message: string | undefined;
+  switch (ctlReadU8(wire)) {
+    case 0: decoded_message = undefined; break;
+    case 1: decoded_message = ctlReadStr(wire); break;
+    default: throw new WireError("invalid optional presence");
+  }
+  let decoded_author: Signature | undefined;
+  switch (ctlReadU8(wire)) {
+    case 0: decoded_author = undefined; break;
+    case 1: decoded_author = decodeSignature(ctlReadBytes(wire)); break;
+    default: throw new WireError("invalid optional presence");
+  }
+  let decoded_committer: Signature | undefined;
+  switch (ctlReadU8(wire)) {
+    case 0: decoded_committer = undefined; break;
+    case 1: decoded_committer = decodeSignature(ctlReadBytes(wire)); break;
+    default: throw new WireError("invalid optional presence");
+  }
+  if (wire.off !== bytes.length) throw new WireError("trailing bytes");
+  return {
+    action: decoded_action,
+    heads: decoded_heads,
+    strategy: decoded_strategy,
+    fast_forward: decoded_fast_forward,
+    favor: decoded_favor,
+    diff_algorithm: decoded_diff_algorithm,
+    conflict_style: decoded_conflict_style,
+    find_renames: decoded_find_renames,
+    no_commit: decoded_no_commit,
+    allow_unrelated_histories: decoded_allow_unrelated_histories,
+    rename_threshold: decoded_rename_threshold,
+    subtree_path: decoded_subtree_path,
+    message: decoded_message,
+    author: decoded_author,
+    committer: decoded_committer,
+  };
+}
+
+export interface MergeConflict {
+  path: string;
+  ours: number;
+  theirs: number;
+}
+export const MERGE_CONFLICT_MSG_ID = 44;
+export const MERGE_CONFLICT_VERSION = 1;
+export function encodeMergeConflict(msg: MergeConflict): Uint8Array {
+  const out: number[] = [];
+  ctlPutU16(out, MERGE_CONFLICT_MSG_ID);
+  ctlPutU8(out, MERGE_CONFLICT_VERSION);
+  ctlPutStr(out, msg.path);
+  ctlPutU16(out, msg.ours);
+  ctlPutU16(out, msg.theirs);
+  return Uint8Array.from(out);
+}
+export function decodeMergeConflict(bytes: Uint8Array): MergeConflict {
+  const wire: CtlCursor = { bytes, off: 0 };
+  if (ctlReadU16(wire) !== MERGE_CONFLICT_MSG_ID) throw new WireError("wrong message id");
+  if (ctlReadU8(wire) !== MERGE_CONFLICT_VERSION) throw new WireError("unsupported message version");
+  const decoded_path = ctlReadStr(wire);
+  const decoded_ours = ctlReadU16(wire);
+  const decoded_theirs = ctlReadU16(wire);
+  if (wire.off !== bytes.length) throw new WireError("trailing bytes");
+  return {
+    path: decoded_path,
+    ours: decoded_ours,
+    theirs: decoded_theirs,
+  };
+}
+
+export interface MergeResult {
+  generation: number;
+  outcome: number;
+  object_id?: ObjectId | null;
+  conflicts: MergeConflict[];
+}
+export const MERGE_RESULT_MSG_ID = 45;
+export const MERGE_RESULT_VERSION = 1;
+export function encodeMergeResult(msg: MergeResult): Uint8Array {
+  const out: number[] = [];
+  ctlPutU16(out, MERGE_RESULT_MSG_ID);
+  ctlPutU8(out, MERGE_RESULT_VERSION);
+  ctlPutU32(out, msg.generation);
+  ctlPutU16(out, msg.outcome);
+  if (msg.object_id === undefined || msg.object_id === null) {
+    ctlPutU8(out, 0);
+  } else {
+    ctlPutU8(out, 1);
+  ctlPutBytes(out, encodeObjectId(msg.object_id));
+  }
+  ctlPutMessageList(out, msg.conflicts, encodeMergeConflict);
+  return Uint8Array.from(out);
+}
+export function decodeMergeResult(bytes: Uint8Array): MergeResult {
+  const wire: CtlCursor = { bytes, off: 0 };
+  if (ctlReadU16(wire) !== MERGE_RESULT_MSG_ID) throw new WireError("wrong message id");
+  if (ctlReadU8(wire) !== MERGE_RESULT_VERSION) throw new WireError("unsupported message version");
+  const decoded_generation = ctlReadU32(wire);
+  const decoded_outcome = ctlReadU16(wire);
+  let decoded_object_id: ObjectId | undefined;
+  switch (ctlReadU8(wire)) {
+    case 0: decoded_object_id = undefined; break;
+    case 1: decoded_object_id = decodeObjectId(ctlReadBytes(wire)); break;
+    default: throw new WireError("invalid optional presence");
+  }
+  const decoded_conflicts = ctlReadMessageList(wire, decodeMergeConflict);
+  if (wire.off !== bytes.length) throw new WireError("trailing bytes");
+  return {
+    generation: decoded_generation,
+    outcome: decoded_outcome,
+    object_id: decoded_object_id,
+    conflicts: decoded_conflicts,
   };
 }
 

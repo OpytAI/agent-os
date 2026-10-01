@@ -43,6 +43,159 @@ const readBoundedFile = repository_ops.readBoundedFile;
 const statusEntryLess = repository_ops.statusEntryLess;
 const submoduleEntryLess = repository_ops.submoduleEntryLess;
 
+const UnmergedLetters = struct { ours: u16, theirs: u16 };
+
+fn unmergedLetters(has1: bool, has2: bool, has3: bool) ?UnmergedLetters {
+    if (has1 and has2 and has3) return .{ .ours = 'U', .theirs = 'U' };
+    if (has1 and has2) return .{ .ours = 'U', .theirs = 'D' };
+    if (has1 and has3) return .{ .ours = 'D', .theirs = 'U' };
+    if (has2 and has3) return .{ .ours = 'A', .theirs = 'A' };
+    if (has2) return .{ .ours = 'A', .theirs = 'U' };
+    if (has3) return .{ .ours = 'U', .theirs = 'A' };
+    if (has1) return .{ .ours = 'D', .theirs = 'D' };
+    return null;
+}
+
+fn unmergedLettersOf(idx: anytype, name: []const u8) ?UnmergedLetters {
+    var has1 = false;
+    var has2 = false;
+    var has3 = false;
+    for (idx.entries.items) |*other| {
+        if (!std.mem.eql(u8, other.name, name)) continue;
+        if (other.stage == 1) has1 = true;
+        if (other.stage == 2) has2 = true;
+        if (other.stage == 3) has3 = true;
+    }
+    return unmergedLetters(has1, has2, has3);
+}
+
+fn appendUnmergedStatus(allocator: std.mem.Allocator, entries: *std.ArrayList(contract.StatusEntry), idx: anytype, submodule_paths: []const []const u8) !void {
+    for (idx.entries.items, 0..) |*entry, index| {
+        if (entry.stage == 0) continue;
+        var earlier = false;
+        for (idx.entries.items[0..index]) |*previous| {
+            if (previous.stage != 0 and std.mem.eql(u8, previous.name, entry.name)) {
+                earlier = true;
+                break;
+            }
+        }
+        if (earlier) continue;
+        const letters = unmergedLettersOf(idx, entry.name) orelse continue;
+        if (pathWithinAny(entry.name, submodule_paths)) continue;
+        try entries.append(allocator, .{ .path = entry.name, .index = letters.ours, .worktree = letters.theirs });
+    }
+}
+
+fn conflictRows(allocator: std.mem.Allocator, idx: anytype) ![]contract.MergeConflict {
+    var rows: std.ArrayList(contract.MergeConflict) = .empty;
+    errdefer rows.deinit(allocator);
+    for (idx.entries.items, 0..) |*entry, index| {
+        if (entry.stage == 0) continue;
+        var earlier = false;
+        for (idx.entries.items[0..index]) |*previous| {
+            if (previous.stage != 0 and std.mem.eql(u8, previous.name, entry.name)) {
+                earlier = true;
+                break;
+            }
+        }
+        if (earlier) continue;
+        const letters = unmergedLettersOf(idx, entry.name) orelse continue;
+        try rows.append(allocator, .{ .path = entry.name, .ours = letters.ours, .theirs = letters.theirs });
+    }
+    return try rows.toOwnedSlice(allocator);
+}
+
+fn indexHasUnmerged(idx: anytype) bool {
+    for (idx.entries.items) |*entry| if (entry.stage != 0) return true;
+    return false;
+}
+
+fn gitFilePresent(allocator: std.mem.Allocator, storer: anytype, name: []const u8) !bool {
+    const bytes = try storer.readGitFile(allocator, name);
+    if (bytes) |data| {
+        allocator.free(data);
+        return true;
+    }
+    return false;
+}
+
+fn mergeIdentity(sig: contract.Signature) !worktree_pkg.Identity {
+    if (sig.timezone_minutes < std.math.minInt(i16) or sig.timezone_minutes > std.math.maxInt(i16)) return error.InvalidAction;
+    return .{
+        .name = sig.name,
+        .email = sig.email,
+        .when = sig.unix_seconds,
+        .tz_offset_minutes = @intCast(sig.timezone_minutes),
+    };
+}
+
+fn headMoved(before: ?plumbing.Hash, after: ?plumbing.Hash) bool {
+    const next = after orelse return false;
+    const previous = before orelse return true;
+    return !std.mem.eql(u8, previous.slice(), next.slice());
+}
+
+fn resolvedHead(repository: anytype) !?plumbing.Hash {
+    return repository.resolveRevision("HEAD") catch |err| switch (err) {
+        error.ReferenceNotFound => null,
+        else => |other| return other,
+    };
+}
+
+fn u16Of(value: u32) u16 {
+    return @intCast(value);
+}
+
+fn mergeStrategy(value: u16) !?worktree_pkg.Strategy {
+    return switch (value) {
+        u16Of(contract.MERGE_STRATEGY_DEFAULT) => null,
+        u16Of(contract.MERGE_STRATEGY_ORT) => .ort,
+        u16Of(contract.MERGE_STRATEGY_RECURSIVE) => .recursive,
+        u16Of(contract.MERGE_STRATEGY_RESOLVE) => .resolve,
+        u16Of(contract.MERGE_STRATEGY_OCTOPUS) => .octopus,
+        u16Of(contract.MERGE_STRATEGY_OURS) => .ours,
+        u16Of(contract.MERGE_STRATEGY_SUBTREE) => .subtree,
+        else => error.InvalidAction,
+    };
+}
+
+fn mergeFastForward(value: u16) !worktree_pkg.FastForward {
+    return switch (value) {
+        u16Of(contract.MERGE_FF) => .ff,
+        u16Of(contract.MERGE_FF_NO_FF) => .no_ff,
+        u16Of(contract.MERGE_FF_ONLY) => .ff_only,
+        else => error.InvalidAction,
+    };
+}
+
+fn mergeFavor(value: u16) !worktree_pkg.Favor {
+    return switch (value) {
+        u16Of(contract.MERGE_FAVOR_NONE) => .none,
+        u16Of(contract.MERGE_FAVOR_OURS) => .ours,
+        u16Of(contract.MERGE_FAVOR_THEIRS) => .theirs,
+        else => error.InvalidAction,
+    };
+}
+
+fn mergeDiffAlgorithm(value: u16) !worktree_pkg.DiffAlgorithm {
+    return switch (value) {
+        u16Of(contract.MERGE_DIFF_HISTOGRAM) => .histogram,
+        u16Of(contract.MERGE_DIFF_MYERS) => .myers,
+        u16Of(contract.MERGE_DIFF_MINIMAL) => .minimal,
+        u16Of(contract.MERGE_DIFF_PATIENCE) => .patience,
+        else => error.InvalidAction,
+    };
+}
+
+fn mergeConflictStyle(value: u16) !worktree_pkg.ConflictStyle {
+    return switch (value) {
+        u16Of(contract.MERGE_STYLE_MERGE) => .merge,
+        u16Of(contract.MERGE_STYLE_DIFF3) => .diff3,
+        u16Of(contract.MERGE_STYLE_ZDIFF3) => .zdiff3,
+        else => error.InvalidAction,
+    };
+}
+
 pub const gitz_commit = "31b716bfedd2bfbbd5711c0178d1930f777547e5";
 pub const slot_count: usize = 64;
 
@@ -272,6 +425,7 @@ pub fn Engine(comptime Backend: type) type {
                 contract.OP_ADD => self.add(session, envelope.payload),
                 contract.OP_REMOVE => self.remove(session, envelope.payload),
                 contract.OP_COMMIT => self.commit(session, envelope.payload),
+                contract.OP_MERGE => self.merge(session, envelope.payload),
                 contract.OP_LOG => self.log(session, envelope.payload),
                 contract.OP_RESOLVE_REVISION => self.resolveRevision(session, envelope.payload),
                 contract.OP_DIFF => self.diff(session, envelope.payload),
@@ -396,25 +550,25 @@ pub fn Engine(comptime Backend: type) type {
             defer state.deinit();
             const submodule_paths = try self.configuredSubmodulePaths(session);
             defer self.freeOwnedPaths(submodule_paths);
-            var entries = try self.allocator.alloc(contract.StatusEntry, state.map.count());
-            defer self.allocator.free(entries);
+            var entries: std.ArrayList(contract.StatusEntry) = .empty;
+            defer entries.deinit(self.allocator);
             var iterator = state.map.iterator();
-            var index: usize = 0;
             while (iterator.next()) |entry| {
                 const staging = entry.value_ptr.staging.char();
                 const worktree_state = entry.value_ptr.worktree.char();
                 if ((staging == ' ' and worktree_state == ' ') or pathWithinAny(entry.key_ptr.*, submodule_paths)) continue;
-                entries[index] = .{
+                try entries.append(self.allocator, .{
                     .path = entry.key_ptr.*,
                     .index = staging,
                     .worktree = worktree_state,
-                };
-                index += 1;
+                });
             }
-            std.mem.sort(contract.StatusEntry, entries[0..index], {}, statusEntryLess);
+            const idx = try worktree.storer.index();
+            try appendUnmergedStatus(self.allocator, &entries, idx, submodule_paths);
+            std.mem.sort(contract.StatusEntry, entries.items, {}, statusEntryLess);
             return (contract.StatusResult{
                 .generation = session.mutation_generation,
-                .entries = entries[0..index],
+                .entries = entries.items,
             }).encode(self.allocator);
         }
 
@@ -503,6 +657,22 @@ pub fn Engine(comptime Backend: type) type {
             const committer = request.committer orelse return error.MissingCommitter;
             var repository = &(session.repository orelse return error.RepositoryNotOpen);
             var worktree = try repository.worktree();
+            if (try gitFilePresent(self.allocator, worktree.storer, "MERGE_HEAD")) {
+                const idx = try worktree.storer.index();
+                if (indexHasUnmerged(idx)) return error.UnmergedPaths;
+                if (author.name.len == 0 or author.email.len == 0) return error.MissingAuthor;
+                if (committer.name.len == 0 or committer.email.len == 0) return error.MissingCommitter;
+                const hash = try worktree.mergeContinue(.{
+                    .message = message,
+                    .author = try mergeIdentity(author),
+                    .committer = try mergeIdentity(committer),
+                });
+                bumpGeneration(session);
+                return (contract.CommitResult{
+                    .generation = session.mutation_generation,
+                    .object_id = objectId(&hash),
+                }).encode(self.allocator);
+            }
             const hash = try worktree.commit(message, .{
                 .author = signature(author),
                 .committer = signature(committer),
@@ -511,6 +681,101 @@ pub fn Engine(comptime Backend: type) type {
             return (contract.CommitResult{
                 .generation = session.mutation_generation,
                 .object_id = objectId(&hash),
+            }).encode(self.allocator);
+        }
+
+        fn merge(self: *Self, session: *Backend.Session, payload: []const u8) ![]u8 {
+            if (self.backend.isReadOnly(session)) return error.ReadOnly;
+            if (self.backend.sparsePaths(session).len != 0) return error.InvalidAction;
+            const request = try contract.MergeRequest.decode(self.allocator, payload);
+            defer self.allocator.free(request.heads);
+            var repository = &(session.repository orelse return error.RepositoryNotOpen);
+            var worktree = try repository.worktree();
+            if (request.action == u16Of(contract.ACTION_ABORT)) {
+                try worktree.mergeAbort();
+                bumpGeneration(session);
+                return self.encodeMerge(session, u16Of(contract.MERGE_OUTCOME_ABORTED), null, &.{});
+            }
+            if (request.action != u16Of(contract.ACTION_CREATE) and request.action != u16Of(contract.ACTION_FINISH)) return error.InvalidAction;
+            const strategy = try mergeStrategy(request.strategy);
+            const fast_forward = try mergeFastForward(request.fast_forward);
+            const favor = try mergeFavor(request.favor);
+            const diff_algorithm = try mergeDiffAlgorithm(request.diff_algorithm);
+            const conflict_style = try mergeConflictStyle(request.conflict_style);
+            const threshold: u8 = if (request.rename_threshold) |value| blk: {
+                if (value > 100) return error.InvalidAction;
+                break :blk @intCast(value);
+            } else 50;
+            const author_sig = request.author orelse return error.MissingAuthor;
+            const committer_sig = request.committer orelse return error.MissingCommitter;
+            if (author_sig.name.len == 0 or author_sig.email.len == 0) return error.MissingAuthor;
+            if (committer_sig.name.len == 0 or committer_sig.email.len == 0) return error.MissingCommitter;
+            const author = try mergeIdentity(author_sig);
+            const committer = try mergeIdentity(committer_sig);
+            if (request.action == u16Of(contract.ACTION_FINISH)) {
+                const hash = try worktree.mergeContinue(.{
+                    .message = request.message,
+                    .author = author,
+                    .committer = committer,
+                });
+                bumpGeneration(session);
+                return self.encodeMerge(session, u16Of(contract.MERGE_OUTCOME_COMMITTED), &hash, &.{});
+            }
+            if (request.heads.len > 64) return error.InvalidAction;
+            const hashes = try self.allocator.alloc(plumbing.Hash, request.heads.len);
+            defer self.allocator.free(hashes);
+            for (request.heads, 0..) |head, index| {
+                if (head.revision.len == 0) return error.MissingRevision;
+                hashes[index] = try repository.resolveRevision(head.revision);
+            }
+            const before = try resolvedHead(repository);
+            const merged = try worktree.merge(hashes, .{
+                .strategy = strategy,
+                .fast_forward = fast_forward,
+                .message = request.message,
+                .no_commit = request.no_commit,
+                .allow_unrelated_histories = request.allow_unrelated_histories,
+                .favor = favor,
+                .diff_algorithm = diff_algorithm,
+                .find_renames = request.find_renames,
+                .rename_threshold = threshold,
+                .conflict_style = conflict_style,
+                .subtree_path = request.subtree_path,
+                .theirs_label = if (request.heads.len == 1) request.heads[0].revision else null,
+                .author = author,
+                .committer = committer,
+            });
+            if (!merged.clean) {
+                const idx = try worktree.storer.index();
+                const conflicts = try conflictRows(self.allocator, idx);
+                defer self.allocator.free(conflicts);
+                bumpGeneration(session);
+                return self.encodeMerge(session, u16Of(contract.MERGE_OUTCOME_CONFLICTS), null, conflicts);
+            }
+            if (merged.commit) |commit_hash| {
+                var recorded = commit_hash;
+                bumpGeneration(session);
+                return self.encodeMerge(session, u16Of(contract.MERGE_OUTCOME_COMMITTED), &recorded, &.{});
+            }
+            const after = try resolvedHead(repository);
+            if (headMoved(before, after)) {
+                var recorded = after.?;
+                bumpGeneration(session);
+                return self.encodeMerge(session, u16Of(contract.MERGE_OUTCOME_FAST_FORWARD), &recorded, &.{});
+            }
+            if (request.no_commit and try gitFilePresent(self.allocator, worktree.storer, "MERGE_HEAD")) {
+                bumpGeneration(session);
+                return self.encodeMerge(session, u16Of(contract.MERGE_OUTCOME_UNCOMMITTED), null, &.{});
+            }
+            return self.encodeMerge(session, u16Of(contract.MERGE_OUTCOME_UP_TO_DATE), null, &.{});
+        }
+
+        fn encodeMerge(self: *Self, session: *Backend.Session, outcome: u16, hash: ?*const plumbing.Hash, conflicts: []const contract.MergeConflict) ![]u8 {
+            return (contract.MergeResult{
+                .generation = session.mutation_generation,
+                .outcome = outcome,
+                .object_id = if (hash) |value| objectId(value) else null,
+                .conflicts = conflicts,
             }).encode(self.allocator);
         }
 
@@ -847,8 +1112,8 @@ pub fn Engine(comptime Backend: type) type {
             if (request.action != contract.ACTION_CREATE) return error.InvalidAction;
             if (self.backend.isReadOnly(session)) return error.ReadOnly;
             const remote_name = request.revision orelse "";
-            const merge = request.message orelse "";
-            try repository.createBranch(name, remote_name, merge);
+            const merge_name = request.message orelse "";
+            try repository.createBranch(name, remote_name, merge_name);
             bumpGeneration(session);
             return self.mutationResult(session, 1);
         }

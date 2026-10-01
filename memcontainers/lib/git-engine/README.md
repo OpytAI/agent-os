@@ -20,6 +20,7 @@ pack, and Git wire behavior belong to the shared engine and Gitz.
 | Guest `/bin/git` and GitFs mount                    | Preserve product faces; relay typed generated operations only.                |
 | Durable repositories                                | Browser persists opaque engine images; native uses rooted filesystem storage. |
 | Clone/fetch/pull/push                               | Resumable Gitz state machines yielding generic HTTP effects.                  |
+| Merge, abort, continue                              | One shared engine operation. A conflict is a successful engine result; the guest exit code is 1. Pull stays fast-forward only. |
 | Engine protocol                                     | Generated binary messages and generated AOGQ/AOGR envelopes only.             |
 | Errors/results                                      | Stable typed records; CLI text is rendered outside the engine.                |
 | `ge_*`, C headers, JSON dispatch                    | Deleted; they are not compatibility contracts.                                |

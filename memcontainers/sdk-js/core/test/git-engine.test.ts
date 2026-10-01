@@ -170,6 +170,38 @@ assert.equal(
   (await reopened.run({ op: "rev-parse", args: { rev: "HEAD" } })).stdout,
   second.stdout,
 );
+
+const textEncoder = new TextEncoder();
+await reopened.fileWrite("merge.txt", textEncoder.encode("a\nb\nc\n"));
+assert.equal((await reopened.run({ op: "add", args: { path: "merge.txt" } })).ok, true);
+assert.equal((await reopened.run({ op: "commit", args: { message: "merge base", unix_seconds: 1_700_000_010 } })).ok, true);
+const mergeBase = (await reopened.run({ op: "rev-parse", args: { rev: "HEAD" } })).stdout?.trim();
+await reopened.fileWrite("merge.txt", textEncoder.encode("a\nX\nc\n"));
+assert.equal((await reopened.run({ op: "add", args: { path: "merge.txt" } })).ok, true);
+const mergeOurs = await reopened.run({ op: "commit", args: { message: "merge ours", unix_seconds: 1_700_000_011 } });
+assert.equal(mergeOurs.ok, true);
+await reopened.fileWrite("merge.txt", textEncoder.encode("a\nY\nc\n"));
+assert.equal((await reopened.run({ op: "reset", args: { mode: "hard", rev: mergeBase } })).ok, true);
+await reopened.fileWrite("merge.txt", textEncoder.encode("a\nY\nc\n"));
+assert.equal((await reopened.run({ op: "add", args: { path: "merge.txt" } })).ok, true);
+const mergeTheirs = await reopened.run({ op: "commit", args: { message: "merge theirs", unix_seconds: 1_700_000_012 } });
+assert.equal(mergeTheirs.ok, true);
+assert.equal((await reopened.run({ op: "reset", args: { mode: "hard", rev: mergeOurs.stdout?.trim() } })).ok, true);
+const conflict = await reopened.run({
+  op: "merge",
+  args: { heads: [mergeTheirs.stdout?.trim()], unix_seconds: 1_700_000_013 },
+});
+assert.equal(conflict.code, 1);
+assert.match(conflict.stdout ?? "", /UU merge\.txt/);
+assert.equal((conflict.result as { outcome?: number } | undefined)?.outcome, 4);
+assert.equal((await reopened.run({ op: "rev-parse", args: { rev: "HEAD" } })).stdout?.trim(), mergeOurs.stdout?.trim());
+const aborted = await reopened.run({ op: "merge", args: { action: "abort" } });
+assert.equal(aborted.ok, true, aborted.stderr ?? "");
+assert.equal(new TextDecoder().decode(await reopened.fileRead("merge.txt")), "a\nX\nc\n");
+
+const bare = await GitEngine.load({});
+assert.equal((await bare.run({ op: "merge", args: { heads: ["HEAD"] } })).ok, false);
+await bare.close();
 await reopened.close();
 
 console.log("git wasm SDK adapter: ok");

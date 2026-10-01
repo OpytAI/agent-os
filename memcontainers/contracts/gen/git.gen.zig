@@ -43,6 +43,7 @@ pub const OP_REMOTE_METADATA: u32 = 285;
 pub const OP_IGNORE_QUERY: u32 = 286;
 pub const OP_SPARSE: u32 = 287;
 pub const OP_SUBMODULE: u32 = 288;
+pub const OP_MERGE: u32 = 289;
 pub const OP_OBJECT: u32 = 512;
 pub const OP_REF: u32 = 528;
 pub const OP_REF_TRANSACTION: u32 = 529;
@@ -93,6 +94,32 @@ pub const RESET_SOFT: u32 = 1;
 pub const RESET_MIXED: u32 = 2;
 pub const RESET_HARD: u32 = 3;
 pub const RESET_MERGE: u32 = 4;
+pub const MERGE_STRATEGY_DEFAULT: u32 = 0;
+pub const MERGE_STRATEGY_ORT: u32 = 1;
+pub const MERGE_STRATEGY_RECURSIVE: u32 = 2;
+pub const MERGE_STRATEGY_RESOLVE: u32 = 3;
+pub const MERGE_STRATEGY_OCTOPUS: u32 = 4;
+pub const MERGE_STRATEGY_OURS: u32 = 5;
+pub const MERGE_STRATEGY_SUBTREE: u32 = 6;
+pub const MERGE_FF: u32 = 0;
+pub const MERGE_FF_NO_FF: u32 = 1;
+pub const MERGE_FF_ONLY: u32 = 2;
+pub const MERGE_FAVOR_NONE: u32 = 0;
+pub const MERGE_FAVOR_OURS: u32 = 1;
+pub const MERGE_FAVOR_THEIRS: u32 = 2;
+pub const MERGE_DIFF_HISTOGRAM: u32 = 0;
+pub const MERGE_DIFF_MYERS: u32 = 1;
+pub const MERGE_DIFF_MINIMAL: u32 = 2;
+pub const MERGE_DIFF_PATIENCE: u32 = 3;
+pub const MERGE_STYLE_MERGE: u32 = 0;
+pub const MERGE_STYLE_DIFF3: u32 = 1;
+pub const MERGE_STYLE_ZDIFF3: u32 = 2;
+pub const MERGE_OUTCOME_UP_TO_DATE: u32 = 1;
+pub const MERGE_OUTCOME_FAST_FORWARD: u32 = 2;
+pub const MERGE_OUTCOME_COMMITTED: u32 = 3;
+pub const MERGE_OUTCOME_CONFLICTS: u32 = 4;
+pub const MERGE_OUTCOME_UNCOMMITTED: u32 = 5;
+pub const MERGE_OUTCOME_ABORTED: u32 = 6;
 pub const STATUS_OK: u32 = 0;
 pub const STATUS_EFFECT: u32 = 1;
 pub const STATUS_ERROR: u32 = 2;
@@ -2256,6 +2283,254 @@ pub const SubmoduleResult = struct {
         return .{
             .generation = decoded_generation,
             .entries = decoded_entries,
+        };
+    }
+};
+
+pub const MERGE_HEAD_MSG_ID: u16 = 42;
+pub const MERGE_HEAD_VERSION: u8 = 1;
+pub const MergeHead = struct {
+    revision: []const u8,
+
+    pub fn encode(self: @This(), allocator: std.mem.Allocator) ![]u8 {
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(allocator);
+        try ctlPutU16(&out, allocator, MERGE_HEAD_MSG_ID);
+        try ctlPutU8(&out, allocator, MERGE_HEAD_VERSION);
+        try ctlPutBytes(&out, allocator, self.revision);
+        return out.toOwnedSlice(allocator);
+    }
+
+    pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) !@This() {
+        _ = allocator;
+        var off: usize = 0;
+        if ((try ctlReadU16(bytes, &off)) != MERGE_HEAD_MSG_ID) return WireError.WrongMessage;
+        if ((try ctlReadU8(bytes, &off)) != MERGE_HEAD_VERSION) return WireError.UnsupportedVersion;
+        const decoded_revision = try ctlReadStr(bytes, &off);
+        if (off != bytes.len) return WireError.TrailingBytes;
+        return .{
+            .revision = decoded_revision,
+        };
+    }
+};
+
+pub const MERGE_REQUEST_MSG_ID: u16 = 43;
+pub const MERGE_REQUEST_VERSION: u8 = 1;
+pub const MergeRequest = struct {
+    action: u16,
+    heads: []const MergeHead,
+    strategy: u16,
+    fast_forward: u16,
+    favor: u16,
+    diff_algorithm: u16,
+    conflict_style: u16,
+    find_renames: bool,
+    no_commit: bool,
+    allow_unrelated_histories: bool,
+    rename_threshold: ?u16 = null,
+    subtree_path: ?[]const u8 = null,
+    message: ?[]const u8 = null,
+    author: ?Signature = null,
+    committer: ?Signature = null,
+
+    pub fn encode(self: @This(), allocator: std.mem.Allocator) ![]u8 {
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(allocator);
+        try ctlPutU16(&out, allocator, MERGE_REQUEST_MSG_ID);
+        try ctlPutU8(&out, allocator, MERGE_REQUEST_VERSION);
+        try ctlPutU16(&out, allocator, self.action);
+        try ctlPutMessageList(MergeHead, &out, allocator, self.heads);
+        try ctlPutU16(&out, allocator, self.strategy);
+        try ctlPutU16(&out, allocator, self.fast_forward);
+        try ctlPutU16(&out, allocator, self.favor);
+        try ctlPutU16(&out, allocator, self.diff_algorithm);
+        try ctlPutU16(&out, allocator, self.conflict_style);
+        try ctlPutBool(&out, allocator, self.find_renames);
+        try ctlPutBool(&out, allocator, self.no_commit);
+        try ctlPutBool(&out, allocator, self.allow_unrelated_histories);
+        if (self.rename_threshold) |v| {
+            try ctlPutU8(&out, allocator, 1);
+        try ctlPutU16(&out, allocator, v);
+        } else {
+            try ctlPutU8(&out, allocator, 0);
+        }
+        if (self.subtree_path) |v| {
+            try ctlPutU8(&out, allocator, 1);
+        try ctlPutBytes(&out, allocator, v);
+        } else {
+            try ctlPutU8(&out, allocator, 0);
+        }
+        if (self.message) |v| {
+            try ctlPutU8(&out, allocator, 1);
+        try ctlPutBytes(&out, allocator, v);
+        } else {
+            try ctlPutU8(&out, allocator, 0);
+        }
+        if (self.author) |v| {
+            try ctlPutU8(&out, allocator, 1);
+        {
+            const frame = try v.encode(allocator);
+            defer allocator.free(frame);
+            try ctlPutBytes(&out, allocator, frame);
+        }
+        } else {
+            try ctlPutU8(&out, allocator, 0);
+        }
+        if (self.committer) |v| {
+            try ctlPutU8(&out, allocator, 1);
+        {
+            const frame = try v.encode(allocator);
+            defer allocator.free(frame);
+            try ctlPutBytes(&out, allocator, frame);
+        }
+        } else {
+            try ctlPutU8(&out, allocator, 0);
+        }
+        return out.toOwnedSlice(allocator);
+    }
+
+    pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) !@This() {
+        var off: usize = 0;
+        if ((try ctlReadU16(bytes, &off)) != MERGE_REQUEST_MSG_ID) return WireError.WrongMessage;
+        if ((try ctlReadU8(bytes, &off)) != MERGE_REQUEST_VERSION) return WireError.UnsupportedVersion;
+        const decoded_action = try ctlReadU16(bytes, &off);
+        const decoded_heads = try ctlReadMessageList(MergeHead, allocator, bytes, &off);
+        const decoded_strategy = try ctlReadU16(bytes, &off);
+        const decoded_fast_forward = try ctlReadU16(bytes, &off);
+        const decoded_favor = try ctlReadU16(bytes, &off);
+        const decoded_diff_algorithm = try ctlReadU16(bytes, &off);
+        const decoded_conflict_style = try ctlReadU16(bytes, &off);
+        const decoded_find_renames = try ctlReadBool(bytes, &off);
+        const decoded_no_commit = try ctlReadBool(bytes, &off);
+        const decoded_allow_unrelated_histories = try ctlReadBool(bytes, &off);
+        const decoded_rename_threshold = switch (try ctlReadU8(bytes, &off)) {
+            0 => null,
+            1 => try ctlReadU16(bytes, &off),
+            else => return WireError.InvalidPresence,
+        };
+        const decoded_subtree_path = switch (try ctlReadU8(bytes, &off)) {
+            0 => null,
+            1 => try ctlReadStr(bytes, &off),
+            else => return WireError.InvalidPresence,
+        };
+        const decoded_message = switch (try ctlReadU8(bytes, &off)) {
+            0 => null,
+            1 => try ctlReadStr(bytes, &off),
+            else => return WireError.InvalidPresence,
+        };
+        const decoded_author = switch (try ctlReadU8(bytes, &off)) {
+            0 => null,
+            1 => try Signature.decode(allocator, try ctlReadBytes(bytes, &off)),
+            else => return WireError.InvalidPresence,
+        };
+        const decoded_committer = switch (try ctlReadU8(bytes, &off)) {
+            0 => null,
+            1 => try Signature.decode(allocator, try ctlReadBytes(bytes, &off)),
+            else => return WireError.InvalidPresence,
+        };
+        if (off != bytes.len) return WireError.TrailingBytes;
+        return .{
+            .action = decoded_action,
+            .heads = decoded_heads,
+            .strategy = decoded_strategy,
+            .fast_forward = decoded_fast_forward,
+            .favor = decoded_favor,
+            .diff_algorithm = decoded_diff_algorithm,
+            .conflict_style = decoded_conflict_style,
+            .find_renames = decoded_find_renames,
+            .no_commit = decoded_no_commit,
+            .allow_unrelated_histories = decoded_allow_unrelated_histories,
+            .rename_threshold = decoded_rename_threshold,
+            .subtree_path = decoded_subtree_path,
+            .message = decoded_message,
+            .author = decoded_author,
+            .committer = decoded_committer,
+        };
+    }
+};
+
+pub const MERGE_CONFLICT_MSG_ID: u16 = 44;
+pub const MERGE_CONFLICT_VERSION: u8 = 1;
+pub const MergeConflict = struct {
+    path: []const u8,
+    ours: u16,
+    theirs: u16,
+
+    pub fn encode(self: @This(), allocator: std.mem.Allocator) ![]u8 {
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(allocator);
+        try ctlPutU16(&out, allocator, MERGE_CONFLICT_MSG_ID);
+        try ctlPutU8(&out, allocator, MERGE_CONFLICT_VERSION);
+        try ctlPutBytes(&out, allocator, self.path);
+        try ctlPutU16(&out, allocator, self.ours);
+        try ctlPutU16(&out, allocator, self.theirs);
+        return out.toOwnedSlice(allocator);
+    }
+
+    pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) !@This() {
+        _ = allocator;
+        var off: usize = 0;
+        if ((try ctlReadU16(bytes, &off)) != MERGE_CONFLICT_MSG_ID) return WireError.WrongMessage;
+        if ((try ctlReadU8(bytes, &off)) != MERGE_CONFLICT_VERSION) return WireError.UnsupportedVersion;
+        const decoded_path = try ctlReadStr(bytes, &off);
+        const decoded_ours = try ctlReadU16(bytes, &off);
+        const decoded_theirs = try ctlReadU16(bytes, &off);
+        if (off != bytes.len) return WireError.TrailingBytes;
+        return .{
+            .path = decoded_path,
+            .ours = decoded_ours,
+            .theirs = decoded_theirs,
+        };
+    }
+};
+
+pub const MERGE_RESULT_MSG_ID: u16 = 45;
+pub const MERGE_RESULT_VERSION: u8 = 1;
+pub const MergeResult = struct {
+    generation: u32,
+    outcome: u16,
+    object_id: ?ObjectId = null,
+    conflicts: []const MergeConflict,
+
+    pub fn encode(self: @This(), allocator: std.mem.Allocator) ![]u8 {
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(allocator);
+        try ctlPutU16(&out, allocator, MERGE_RESULT_MSG_ID);
+        try ctlPutU8(&out, allocator, MERGE_RESULT_VERSION);
+        try ctlPutU32(&out, allocator, self.generation);
+        try ctlPutU16(&out, allocator, self.outcome);
+        if (self.object_id) |v| {
+            try ctlPutU8(&out, allocator, 1);
+        {
+            const frame = try v.encode(allocator);
+            defer allocator.free(frame);
+            try ctlPutBytes(&out, allocator, frame);
+        }
+        } else {
+            try ctlPutU8(&out, allocator, 0);
+        }
+        try ctlPutMessageList(MergeConflict, &out, allocator, self.conflicts);
+        return out.toOwnedSlice(allocator);
+    }
+
+    pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) !@This() {
+        var off: usize = 0;
+        if ((try ctlReadU16(bytes, &off)) != MERGE_RESULT_MSG_ID) return WireError.WrongMessage;
+        if ((try ctlReadU8(bytes, &off)) != MERGE_RESULT_VERSION) return WireError.UnsupportedVersion;
+        const decoded_generation = try ctlReadU32(bytes, &off);
+        const decoded_outcome = try ctlReadU16(bytes, &off);
+        const decoded_object_id = switch (try ctlReadU8(bytes, &off)) {
+            0 => null,
+            1 => try ObjectId.decode(allocator, try ctlReadBytes(bytes, &off)),
+            else => return WireError.InvalidPresence,
+        };
+        const decoded_conflicts = try ctlReadMessageList(MergeConflict, allocator, bytes, &off);
+        if (off != bytes.len) return WireError.TrailingBytes;
+        return .{
+            .generation = decoded_generation,
+            .outcome = decoded_outcome,
+            .object_id = decoded_object_id,
+            .conflicts = decoded_conflicts,
         };
     }
 };

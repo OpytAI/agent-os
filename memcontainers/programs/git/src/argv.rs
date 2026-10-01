@@ -357,5 +357,288 @@ pub fn build_local_request(cmd: &[u8], args: &[&[u8]], out: &mut [u8]) -> Result
         }
         return copy_bytes(b"{\"op\":\"diff\",\"args\":{\"cached\":true}}", out);
     }
+    if cmd == b"merge" {
+        return build_merge_request(args, out);
+    }
     Err(2)
+}
+
+/// Parse `git merge` into an ordered-head JSON request.
+pub fn build_merge_request(args: &[&[u8]], out: &mut [u8]) -> Result<usize, i32> {
+    if args.len() < 2 || args[1] != b"merge" {
+        return Err(2);
+    }
+    if args.len() >= 3 && (args[2] == b"--abort" || args[2] == b"--continue") {
+        if args.len() != 3 {
+            return Err(2);
+        }
+        let action: &[u8] = if args[2] == b"--abort" {
+            b"abort"
+        } else {
+            b"continue"
+        };
+        let mut i = push(out, 0, b"{\"op\":\"merge\",\"args\":{\"action\":\"")?;
+        i = push(out, i, action)?;
+        i = push(out, i, b"\"}}")?;
+        return Ok(i);
+    }
+
+    let mut no_commit = false;
+    let mut allow_unrelated = false;
+    let mut find_renames = true;
+    let mut saw_renames = false;
+    let mut ff: Option<&[u8]> = None;
+    let mut strategy: Option<&[u8]> = None;
+    let mut favor: Option<&[u8]> = None;
+    let mut diff_algorithm: Option<&[u8]> = None;
+    let mut conflict_style: Option<&[u8]> = None;
+    let mut subtree: Option<&[u8]> = None;
+    let mut message: Option<&[u8]> = None;
+    let mut threshold: Option<u16> = None;
+    let mut heads: [&[u8]; 14] = [&[]; 14];
+    let mut head_count = 0usize;
+    let mut index = 2usize;
+    while index < args.len() {
+        let arg = args[index];
+        if arg == b"--" {
+            return Err(2);
+        }
+        if arg == b"--squash" || (arg == b"-s" && index + 1 < args.len() && args[index + 1] == b"theirs") {
+            return Err(2);
+        }
+        if arg == b"--no-commit" {
+            if no_commit {
+                return Err(2);
+            }
+            no_commit = true;
+        } else if arg == b"--allow-unrelated-histories" {
+            if allow_unrelated {
+                return Err(2);
+            }
+            allow_unrelated = true;
+        } else if arg == b"--ff" || arg == b"--no-ff" || arg == b"--ff-only" {
+            if ff.is_some() {
+                return Err(2);
+            }
+            ff = Some(if arg == b"--ff" {
+                b"ff"
+            } else if arg == b"--no-ff" {
+                b"no-ff"
+            } else {
+                b"ff-only"
+            });
+        } else if arg == b"-s" {
+            index += 1;
+            if index >= args.len() || strategy.is_some() || !merge_strategy(args[index]) {
+                return Err(2);
+            }
+            strategy = Some(args[index]);
+        } else if arg == b"-m" {
+            index += 1;
+            if index >= args.len() || message.is_some() {
+                return Err(2);
+            }
+            message = Some(args[index]);
+        } else if arg == b"-X" || arg.starts_with(b"-X") {
+            let value = if arg == b"-X" {
+                index += 1;
+                if index >= args.len() {
+                    return Err(2);
+                }
+                args[index]
+            } else {
+                &arg[2..]
+            };
+            if !apply_merge_option(
+                value,
+                &mut favor,
+                &mut find_renames,
+                &mut saw_renames,
+                &mut threshold,
+                &mut diff_algorithm,
+                &mut conflict_style,
+                &mut subtree,
+            ) {
+                return Err(2);
+            }
+        } else if arg.first() == Some(&b'-') {
+            return Err(2);
+        } else {
+            if arg.is_empty() || head_count == heads.len() {
+                return Err(2);
+            }
+            heads[head_count] = arg;
+            head_count += 1;
+        }
+        index += 1;
+    }
+    if head_count == 0 {
+        return Err(2);
+    }
+
+    let mut i = push(out, 0, b"{\"op\":\"merge\",\"args\":{\"heads\":[")?;
+    for (slot, head) in heads[..head_count].iter().enumerate() {
+        if slot != 0 {
+            i = push(out, i, b",")?;
+        }
+        i = push(out, i, b"\"")?;
+        i = push_escaped(out, i, head)?;
+        i = push(out, i, b"\"")?;
+    }
+    i = push(out, i, b"],\"find_renames\":")?;
+    i = push(out, i, if find_renames { b"true" } else { b"false" })?;
+    if let Some(value) = ff {
+        i = push(out, i, b",\"ff\":\"")?;
+        i = push(out, i, value)?;
+        i = push(out, i, b"\"")?;
+    }
+    if let Some(value) = strategy {
+        i = push(out, i, b",\"strategy\":\"")?;
+        i = push(out, i, value)?;
+        i = push(out, i, b"\"")?;
+    }
+    if let Some(value) = favor {
+        i = push(out, i, b",\"favor\":\"")?;
+        i = push(out, i, value)?;
+        i = push(out, i, b"\"")?;
+    }
+    if let Some(value) = threshold {
+        i = push(out, i, b",\"rename_threshold\":")?;
+        i = push_u16(out, i, value)?;
+    }
+    if let Some(value) = diff_algorithm {
+        i = push(out, i, b",\"diff_algorithm\":\"")?;
+        i = push(out, i, value)?;
+        i = push(out, i, b"\"")?;
+    }
+    if let Some(value) = conflict_style {
+        i = push(out, i, b",\"conflict_style\":\"")?;
+        i = push(out, i, value)?;
+        i = push(out, i, b"\"")?;
+    }
+    if let Some(value) = subtree {
+        i = push(out, i, b",\"subtree\":\"")?;
+        i = push_escaped(out, i, value)?;
+        i = push(out, i, b"\"")?;
+    }
+    if allow_unrelated {
+        i = push(out, i, b",\"allow_unrelated_histories\":true")?;
+    }
+    if no_commit {
+        i = push(out, i, b",\"no_commit\":true")?;
+    }
+    if let Some(value) = message {
+        i = push(out, i, b",\"message\":\"")?;
+        i = push_escaped(out, i, value)?;
+        i = push(out, i, b"\"")?;
+    }
+    i = push(out, i, b"}}")?;
+    Ok(i)
+}
+
+fn merge_strategy(value: &[u8]) -> bool {
+    matches!(
+        value,
+        b"ort" | b"recursive" | b"resolve" | b"octopus" | b"ours" | b"subtree"
+    )
+}
+
+fn apply_merge_option<'a>(
+    value: &'a [u8],
+    favor: &mut Option<&'a [u8]>,
+    find_renames: &mut bool,
+    saw_renames: &mut bool,
+    threshold: &mut Option<u16>,
+    diff_algorithm: &mut Option<&'a [u8]>,
+    conflict_style: &mut Option<&'a [u8]>,
+    subtree: &mut Option<&'a [u8]>,
+) -> bool {
+    if value == b"ours" || value == b"theirs" {
+        if favor.is_some() {
+            return false;
+        }
+        *favor = Some(value);
+        return true;
+    }
+    if value == b"find-renames" || value == b"no-renames" {
+        if *saw_renames {
+            return false;
+        }
+        *saw_renames = true;
+        *find_renames = value == b"find-renames";
+        return true;
+    }
+    if let Some(raw) = value.strip_prefix(b"rename-threshold=") {
+        if threshold.is_some() {
+            return false;
+        }
+        let parsed = match parse_threshold(raw) {
+            Some(parsed) => parsed,
+            None => return false,
+        };
+        *threshold = Some(parsed);
+        return true;
+    }
+    if let Some(raw) = value.strip_prefix(b"diff-algorithm=") {
+        if diff_algorithm.is_some()
+            || !matches!(raw, b"histogram" | b"myers" | b"minimal" | b"patience")
+        {
+            return false;
+        }
+        *diff_algorithm = Some(raw);
+        return true;
+    }
+    if let Some(raw) = value.strip_prefix(b"conflict-style=") {
+        if conflict_style.is_some() || !matches!(raw, b"merge" | b"diff3" | b"zdiff3") {
+            return false;
+        }
+        *conflict_style = Some(raw);
+        return true;
+    }
+    if let Some(raw) = value.strip_prefix(b"subtree=") {
+        if subtree.is_some() || raw.is_empty() {
+            return false;
+        }
+        *subtree = Some(raw);
+        return true;
+    }
+    false
+}
+
+fn parse_threshold(value: &[u8]) -> Option<u16> {
+    if value.is_empty() || value.len() > 3 || !value.iter().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let mut number: u16 = 0;
+    for &byte in value {
+        number = number * 10 + (byte - b'0') as u16;
+    }
+    if number > 100 {
+        None
+    } else {
+        Some(number)
+    }
+}
+
+fn push_u16(out: &mut [u8], mut i: usize, value: u16) -> Result<usize, i32> {
+    let mut buf = [0u8; 3];
+    let mut length = 0usize;
+    let mut number = value;
+    loop {
+        buf[length] = b'0' + (number % 10) as u8;
+        length += 1;
+        number /= 10;
+        if number == 0 {
+            break;
+        }
+    }
+    while length > 0 {
+        length -= 1;
+        if i >= out.len() {
+            return Err(1);
+        }
+        out[i] = buf[length];
+        i += 1;
+    }
+    Ok(i)
 }

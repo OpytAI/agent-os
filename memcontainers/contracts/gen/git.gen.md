@@ -36,6 +36,7 @@ Envelope: `AOGQ|AOGR`, version `1.0`, 20-byte little-endian header.
 | `OP_IGNORE_QUERY` | `0x011e` |
 | `OP_SPARSE` | `0x011f` |
 | `OP_SUBMODULE` | `0x0120` |
+| `OP_MERGE` | `0x0121` |
 | `OP_OBJECT` | `0x0200` |
 | `OP_REF` | `0x0210` |
 | `OP_REF_TRANSACTION` | `0x0211` |
@@ -97,3 +98,7 @@ Envelope: `AOGQ|AOGR`, version `1.0`, 20-byte little-endian header.
 | `SubmoduleRequest` | `39` | `1` |
 | `SubmoduleEntry` | `40` | `1` |
 | `SubmoduleResult` | `41` | `1` |
+| `MergeHead` | `42` | `1` |
+| `MergeRequest` | `43` | `1` |
+| `MergeConflict` | `44` | `1` |
+| `MergeResult` | `45` | `1` |

@@ -1225,7 +1225,9 @@ Three faces use **one** shared engine core:
 
 **Rule:** commands are a shell adapter. Catalog tool `git run` is not productized; guest verbs use
 host_call `"git"`. JavaScript, Elixir, the guest CLI, and mount relays do not implement Git
-semantics independently.
+semantics independently. Merge, abort, and continue are local engine operations. Pull does not
+content-merge. A diverged pull fetches, then fails, and writes nothing. Fetch, then merge, is how
+a guest combines diverged histories.
 
 ### 11b.2 Engine and packaging
 

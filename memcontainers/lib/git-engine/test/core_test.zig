@@ -449,6 +449,331 @@ test "reference transactions are atomic generational and session owned" {
     try expectMissingReference(&engine, allocator, first_session, 161, "refs/heads/aborted");
 }
 
+test "merge commits both parents and round-trips conflicts" {
+    const allocator = std.testing.allocator;
+    var engine = core.Engine(Browser).init(allocator, .{});
+    defer engine.deinit();
+    var ids: u32 = 400;
+    const session = try openSession(&engine, allocator);
+    try initializeRepository(&engine, allocator, session, bump(&ids));
+
+    const readonly = try openReadOnly(&engine, allocator);
+    try expectFailure(&engine, allocator, readonly, @intCast(contract.OP_MERGE), bump(&ids), &.{}, contract.ERROR_PATH, contract.ERROR_CODE_DENIED, contract.RETRY_NEVER);
+
+    const base = try createCommit(&engine, allocator, session, reserve(&ids, 3), "note.txt", "a\nb\nc\n", "base");
+    const ours = try createCommit(&engine, allocator, session, reserve(&ids, 3), "note.txt", "A\nb\nc\n", "ours");
+    const base_hex = formatHex(base);
+    try resetHard(&engine, allocator, session, bump(&ids), &base_hex);
+    const theirs = try createCommit(&engine, allocator, session, reserve(&ids, 3), "note.txt", "a\nb\nC\n", "theirs");
+    const ours_hex = formatHex(ours);
+    const theirs_hex = formatHex(theirs);
+    try resetHard(&engine, allocator, session, bump(&ids), &ours_hex);
+
+    const merged = try runMerge(&engine, allocator, session, bump(&ids), &.{&theirs_hex}, .{});
+    defer freeMerge(allocator, merged);
+    try std.testing.expectEqual(@as(u16, @intCast(contract.MERGE_OUTCOME_COMMITTED)), merged.outcome);
+    const merge_hash = merged.hash orelse return error.UnexpectedObjectId;
+    const object = try commitObject(&engine, allocator, session, bump(&ids), &merge_hash);
+    defer allocator.free(object);
+    try std.testing.expect(std.mem.indexOf(u8, object, "1700000000") != null);
+    try std.testing.expect(std.mem.indexOf(u8, object, "AgentOS") != null);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, object, "parent "));
+    const merged_text = try readText(&engine, allocator, session, bump(&ids), "note.txt");
+    defer allocator.free(merged_text);
+    try std.testing.expectEqualStrings("A\nb\nC\n", merged_text);
+
+    const ahead = try createCommit(&engine, allocator, session, reserve(&ids, 3), "extra.txt", "more\n", "ahead");
+    const merge_hex = formatHex(merge_hash);
+    try resetHard(&engine, allocator, session, bump(&ids), &merge_hex);
+    const ahead_hex = formatHex(ahead);
+    const forwarded = try runMerge(&engine, allocator, session, bump(&ids), &.{&ahead_hex}, .{});
+    defer freeMerge(allocator, forwarded);
+    try std.testing.expectEqual(@as(u16, @intCast(contract.MERGE_OUTCOME_FAST_FORWARD)), forwarded.outcome);
+    try std.testing.expectEqualSlices(u8, &ahead, &(forwarded.hash orelse return error.UnexpectedObjectId));
+    const continue_after_ff = try continuePayload(allocator);
+    defer allocator.free(continue_after_ff);
+    try expectFailure(&engine, allocator, session, @intCast(contract.OP_MERGE), bump(&ids), continue_after_ff, contract.ERROR_WORKTREE, contract.ERROR_CODE_STALE, contract.RETRY_NEVER);
+
+    try resetHard(&engine, allocator, session, bump(&ids), &merge_hex);
+    const side = try createCommit(&engine, allocator, session, reserve(&ids, 3), "other.txt", "side\n", "side");
+    try resetHard(&engine, allocator, session, bump(&ids), &ahead_hex);
+    const side_hex = formatHex(side);
+    const ff_only = try mergePayload(allocator, &.{&side_hex}, .{ .fast_forward = @intCast(contract.MERGE_FF_ONLY) });
+    defer allocator.free(ff_only);
+    try expectFailure(&engine, allocator, session, @intCast(contract.OP_MERGE), bump(&ids), ff_only, contract.ERROR_REFERENCE, contract.ERROR_CODE_CONFLICT, contract.RETRY_NEVER);
+    const stayed = try headHash(&engine, allocator, session, bump(&ids));
+    try std.testing.expectEqualSlices(u8, &ahead, &stayed);
+    const extra_text = try readText(&engine, allocator, session, bump(&ids), "extra.txt");
+    defer allocator.free(extra_text);
+    try std.testing.expectEqualStrings("more\n", extra_text);
+    const continue_after_ff_only = try continuePayload(allocator);
+    defer allocator.free(continue_after_ff_only);
+    try expectFailure(&engine, allocator, session, @intCast(contract.OP_MERGE), bump(&ids), continue_after_ff_only, contract.ERROR_WORKTREE, contract.ERROR_CODE_STALE, contract.RETRY_NEVER);
+
+    const conflict_base = try createCommit(&engine, allocator, session, reserve(&ids, 3), "conflict.txt", "a\nb\nc\n", "conflict base");
+    const conflict_ours = try createCommit(&engine, allocator, session, reserve(&ids, 3), "conflict.txt", "a\nX\nc\n", "conflict ours");
+    const conflict_base_hex = formatHex(conflict_base);
+    try resetHard(&engine, allocator, session, bump(&ids), &conflict_base_hex);
+    const conflict_theirs = try createCommit(&engine, allocator, session, reserve(&ids, 3), "conflict.txt", "a\nY\nc\n", "conflict theirs");
+    const conflict_ours_hex = formatHex(conflict_ours);
+    const conflict_theirs_hex = formatHex(conflict_theirs);
+    try resetHard(&engine, allocator, session, bump(&ids), &conflict_ours_hex);
+    const conflicted = try runMerge(&engine, allocator, session, bump(&ids), &.{&conflict_theirs_hex}, .{});
+    defer freeMerge(allocator, conflicted);
+    try std.testing.expectEqual(@as(u16, @intCast(contract.MERGE_OUTCOME_CONFLICTS)), conflicted.outcome);
+    try std.testing.expect(conflicted.hash == null);
+    try std.testing.expect(conflicted.conflicts.len >= 1);
+    try std.testing.expectEqual(@as(u16, 'U'), conflicted.conflicts[0].ours);
+    try std.testing.expectEqual(@as(u16, 'U'), conflicted.conflicts[0].theirs);
+    try std.testing.expect(try statusHas(&engine, allocator, session, bump(&ids), "conflict.txt", 'U', 'U'));
+    const again = try mergePayload(allocator, &.{&conflict_theirs_hex}, .{});
+    defer allocator.free(again);
+    try expectFailure(&engine, allocator, session, @intCast(contract.OP_MERGE), bump(&ids), again, contract.ERROR_WORKTREE, contract.ERROR_CODE_CONFLICT, contract.RETRY_AFTER_INPUT);
+    try addPath(&engine, allocator, session, bump(&ids), "conflict.txt");
+    _ = try commitMessage(&engine, allocator, session, bump(&ids), "resolve conflict");
+    const continue_after_commit = try continuePayload(allocator);
+    defer allocator.free(continue_after_commit);
+    try expectFailure(&engine, allocator, session, @intCast(contract.OP_MERGE), bump(&ids), continue_after_commit, contract.ERROR_WORKTREE, contract.ERROR_CODE_STALE, contract.RETRY_NEVER);
+
+    const abort_base = try createCommit(&engine, allocator, session, reserve(&ids, 3), "abort.txt", "a\nb\nc\n", "abort base");
+    const abort_ours = try createCommit(&engine, allocator, session, reserve(&ids, 3), "abort.txt", "a\nX\nc\n", "abort ours");
+    const abort_base_hex = formatHex(abort_base);
+    try resetHard(&engine, allocator, session, bump(&ids), &abort_base_hex);
+    const abort_theirs = try createCommit(&engine, allocator, session, reserve(&ids, 3), "abort.txt", "a\nY\nc\n", "abort theirs");
+    const abort_ours_hex = formatHex(abort_ours);
+    const abort_theirs_hex = formatHex(abort_theirs);
+    try resetHard(&engine, allocator, session, bump(&ids), &abort_ours_hex);
+    const abort_merge = try runMerge(&engine, allocator, session, bump(&ids), &.{&abort_theirs_hex}, .{});
+    defer freeMerge(allocator, abort_merge);
+    try std.testing.expectEqual(@as(u16, @intCast(contract.MERGE_OUTCOME_CONFLICTS)), abort_merge.outcome);
+    const aborted = try runMerge(&engine, allocator, session, bump(&ids), &.{}, .{ .action = @intCast(contract.ACTION_ABORT) });
+    defer freeMerge(allocator, aborted);
+    try std.testing.expectEqual(@as(u16, @intCast(contract.MERGE_OUTCOME_ABORTED)), aborted.outcome);
+    const restored = try readText(&engine, allocator, session, bump(&ids), "abort.txt");
+    defer allocator.free(restored);
+    try std.testing.expectEqualStrings("a\nX\nc\n", restored);
+    try std.testing.expect(std.mem.indexOf(u8, restored, "<<<<<<<") == null);
+    const continue_after_abort = try continuePayload(allocator);
+    defer allocator.free(continue_after_abort);
+    try expectFailure(&engine, allocator, session, @intCast(contract.OP_MERGE), bump(&ids), continue_after_abort, contract.ERROR_WORKTREE, contract.ERROR_CODE_STALE, contract.RETRY_NEVER);
+
+    const octopus_base = try createCommit(&engine, allocator, session, reserve(&ids, 3), "octo.txt", "base\n", "octopus base");
+    const octopus_left = try createCommit(&engine, allocator, session, reserve(&ids, 3), "octo.txt", "left\n", "octopus left");
+    const octopus_base_hex = formatHex(octopus_base);
+    try resetHard(&engine, allocator, session, bump(&ids), &octopus_base_hex);
+    const octopus_right = try createCommit(&engine, allocator, session, reserve(&ids, 3), "octo.txt", "right\n", "octopus right");
+    const left_hex = formatHex(octopus_left);
+    const right_hex = formatHex(octopus_right);
+    try resetHard(&engine, allocator, session, bump(&ids), &octopus_base_hex);
+    const octopus = try mergePayload(allocator, &.{ &left_hex, &right_hex }, .{ .strategy = @intCast(contract.MERGE_STRATEGY_OCTOPUS) });
+    defer allocator.free(octopus);
+    try expectFailure(&engine, allocator, session, @intCast(contract.OP_MERGE), bump(&ids), octopus, contract.ERROR_WORKTREE, contract.ERROR_CODE_CONFLICT, contract.RETRY_NEVER);
+    const octopus_text = try readText(&engine, allocator, session, bump(&ids), "octo.txt");
+    defer allocator.free(octopus_text);
+    try std.testing.expectEqualStrings("base\n", octopus_text);
+
+    try writeRepositoryFile(&engine, allocator, session, bump(&ids), "octo.txt", "dirty\n");
+    const dirty = try mergePayload(allocator, &.{&left_hex}, .{});
+    defer allocator.free(dirty);
+    try expectFailure(&engine, allocator, session, @intCast(contract.OP_MERGE), bump(&ids), dirty, contract.ERROR_WORKTREE, contract.ERROR_CODE_CONFLICT, contract.RETRY_AFTER_INPUT);
+    const dirty_text = try readText(&engine, allocator, session, bump(&ids), "octo.txt");
+    defer allocator.free(dirty_text);
+    try std.testing.expectEqualStrings("dirty\n", dirty_text);
+    try resetHard(&engine, allocator, session, bump(&ids), "HEAD");
+
+    _ = try createCommit(&engine, allocator, session, reserve(&ids, 3), "dir/keep.txt", "keep\n", "sparse");
+    const sparse_paths = [_]contract.StringPair{.{ .key = "dir", .value = "" }};
+    const sparse_payload = try (contract.PorcelainRequest{ .action = @intCast(contract.ACTION_LIST), .flags = 0, .paths = &sparse_paths }).encode(allocator);
+    defer allocator.free(sparse_payload);
+    const sparse_id = bump(&ids);
+    const sparsened = try executeRequest(&engine, allocator, session, @intCast(contract.OP_SPARSE), sparse_id, sparse_payload);
+    defer allocator.free(sparsened);
+    try expectEnvelope(sparsened, @intCast(contract.OP_SPARSE), @intCast(contract.STATUS_OK), sparse_id);
+    const sparse_merge = try mergePayload(allocator, &.{"HEAD"}, .{});
+    defer allocator.free(sparse_merge);
+    try expectFailure(&engine, allocator, session, @intCast(contract.OP_MERGE), bump(&ids), sparse_merge, contract.ERROR_USAGE, contract.ERROR_CODE_INVALID, contract.RETRY_NEVER);
+}
+
+const MergeCall = struct {
+    strategy: u16 = @intCast(contract.MERGE_STRATEGY_DEFAULT),
+    fast_forward: u16 = @intCast(contract.MERGE_FF),
+    action: u16 = @intCast(contract.ACTION_CREATE),
+};
+
+const MergeView = struct {
+    outcome: u16,
+    hash: ?[20]u8 = null,
+    conflicts: []const contract.MergeConflict,
+    response: []u8,
+};
+
+fn bump(ids: *u32) u32 {
+    const id = ids.*;
+    ids.* += 1;
+    return id;
+}
+
+fn reserve(ids: *u32, count: u32) u32 {
+    const id = ids.*;
+    ids.* += count;
+    return id;
+}
+
+fn formatHex(hash: [20]u8) [40]u8 {
+    var out: [40]u8 = undefined;
+    const digits = "0123456789abcdef";
+    for (hash, 0..) |byte, index| {
+        out[index * 2] = digits[byte >> 4];
+        out[index * 2 + 1] = digits[byte & 0xf];
+    }
+    return out;
+}
+
+fn mergeIdentity() contract.Signature {
+    return .{ .name = "AgentOS", .email = "agentos@example.test", .unix_seconds = 1_700_000_000, .timezone_minutes = 0 };
+}
+
+fn mergePayload(allocator: std.mem.Allocator, revisions: []const []const u8, call: MergeCall) ![]u8 {
+    const heads = try allocator.alloc(contract.MergeHead, revisions.len);
+    defer allocator.free(heads);
+    for (revisions, 0..) |revision, index| heads[index] = .{ .revision = revision };
+    const identity = mergeIdentity();
+    return (contract.MergeRequest{
+        .action = call.action,
+        .heads = heads,
+        .strategy = call.strategy,
+        .fast_forward = call.fast_forward,
+        .favor = @intCast(contract.MERGE_FAVOR_NONE),
+        .diff_algorithm = @intCast(contract.MERGE_DIFF_HISTOGRAM),
+        .conflict_style = @intCast(contract.MERGE_STYLE_MERGE),
+        .find_renames = true,
+        .no_commit = false,
+        .allow_unrelated_histories = false,
+        .author = identity,
+        .committer = identity,
+    }).encode(allocator);
+}
+
+fn continuePayload(allocator: std.mem.Allocator) ![]u8 {
+    return mergePayload(allocator, &.{}, .{ .action = @intCast(contract.ACTION_FINISH) });
+}
+
+fn runMerge(engine: anytype, allocator: std.mem.Allocator, session: u32, request_id: u32, revisions: []const []const u8, call: MergeCall) !MergeView {
+    const payload = try mergePayload(allocator, revisions, call);
+    defer allocator.free(payload);
+    const response = try executeRequest(engine, allocator, session, @intCast(contract.OP_MERGE), request_id, payload);
+    errdefer allocator.free(response);
+    try expectEnvelope(response, @intCast(contract.OP_MERGE), @intCast(contract.STATUS_OK), request_id);
+    const result = try contract.MergeResult.decode(allocator, response[contract.ENVELOPE_HEADER_BYTES..]);
+    var hash: ?[20]u8 = null;
+    if (result.object_id) |oid| {
+        if (oid.bytes.len != 20) return error.UnexpectedObjectId;
+        var copied: [20]u8 = undefined;
+        @memcpy(&copied, oid.bytes);
+        hash = copied;
+    }
+    return .{ .outcome = result.outcome, .hash = hash, .conflicts = result.conflicts, .response = response };
+}
+
+fn freeMerge(allocator: std.mem.Allocator, view: MergeView) void {
+    allocator.free(view.conflicts);
+    allocator.free(view.response);
+}
+
+fn expectFailure(engine: anytype, allocator: std.mem.Allocator, session: u32, opcode: u16, request_id: u32, payload: []const u8, domain: u32, code: u32, retry: u32) !void {
+    const response = try executeRequest(engine, allocator, session, opcode, request_id, payload);
+    defer allocator.free(response);
+    try expectEnvelope(response, opcode, @intCast(contract.STATUS_ERROR), request_id);
+    const failure = try contract.EngineError.decode(allocator, response[contract.ENVELOPE_HEADER_BYTES..]);
+    try std.testing.expectEqual(@as(u16, @intCast(domain)), failure.domain);
+    try std.testing.expectEqual(@as(u16, @intCast(code)), failure.code);
+    try std.testing.expectEqual(@as(u16, @intCast(retry)), failure.retry);
+}
+
+fn headHash(engine: anytype, allocator: std.mem.Allocator, session: u32, request_id: u32) ![20]u8 {
+    const payload = try (contract.PorcelainRequest{ .action = @intCast(contract.ACTION_GET), .flags = 0, .revision = "HEAD", .paths = &.{} }).encode(allocator);
+    defer allocator.free(payload);
+    const response = try executeRequest(engine, allocator, session, @intCast(contract.OP_RESOLVE_REVISION), request_id, payload);
+    defer allocator.free(response);
+    try expectEnvelope(response, @intCast(contract.OP_RESOLVE_REVISION), @intCast(contract.STATUS_OK), request_id);
+    const result = try contract.ResolveResult.decode(allocator, response[contract.ENVELOPE_HEADER_BYTES..]);
+    if (result.object_id.bytes.len != 20) return error.UnexpectedObjectId;
+    var hash: [20]u8 = undefined;
+    @memcpy(&hash, result.object_id.bytes);
+    return hash;
+}
+
+fn resetHard(engine: anytype, allocator: std.mem.Allocator, session: u32, request_id: u32, revision: []const u8) !void {
+    const payload = try (contract.PorcelainRequest{ .action = @intCast(contract.RESET_HARD), .flags = 0, .revision = revision, .paths = &.{} }).encode(allocator);
+    defer allocator.free(payload);
+    const response = try executeRequest(engine, allocator, session, @intCast(contract.OP_RESET), request_id, payload);
+    defer allocator.free(response);
+    try expectEnvelope(response, @intCast(contract.OP_RESET), @intCast(contract.STATUS_OK), request_id);
+}
+
+fn addPath(engine: anytype, allocator: std.mem.Allocator, session: u32, request_id: u32, path: []const u8) !void {
+    const paths = [_]contract.StringPair{.{ .key = path, .value = "" }};
+    const payload = try (contract.PorcelainRequest{ .action = @intCast(contract.ACTION_UPDATE), .flags = 0, .paths = &paths }).encode(allocator);
+    defer allocator.free(payload);
+    const response = try executeRequest(engine, allocator, session, @intCast(contract.OP_ADD), request_id, payload);
+    defer allocator.free(response);
+    try expectEnvelope(response, @intCast(contract.OP_ADD), @intCast(contract.STATUS_OK), request_id);
+}
+
+fn commitMessage(engine: anytype, allocator: std.mem.Allocator, session: u32, request_id: u32, message: []const u8) ![20]u8 {
+    const identity = mergeIdentity();
+    const payload = try (contract.PorcelainRequest{ .action = @intCast(contract.ACTION_CREATE), .flags = 0, .message = message, .paths = &.{}, .author = identity, .committer = identity }).encode(allocator);
+    defer allocator.free(payload);
+    const response = try executeRequest(engine, allocator, session, @intCast(contract.OP_COMMIT), request_id, payload);
+    defer allocator.free(response);
+    try expectEnvelope(response, @intCast(contract.OP_COMMIT), @intCast(contract.STATUS_OK), request_id);
+    const result = try contract.CommitResult.decode(allocator, response[contract.ENVELOPE_HEADER_BYTES..]);
+    if (result.object_id.bytes.len != 20) return error.UnexpectedObjectId;
+    var hash: [20]u8 = undefined;
+    @memcpy(&hash, result.object_id.bytes);
+    return hash;
+}
+
+fn readText(engine: anytype, allocator: std.mem.Allocator, session: u32, request_id: u32, path: []const u8) ![]u8 {
+    const payload = try (contract.FileRequest{ .path = path }).encode(allocator);
+    defer allocator.free(payload);
+    const response = try executeRequest(engine, allocator, session, @intCast(contract.OP_FILE_READ), request_id, payload);
+    defer allocator.free(response);
+    try expectEnvelope(response, @intCast(contract.OP_FILE_READ), @intCast(contract.STATUS_OK), request_id);
+    const result = try contract.FileResult.decode(allocator, response[contract.ENVELOPE_HEADER_BYTES..]);
+    return allocator.dupe(u8, result.data orelse return error.MissingData);
+}
+
+fn commitObject(engine: anytype, allocator: std.mem.Allocator, session: u32, request_id: u32, hash: []const u8) ![]u8 {
+    const payload = try (contract.ObjectRequest{ .action = @intCast(contract.ACTION_GET), .kind = 1, .object_id = .{ .algorithm = 1, .bytes = hash } }).encode(allocator);
+    defer allocator.free(payload);
+    const response = try executeRequest(engine, allocator, session, @intCast(contract.OP_OBJECT), request_id, payload);
+    defer allocator.free(response);
+    try expectEnvelope(response, @intCast(contract.OP_OBJECT), @intCast(contract.STATUS_OK), request_id);
+    const result = try contract.ObjectResult.decode(allocator, response[contract.ENVELOPE_HEADER_BYTES..]);
+    return allocator.dupe(u8, result.data orelse return error.MissingData);
+}
+
+fn statusHas(engine: anytype, allocator: std.mem.Allocator, session: u32, request_id: u32, path: []const u8, index: u16, worktree: u16) !bool {
+    const response = try executeRequest(engine, allocator, session, @intCast(contract.OP_STATUS), request_id, &.{});
+    defer allocator.free(response);
+    try expectEnvelope(response, @intCast(contract.OP_STATUS), @intCast(contract.STATUS_OK), request_id);
+    const result = try contract.StatusResult.decode(allocator, response[contract.ENVELOPE_HEADER_BYTES..]);
+    defer allocator.free(result.entries);
+    for (result.entries) |entry| {
+        if (entry.index == index and entry.worktree == worktree and std.mem.eql(u8, entry.path, path)) return true;
+    }
+    return false;
+}
+
+fn openReadOnly(engine: anytype, allocator: std.mem.Allocator) !u32 {
+    const config = try (contract.SessionConfig{ .backend = @intCast(contract.BACKEND_BROWSER), .read_only = true, .root = "" }).encode(allocator);
+    defer allocator.free(config);
+    const response = try takeResult(engine, allocator, engine.sessionOpen(config, 2));
+    defer allocator.free(response);
+    return (try contract.Result.decode(allocator, response[contract.ENVELOPE_HEADER_BYTES..])).handle.?;
+}
+
 fn openSession(engine: anytype, allocator: std.mem.Allocator) !u32 {
     const config = try (contract.SessionConfig{ .backend = @intCast(contract.BACKEND_BROWSER), .read_only = false, .root = "" }).encode(allocator);
     defer allocator.free(config);

@@ -55,7 +55,23 @@ host and resume only after the host returns bounded response messages.
 
 The thin CLI supports the documented reduced surface: `init`, `status`, `add`, `rm`, `commit`, `log`,
 `diff --cached`/`--staged`, `show`, `rev-parse`, `branch`, `checkout`/`switch`, `reset`, `tag`, limited `config` and `remote`,
-plus `clone`, `fetch`, `pull`, and `push`. Unknown or unsupported forms fail closed.
+`merge`, plus `clone`, `fetch`, `pull`, and `push`. Unknown or unsupported forms fail closed.
+
+`git merge [options] <rev>...` starts a merge. `git merge --abort` restores the pre-merge worktree.
+`git merge --continue` finishes a merge whose conflicts are resolved. A content conflict is a successful
+engine result. The guest exit code is 1. Conflict lines go to stdout. Stderr is one line,
+`merge conflicts`. The supported options are `--no-commit`, `--ff`, `--no-ff`, `--ff-only`,
+`-s ort|recursive|resolve|octopus|ours|subtree`, `-m`, `--allow-unrelated-histories`, and
+`-X ours|theirs|find-renames|no-renames|rename-threshold=<0-100>|diff-algorithm=histogram|myers|minimal|patience|conflict-style=merge|diff3|zdiff3|subtree=<path>`.
+
+Merge limits:
+
+- A sparse session refuses merge. Merge materializes the whole tree.
+- `--squash`, `-s theirs`, custom merge drivers, rerere, mergetools, hooks, and whitespace `-X` options are outside the surface.
+- Any tracked local edit refuses the merge. The engine writes nothing.
+- With one merged revision, conflict markers use that revision string.
+- `git commit` during an open merge finishes that merge when the index is clean.
+- `pull` stays fast-forward only. A diverged pull fetches, then fails, and writes nothing. Fetch, then merge, is the divergence sequence.
 
 The reduced `diff` operation returns a bounded, newline-delimited staged change summary such as
 `<Modify path>`. It is not a unified patch. Unstaged diff and path-filtered diff are not exposed.

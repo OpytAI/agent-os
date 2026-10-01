@@ -96,6 +96,29 @@ function porcelain({ action, revision, message, paths = [], author, committer })
   ]);
 }
 
+function mergeHead(revision) {
+  return Buffer.concat([u16(42), Buffer.of(1), bytesField(Buffer.from(revision))]);
+}
+
+function mergeRequest({ action = 3, revisions = [], author, strategy = 0, ff = 0 }) {
+  const heads = [u32(revisions.length), ...revisions.map((revision) => bytesField(mergeHead(revision)))];
+  const signatureField = author === undefined ? Buffer.of(0) : Buffer.concat([Buffer.of(1), bytesField(author)]);
+  return Buffer.concat([
+    u16(43), Buffer.of(1), u16(action), ...heads,
+    u16(strategy), u16(ff), u16(0), u16(0), u16(0),
+    Buffer.of(1, 0, 0, 0, 0, 0),
+    signatureField, signatureField,
+  ]);
+}
+
+function fileRead(path) {
+  return Buffer.concat([u16(6), Buffer.of(1), bytesField(Buffer.from(path)), Buffer.of(0, 0, 0, 0, 0, 0)]);
+}
+
+function hashOf(frame) {
+  return frame.subarray(frame.length - 20).toString("hex");
+}
+
 function assertResponse(frame, opcode, requestId) {
   assert.equal(frame.subarray(0, 4).toString("ascii"), "AOGR");
   assert.equal(frame.readUInt16LE(8), opcode);
@@ -136,6 +159,55 @@ try {
   const resolved = await readFrame();
   assertResponse(resolved, 277, 8);
   assert.equal(resolved.readUInt16LE(20), 20);
+
+  async function call(opcode, id, payload) {
+    child.stdin.write(request(opcode, id, payload));
+    const frame = await readFrame();
+    assertResponse(frame, opcode, id);
+    return frame;
+  }
+  child.stdin.write(request(258, 20, fileWrite("lines.txt", "a\nb\nc\n")));
+  assertResponse(await readFrame(), 258, 20);
+  await call(273, 21, porcelain({ action: 4, paths: ["lines.txt"] }));
+  const baseCommit = await call(275, 22, porcelain({ action: 3, message: "merge base", author: sig, committer: sig }));
+  const base = hashOf(baseCommit);
+  child.stdin.write(request(258, 23, fileWrite("lines.txt", "A\nb\nc\n")));
+  assertResponse(await readFrame(), 258, 23);
+  await call(273, 24, porcelain({ action: 4, paths: ["lines.txt"] }));
+  const oursCommit = await call(275, 25, porcelain({ action: 3, message: "merge ours", author: sig, committer: sig }));
+  const ours = hashOf(oursCommit);
+  await call(281, 26, porcelain({ action: 3, revision: base }));
+  child.stdin.write(request(258, 27, fileWrite("lines.txt", "a\nb\nC\n")));
+  assertResponse(await readFrame(), 258, 27);
+  await call(273, 28, porcelain({ action: 4, paths: ["lines.txt"] }));
+  const theirsCommit = await call(275, 29, porcelain({ action: 3, message: "merge theirs", author: sig, committer: sig }));
+  await call(281, 30, porcelain({ action: 3, revision: ours }));
+  const clean = await call(289, 31, mergeRequest({ revisions: [hashOf(theirsCommit)], author: sig }));
+  assert.equal(clean.readUInt16LE(20), 45);
+  assert.equal(clean.readUInt16LE(27), 3);
+  child.stdin.write(request(258, 32, fileWrite("conflict.txt", "a\nb\nc\n")));
+  assertResponse(await readFrame(), 258, 32);
+  await call(273, 33, porcelain({ action: 4, paths: ["conflict.txt"] }));
+  const conflictBase = hashOf(await call(275, 34, porcelain({ action: 3, message: "conflict base", author: sig, committer: sig })));
+  child.stdin.write(request(258, 35, fileWrite("conflict.txt", "a\nX\nc\n")));
+  assertResponse(await readFrame(), 258, 35);
+  await call(273, 36, porcelain({ action: 4, paths: ["conflict.txt"] }));
+  const conflictOurs = hashOf(await call(275, 37, porcelain({ action: 3, message: "conflict ours", author: sig, committer: sig })));
+  await call(281, 38, porcelain({ action: 3, revision: conflictBase }));
+  child.stdin.write(request(258, 39, fileWrite("conflict.txt", "a\nY\nc\n")));
+  assertResponse(await readFrame(), 258, 39);
+  await call(273, 40, porcelain({ action: 4, paths: ["conflict.txt"] }));
+  const conflictTheirs = hashOf(await call(275, 41, porcelain({ action: 3, message: "conflict theirs", author: sig, committer: sig })));
+  await call(281, 42, porcelain({ action: 3, revision: conflictOurs }));
+  const conflict = await call(289, 43, mergeRequest({ revisions: [conflictTheirs], author: sig }));
+  assert.equal(conflict.readUInt16LE(27), 4);
+  await access(join(root, ".git", "MERGE_HEAD"));
+  await access(join(root, ".git", "ORIG_HEAD"));
+  const abort = await call(289, 44, mergeRequest({ action: 9, author: sig }));
+  assert.equal(abort.readUInt16LE(27), 6);
+  assert.equal(await readFile(join(root, "conflict.txt"), "utf8"), "a\nX\nc\n");
+  await assert.rejects(access(join(root, ".git", "ORIG_HEAD")));
+  await assert.rejects(access(join(root, ".git", "MERGE_HEAD")));
 
   child.stdin.write(request(3, 9));
   child.stdin.end();

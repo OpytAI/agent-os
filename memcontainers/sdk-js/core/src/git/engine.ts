@@ -2,8 +2,10 @@
 
 import type { Driver } from "../types.js";
 import {
+  ACTION_ABORT,
   ACTION_CREATE,
   ACTION_DELETE,
+  ACTION_FINISH,
   ACTION_GET,
   ACTION_LIST,
   ACTION_UPDATE,
@@ -29,7 +31,31 @@ import {
   OP_FILE_STAT,
   OP_FILE_WRITE,
   OP_IGNORE_QUERY,
+  MERGE_DIFF_HISTOGRAM,
+  MERGE_DIFF_MINIMAL,
+  MERGE_DIFF_MYERS,
+  MERGE_DIFF_PATIENCE,
+  MERGE_FAVOR_NONE,
+  MERGE_FAVOR_OURS,
+  MERGE_FAVOR_THEIRS,
+  MERGE_FF,
+  MERGE_FF_NO_FF,
+  MERGE_FF_ONLY,
+  MERGE_OUTCOME_COMMITTED,
+  MERGE_OUTCOME_CONFLICTS,
+  MERGE_OUTCOME_FAST_FORWARD,
+  MERGE_STRATEGY_DEFAULT,
+  MERGE_STRATEGY_OCTOPUS,
+  MERGE_STRATEGY_ORT,
+  MERGE_STRATEGY_OURS,
+  MERGE_STRATEGY_RECURSIVE,
+  MERGE_STRATEGY_RESOLVE,
+  MERGE_STRATEGY_SUBTREE,
+  MERGE_STYLE_DIFF3,
+  MERGE_STYLE_MERGE,
+  MERGE_STYLE_ZDIFF3,
   OP_LOG,
+  OP_MERGE,
   OP_MOUNT,
   OP_REMOTE_METADATA,
   OP_REMOVE,
@@ -48,16 +74,20 @@ import {
   RESET_SOFT,
   decodeDirectoryResult,
   decodeFileResult,
+  decodeMergeResult,
   decodeResult,
   decodeSnapshotResult,
   decodeStatusResult,
   decodeSubmoduleResult,
   encodeFileRequest,
+  encodeMergeRequest,
   encodeMountRequest,
   encodePorcelainRequest,
   encodeSubmoduleRequest,
   type DirectoryResult,
   type FileResult,
+  type MergeRequest,
+  type MergeResult,
   type PorcelainRequest,
   type Signature,
 } from "@mc/contracts/git";
@@ -230,6 +260,10 @@ export class GitEngine {
               ...porcelain(args, this.identity), action: ACTION_CREATE,
             });
             return success(`${objectIdHex(result.object_id.bytes)}\n`, result);
+          }
+          case "merge": {
+            const result = decodeMergeResult(owned(this.bridge.execute(OP_MERGE, owned(encodeMergeRequest(mergeRequest(args, this.identity)))).payload));
+            return mergeResponse(result);
           }
           case "rev-parse":
           case "resolve": {
@@ -433,6 +467,84 @@ function resultResponse(payload: Uint8Array): GitResponse {
 
 function objectIdHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function namedConstant(value: string | undefined, table: Record<string, number>, fallback: number, label: string): number {
+  if (value === undefined) return fallback;
+  const mapped = table[value];
+  if (mapped === undefined) throw new Error(`invalid merge ${label}`);
+  return mapped;
+}
+
+function mergeRequest(args: Record<string, unknown>, id?: GitIdentity): MergeRequest {
+  const actionName = stringArg(args, "action") ?? "start";
+  const action = actionName === "abort" ? ACTION_ABORT
+    : actionName === "continue" || actionName === "finish" ? ACTION_FINISH
+    : actionName === "start" || actionName === "create" ? ACTION_CREATE
+    : (() => { throw new Error("invalid merge action"); })();
+  const rawHeads = args.heads;
+  const heads = Array.isArray(rawHeads)
+    ? rawHeads.map((head) => {
+      const revision = typeof head === "string" ? head : stringArg(head as Record<string, unknown>, "revision");
+      if (!revision) throw new Error("invalid merge head");
+      return { revision };
+    })
+    : [];
+  const signed = id ? signature(id, args) : undefined;
+  return {
+    action,
+    heads,
+    strategy: namedConstant(stringArg(args, "strategy"), {
+      ort: MERGE_STRATEGY_ORT,
+      recursive: MERGE_STRATEGY_RECURSIVE,
+      resolve: MERGE_STRATEGY_RESOLVE,
+      octopus: MERGE_STRATEGY_OCTOPUS,
+      ours: MERGE_STRATEGY_OURS,
+      subtree: MERGE_STRATEGY_SUBTREE,
+    }, MERGE_STRATEGY_DEFAULT, "strategy"),
+    fast_forward: namedConstant(stringArg(args, "ff", "fast_forward"), {
+      ff: MERGE_FF,
+      "no-ff": MERGE_FF_NO_FF,
+      "ff-only": MERGE_FF_ONLY,
+    }, MERGE_FF, "fast-forward"),
+    favor: namedConstant(stringArg(args, "favor"), {
+      none: MERGE_FAVOR_NONE,
+      ours: MERGE_FAVOR_OURS,
+      theirs: MERGE_FAVOR_THEIRS,
+    }, MERGE_FAVOR_NONE, "favor"),
+    diff_algorithm: namedConstant(stringArg(args, "diff_algorithm"), {
+      histogram: MERGE_DIFF_HISTOGRAM,
+      myers: MERGE_DIFF_MYERS,
+      minimal: MERGE_DIFF_MINIMAL,
+      patience: MERGE_DIFF_PATIENCE,
+    }, MERGE_DIFF_HISTOGRAM, "diff algorithm"),
+    conflict_style: namedConstant(stringArg(args, "conflict_style"), {
+      merge: MERGE_STYLE_MERGE,
+      diff3: MERGE_STYLE_DIFF3,
+      zdiff3: MERGE_STYLE_ZDIFF3,
+    }, MERGE_STYLE_MERGE, "conflict style"),
+    find_renames: args.find_renames !== false,
+    no_commit: args.no_commit === true,
+    allow_unrelated_histories: args.allow_unrelated_histories === true,
+    rename_threshold: numberArg(args, "rename_threshold") ?? null,
+    subtree_path: stringArg(args, "subtree", "subtree_path") ?? null,
+    message: stringArg(args, "message") ?? null,
+    author: signed ?? null,
+    committer: signed ?? null,
+  };
+}
+
+function mergeResponse(result: MergeResult): GitResponse {
+  if (result.outcome === MERGE_OUTCOME_CONFLICTS) {
+    const stdout = result.conflicts.map((row) =>
+      `${String.fromCharCode(row.ours)}${String.fromCharCode(row.theirs)} ${row.path}\n`,
+    ).join("");
+    return { ok: false, code: 1, stdout, stderr: "merge conflicts\n", result };
+  }
+  if ((result.outcome === MERGE_OUTCOME_COMMITTED || result.outcome === MERGE_OUTCOME_FAST_FORWARD) && result.object_id) {
+    return success(`${objectIdHex(result.object_id.bytes)}\n`, result);
+  }
+  return success("", result);
 }
 
 function submoduleText(entries: Array<{ path: string; gitlink?: { bytes: Uint8Array } | null; head?: { bytes: Uint8Array } | null }>): string {

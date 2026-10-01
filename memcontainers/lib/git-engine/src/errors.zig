@@ -42,6 +42,17 @@ pub fn classify(err: anyerror, opcode: u16) Classification {
         error.InvalidReferenceName, error.ReferenceNameEscape, error.ReferenceNameMismatch, error.DuplicateReference => domainCode(contract.ERROR_REFERENCE, Code.invalid),
         error.MalformedRefFile, error.EmptyRefFile => domainCode(contract.ERROR_REFERENCE, Code.invalid),
         error.BadConfig, error.InvalidMode, error.InvalidAction, error.MissingData, error.InvalidOffset, error.UnexpectedPayload => usage(Code.invalid),
+        error.NoMergeHeads, error.StrategyOptionNotSupported, error.SubtreeShiftNotFound, error.UnbornHead => usage(Code.invalid),
+        error.MissingAuthor, error.MissingCommitter => usage(Code.missing),
+        error.DirtyIndex, error.UnmergedPaths => retried(contract.ERROR_INDEX, Code.conflict, contract.RETRY_AFTER_INPUT),
+        error.DirtyWorktree, error.MergeInProgress => retried(contract.ERROR_WORKTREE, Code.conflict, contract.RETRY_AFTER_INPUT),
+        error.MergeNotInProgress, error.CorruptMergeState => domainCode(contract.ERROR_WORKTREE, Code.stale),
+        error.NotFastForward => domainCode(contract.ERROR_REFERENCE, Code.conflict),
+        error.UnrelatedHistories => retried(contract.ERROR_REPOSITORY, Code.denied, contract.RETRY_AFTER_INPUT),
+        error.ShallowHistory => domainCode(contract.ERROR_REPOSITORY, Code.invalid),
+        error.OctopusConflict => domainCode(contract.ERROR_WORKTREE, Code.conflict),
+        error.VirtualMergeDepth => domainCode(contract.ERROR_LIMIT, Code.invalid),
+        error.InvalidGitFileName => domainCode(contract.ERROR_INTERNAL, Code.invalid),
         error.MutationInProgress => domainCode(contract.ERROR_PERSISTENCE, Code.conflict),
         else => domainCode(defaultDomain(opcode), Code.invalid),
     };
@@ -60,7 +71,7 @@ fn defaultDomain(opcode: u16) u16 {
         contract.OP_OBJECT => @intCast(contract.ERROR_OBJECT),
         contract.OP_REF, contract.OP_REF_TRANSACTION => @intCast(contract.ERROR_REFERENCE),
         contract.OP_ADD => @intCast(contract.ERROR_INDEX),
-        contract.OP_CHECKOUT, contract.OP_STATUS, contract.OP_DIFF => @intCast(contract.ERROR_WORKTREE),
+        contract.OP_CHECKOUT, contract.OP_STATUS, contract.OP_DIFF, contract.OP_COMMIT, contract.OP_MERGE => @intCast(contract.ERROR_WORKTREE),
         contract.OP_PACK_IMPORT, contract.OP_PACK_BUILD => @intCast(contract.ERROR_PACK),
         contract.OP_CLONE, contract.OP_FETCH, contract.OP_PULL, contract.OP_PUSH => @intCast(contract.ERROR_REMOTE),
         contract.OP_CHECKPOINT, contract.OP_RESTORE => @intCast(contract.ERROR_PERSISTENCE),
@@ -80,6 +91,10 @@ fn domainCode(domain: anytype, code: u16) Classification {
     return .{ .domain = @intCast(domain), .code = code };
 }
 
+fn retried(domain: anytype, code: u16, retry: anytype) Classification {
+    return .{ .domain = @intCast(domain), .code = code, .retry = @intCast(retry) };
+}
+
 test "typed error classification preserves path reference limit and persistence domains" {
     const std = @import("std");
     try std.testing.expectEqual(@as(u16, @intCast(contract.ERROR_PATH)), classify(error.NotExist, contract.OP_FILE_READ).domain);
@@ -87,4 +102,13 @@ test "typed error classification preserves path reference limit and persistence 
     try std.testing.expectEqual(@as(u16, @intCast(contract.ERROR_REFERENCE)), classify(error.ReferenceHasChanged, contract.OP_REF).domain);
     try std.testing.expectEqual(@as(u16, @intCast(contract.ERROR_LIMIT)), classify(error.OutOfMemory, contract.OP_OBJECT).domain);
     try std.testing.expectEqual(@as(u16, @intCast(contract.ERROR_PERSISTENCE)), classify(error.InvalidTransactionJournal, contract.OP_REPOSITORY_OPEN).domain);
+    const not_ff = classify(error.NotFastForward, contract.OP_MERGE);
+    try std.testing.expectEqual(@as(u16, @intCast(contract.ERROR_REFERENCE)), not_ff.domain);
+    try std.testing.expectEqual(Code.conflict, not_ff.code);
+    try std.testing.expectEqual(@as(u16, @intCast(contract.RETRY_NEVER)), not_ff.retry);
+    const dirty = classify(error.DirtyWorktree, contract.OP_MERGE);
+    try std.testing.expectEqual(@as(u16, @intCast(contract.ERROR_WORKTREE)), dirty.domain);
+    try std.testing.expectEqual(@as(u16, @intCast(contract.RETRY_AFTER_INPUT)), dirty.retry);
+    try std.testing.expectEqual(@as(u16, @intCast(contract.ERROR_WORKTREE)), classify(error.MissingMessage, contract.OP_COMMIT).domain);
+    try std.testing.expectEqual(@as(u16, @intCast(contract.ERROR_USAGE)), classify(error.NoMergeHeads, contract.OP_MERGE).domain);
 }

@@ -368,6 +368,108 @@ defmodule AgentOS.GitEngineTest do
              )
   end
 
+  test "public merge reports conflicts and records the caller identity" do
+    root = temp_root("merge")
+
+    try do
+      assert {:ok, pid} = GitEngine.start(executable: engine_path(), root: root)
+      identity = %{name: "Public Test", email: "public@example.invalid"}
+      opts = [identity: identity]
+
+      assert_public_ok(pid, %{"op" => "init"}, opts)
+      commit_file(pid, opts, "note.txt", "a\nb\nc\n", "base")
+      base = head_hex(pid, opts)
+      commit_file(pid, opts, "note.txt", "A\nb\nc\n", "ours")
+      ours = head_hex(pid, opts)
+      assert_public_ok(pid, %{"op" => "reset", "args" => %{"mode" => "hard", "rev" => base}}, opts)
+      commit_file(pid, opts, "note.txt", "a\nb\nC\n", "theirs")
+      theirs = head_hex(pid, opts)
+      assert_public_ok(pid, %{"op" => "reset", "args" => %{"mode" => "hard", "rev" => ours}}, opts)
+
+      merged =
+        public_ok(
+          pid,
+          %{
+            "op" => "merge",
+            "args" => %{"heads" => [theirs], "when_unix" => 1_700_000_000}
+          },
+          opts
+        )
+
+      assert merged["stdout"] =~ ~r/^[0-9a-f]{40}\n$/
+      oid = Base.decode16!(merged["result"]["object_id"], case: :lower)
+
+      payload =
+        Git.encode_object_request(%{
+          action: Git.action_get(),
+          kind: 1,
+          object_id: %{algorithm: 1, bytes: oid},
+          data: nil
+        })
+
+      assert {:ok, %{status: status, payload: body}} = GitEngine.request(pid, Git.op_object(), payload)
+      assert status == Git.status_ok()
+      assert {:ok, object} = Git.decode_object_result(body)
+      assert object.data =~ "Public Test"
+      assert object.data =~ "1700000000"
+      assert length(String.split(object.data, "parent ")) == 3
+
+      commit_file(pid, opts, "conflict.txt", "a\nb\nc\n", "conflict base")
+      conflict_base = head_hex(pid, opts)
+      commit_file(pid, opts, "conflict.txt", "a\nX\nc\n", "conflict ours")
+      conflict_ours = head_hex(pid, opts)
+      assert_public_ok(pid, %{"op" => "reset", "args" => %{"mode" => "hard", "rev" => conflict_base}}, opts)
+      commit_file(pid, opts, "conflict.txt", "a\nY\nc\n", "conflict theirs")
+      conflict_theirs = head_hex(pid, opts)
+      assert_public_ok(pid, %{"op" => "reset", "args" => %{"mode" => "hard", "rev" => conflict_ours}}, opts)
+
+      assert {:ok, conflict_json} =
+               AgentOS.Git.Public.call(
+                 pid,
+                 AgentOS.Git.Json.encode(%{
+                   "op" => "merge",
+                   "args" => %{"heads" => [conflict_theirs], "when_unix" => 1_700_000_001}
+                 }),
+                 opts
+               )
+
+      assert {:ok, conflict} = AgentOS.Git.Json.decode(conflict_json)
+      assert conflict["ok"] == false
+      assert conflict["code"] == 1
+      assert conflict["stdout"] =~ "UU conflict.txt"
+      assert conflict["result"]["outcome"] == Git.merge_outcome_conflicts()
+      assert File.exists?(Path.join([root, ".git", "MERGE_HEAD"]))
+      assert File.exists?(Path.join([root, ".git", "ORIG_HEAD"]))
+
+      assert_public_ok(pid, %{"op" => "merge", "args" => %{"action" => "abort"}}, opts)
+      assert File.read!(Path.join(root, "conflict.txt")) == "a\nX\nc\n"
+      refute File.exists?(Path.join([root, ".git", "MERGE_HEAD"]))
+      refute File.exists?(Path.join([root, ".git", "ORIG_HEAD"]))
+
+      assert {:ok, missing_json} =
+               AgentOS.Git.Public.call(
+                 pid,
+                 AgentOS.Git.Json.encode(%{"op" => "merge", "args" => %{"heads" => ["HEAD"]}}),
+                 []
+               )
+
+      assert {:ok, %{"ok" => false}} = AgentOS.Git.Json.decode(missing_json)
+      assert :ok = GitEngine.stop(pid)
+    after
+      File.rm_rf(root)
+    end
+  end
+
+  defp commit_file(pid, opts, path, content, message) do
+    assert_public_ok(pid, %{"op" => "write", "args" => %{"path" => path, "content" => content}}, opts)
+    assert_public_ok(pid, %{"op" => "add", "args" => %{"path" => path}}, opts)
+    assert_public_ok(pid, %{"op" => "commit", "args" => %{"message" => message, "when_unix" => 1_700_000_000}}, opts)
+  end
+
+  defp head_hex(pid, opts) do
+    String.trim(public_ok(pid, %{"op" => "rev-parse", "args" => %{"rev" => "HEAD"}}, opts)["stdout"])
+  end
+
   defp porcelain(overrides) do
     defaults = %{
       action: Git.action_get(),

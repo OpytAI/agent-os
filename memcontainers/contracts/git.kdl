@@ -50,6 +50,7 @@ constant "OP_REMOTE_METADATA" value=285
 constant "OP_IGNORE_QUERY" value=286
 constant "OP_SPARSE" value=287
 constant "OP_SUBMODULE" value=288
+constant "OP_MERGE" value=289
 
 // Objects, refs, packs, mounts, remotes, persistence.
 constant "OP_OBJECT" value=512
@@ -105,6 +106,33 @@ constant "RESET_SOFT" value=1
 constant "RESET_MIXED" value=2
 constant "RESET_HARD" value=3
 constant "RESET_MERGE" value=4
+// Merge discriminants. 0 strategy is ort for one head and octopus for several.
+constant "MERGE_STRATEGY_DEFAULT" value=0
+constant "MERGE_STRATEGY_ORT" value=1
+constant "MERGE_STRATEGY_RECURSIVE" value=2
+constant "MERGE_STRATEGY_RESOLVE" value=3
+constant "MERGE_STRATEGY_OCTOPUS" value=4
+constant "MERGE_STRATEGY_OURS" value=5
+constant "MERGE_STRATEGY_SUBTREE" value=6
+constant "MERGE_FF" value=0
+constant "MERGE_FF_NO_FF" value=1
+constant "MERGE_FF_ONLY" value=2
+constant "MERGE_FAVOR_NONE" value=0
+constant "MERGE_FAVOR_OURS" value=1
+constant "MERGE_FAVOR_THEIRS" value=2
+constant "MERGE_DIFF_HISTOGRAM" value=0
+constant "MERGE_DIFF_MYERS" value=1
+constant "MERGE_DIFF_MINIMAL" value=2
+constant "MERGE_DIFF_PATIENCE" value=3
+constant "MERGE_STYLE_MERGE" value=0
+constant "MERGE_STYLE_DIFF3" value=1
+constant "MERGE_STYLE_ZDIFF3" value=2
+constant "MERGE_OUTCOME_UP_TO_DATE" value=1
+constant "MERGE_OUTCOME_FAST_FORWARD" value=2
+constant "MERGE_OUTCOME_COMMITTED" value=3
+constant "MERGE_OUTCOME_CONFLICTS" value=4
+constant "MERGE_OUTCOME_UNCOMMITTED" value=5
+constant "MERGE_OUTCOME_ABORTED" value=6
 
 // Stable status/error domains and retry classes.
 constant "STATUS_OK" value=0
@@ -433,4 +461,41 @@ message "SubmoduleEntry" id=40 version=1 {
 message "SubmoduleResult" id=41 version=1 {
   field "generation" type="u32"
   field "entries" type="list<SubmoduleEntry>" max=4096
+}
+
+message "MergeHead" id=42 version=1 {
+  field "revision" type="str" max=1024
+}
+
+message "MergeRequest" id=43 version=1 {
+  // CREATE starts a merge. ABORT and FINISH ignore heads.
+  field "action" type="u16"
+  field "heads" type="list<MergeHead>" max=64
+  field "strategy" type="u16"
+  field "fast_forward" type="u16"
+  field "favor" type="u16"
+  field "diff_algorithm" type="u16"
+  field "conflict_style" type="u16"
+  field "find_renames" type="bool"
+  field "no_commit" type="bool"
+  field "allow_unrelated_histories" type="bool"
+  field "rename_threshold" type="u16" opt=1
+  field "subtree_path" type="str" max=4096 opt=1
+  field "message" type="str" max=262144 opt=1
+  field "author" type="Signature" opt=1
+  field "committer" type="Signature" opt=1
+}
+
+message "MergeConflict" id=44 version=1 {
+  // ours and theirs are the status letters U, A, or D.
+  field "path" type="str" max=4096
+  field "ours" type="u16"
+  field "theirs" type="u16"
+}
+
+message "MergeResult" id=45 version=1 {
+  field "generation" type="u32"
+  field "outcome" type="u16"
+  field "object_id" type="ObjectId" opt=1
+  field "conflicts" type="list<MergeConflict>" max=4096
 }

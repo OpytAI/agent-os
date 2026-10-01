@@ -68,12 +68,14 @@ fn main() -> i32 {
     }
     if cmd == b"help" || cmd == b"--help" {
         eprint(
-            b"usage: git <init|status|add|rm|commit|log|diff|show|rev-parse|branch|checkout|switch|reset|tag|config|remote|check-ignore|submodule|version|clone|fetch|pull|push>\n",
+            b"usage: git <init|status|add|rm|commit|log|diff|show|rev-parse|branch|checkout|switch|reset|tag|config|remote|check-ignore|submodule|merge|version|clone|fetch|pull|push>\n",
         );
         eprint(b"all commands use host_call git; clone works outside a repository\n");
         eprint(
             b"diff --cached|--staged; clone [--depth N] <url>; push <url> <source:destination>; submodule <list|status|update> [path]\n",
         );
+        eprint(b"merge [--no-commit] [--ff|--no-ff|--ff-only] [-s ort|recursive|resolve|octopus|ours|subtree] [-m message] <rev>...\n");
+        eprint(b"merge --abort; merge --continue\n");
         return 0;
     }
 
@@ -288,6 +290,7 @@ fn build_request(cmd: &[u8], args: &[&[u8]], out: &mut [u8]) -> Result<usize, i3
         || cmd == b"checkout"
         || cmd == b"switch"
         || cmd == b"rev-parse"
+        || cmd == b"merge"
     {
         return match build_local_request(cmd, args, out) {
             Ok(n) => Ok(n),
@@ -304,6 +307,10 @@ fn build_request(cmd: &[u8], args: &[&[u8]], out: &mut [u8]) -> Result<usize, i3
                     eprint(b"usage: git checkout|switch <name>\n");
                 } else if cmd == b"rev-parse" {
                     eprint(b"usage: git rev-parse [rev]\n");
+                } else if cmd == b"merge" {
+                    eprint(b"usage: git merge [--no-commit] [--ff|--no-ff|--ff-only] [-s ort|recursive|resolve|octopus|ours|subtree] [-X ours|theirs|find-renames|no-renames|rename-threshold=N|diff-algorithm=histogram|myers|minimal|patience|conflict-style=merge|diff3|zdiff3|subtree=PATH] [--allow-unrelated-histories] [-m <message>] <rev>...\n");
+                    eprint(b"       git merge --abort\n");
+                    eprint(b"       git merge --continue\n");
                 }
                 Err(code)
             }

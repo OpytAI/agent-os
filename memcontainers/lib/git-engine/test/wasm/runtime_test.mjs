@@ -106,6 +106,29 @@ function signature(name, email, seconds) {
   return concat(u16(4), Uint8Array.of(1), bytesField(encoder.encode(name)), bytesField(encoder.encode(email)), i64(seconds), i32(0));
 }
 
+function mergeHead(revision) {
+  return concat(u16(42), Uint8Array.of(1), bytesField(encoder.encode(revision)));
+}
+
+function mergeRequest({ action = 3, revisions = [], author, strategy = 0, ff = 0 }) {
+  const heads = [u32(revisions.length), ...revisions.map((revision) => bytesField(mergeHead(revision)))];
+  const signatureField = author === undefined ? Uint8Array.of(0) : concat(Uint8Array.of(1), bytesField(author));
+  return concat(
+    u16(43), Uint8Array.of(1), u16(action), ...heads,
+    u16(strategy), u16(ff), u16(0), u16(0), u16(0),
+    Uint8Array.of(1, 0, 0, 0, 0, 0),
+    signatureField, signatureField,
+  );
+}
+
+function fileRead(path) {
+  return concat(u16(6), Uint8Array.of(1), bytesField(encoder.encode(path)), Uint8Array.of(0, 0, 0, 0, 0, 0));
+}
+
+function hashOf(frame) {
+  return Array.from(frame.subarray(frame.length - 20), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function porcelain({ action, revision, message, paths = [], author, committer }) {
   const sorted = [...paths].sort();
   const map = [u32(sorted.length)];
@@ -160,6 +183,41 @@ assert.equal(new DataView(run(session, request(275, 47, porcelain({ action: 3, m
 const resolved = run(session, request(277, 48, porcelain({ action: 2, revision: "HEAD" })));
 assert.equal(new DataView(resolved.buffer).getUint16(10, true), 0);
 assert.equal(new DataView(resolved.buffer).getUint16(20, true), 20);
+
+function ok(frame) { assert.equal(new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint16(10, true), 0); return frame; }
+ok(run(session, request(258, 60, fileWrite("lines.txt", "a\nb\nc\n"))));
+ok(run(session, request(273, 61, porcelain({ action: 4, paths: ["lines.txt"] }))));
+const base = hashOf(ok(run(session, request(275, 62, porcelain({ action: 3, message: "merge base", author: sig, committer: sig })))));
+ok(run(session, request(258, 63, fileWrite("lines.txt", "A\nb\nc\n"))));
+ok(run(session, request(273, 64, porcelain({ action: 4, paths: ["lines.txt"] }))));
+const ours = hashOf(ok(run(session, request(275, 65, porcelain({ action: 3, message: "merge ours", author: sig, committer: sig })))));
+ok(run(session, request(281, 66, porcelain({ action: 3, revision: base }))));
+ok(run(session, request(258, 67, fileWrite("lines.txt", "a\nb\nC\n"))));
+ok(run(session, request(273, 68, porcelain({ action: 4, paths: ["lines.txt"] }))));
+const theirs = hashOf(ok(run(session, request(275, 69, porcelain({ action: 3, message: "merge theirs", author: sig, committer: sig })))));
+ok(run(session, request(281, 70, porcelain({ action: 3, revision: ours }))));
+const clean = ok(run(session, request(289, 71, mergeRequest({ revisions: [theirs], author: sig }))));
+assert.equal(new DataView(clean.buffer, clean.byteOffset, clean.byteLength).getUint16(20, true), 45);
+assert.equal(new DataView(clean.buffer, clean.byteOffset, clean.byteLength).getUint16(27, true), 3);
+ok(run(session, request(258, 72, fileWrite("conflict.txt", "a\nb\nc\n"))));
+ok(run(session, request(273, 73, porcelain({ action: 4, paths: ["conflict.txt"] }))));
+const conflictBase = hashOf(ok(run(session, request(275, 74, porcelain({ action: 3, message: "conflict base", author: sig, committer: sig })))));
+ok(run(session, request(258, 75, fileWrite("conflict.txt", "a\nX\nc\n"))));
+ok(run(session, request(273, 76, porcelain({ action: 4, paths: ["conflict.txt"] }))));
+const conflictOurs = hashOf(ok(run(session, request(275, 77, porcelain({ action: 3, message: "conflict ours", author: sig, committer: sig })))));
+ok(run(session, request(281, 78, porcelain({ action: 3, revision: conflictBase }))));
+ok(run(session, request(258, 79, fileWrite("conflict.txt", "a\nY\nc\n"))));
+ok(run(session, request(273, 80, porcelain({ action: 4, paths: ["conflict.txt"] }))));
+const conflictTheirs = hashOf(ok(run(session, request(275, 81, porcelain({ action: 3, message: "conflict theirs", author: sig, committer: sig })))));
+ok(run(session, request(281, 82, porcelain({ action: 3, revision: conflictOurs }))));
+const conflict = ok(run(session, request(289, 83, mergeRequest({ revisions: [conflictTheirs], author: sig }))));
+assert.equal(new DataView(conflict.buffer, conflict.byteOffset, conflict.byteLength).getUint16(27, true), 4);
+const abort = ok(run(session, request(289, 84, mergeRequest({ action: 9, author: sig }))));
+assert.equal(new DataView(abort.buffer, abort.byteOffset, abort.byteLength).getUint16(27, true), 6);
+const restored = ok(run(session, request(257, 85, fileRead("conflict.txt"))));
+assert.equal(new TextDecoder().decode(restored).includes("<<<<<<<"), false);
+const again = ok(run(session, request(289, 86, mergeRequest({ revisions: [conflictTheirs], author: sig }))));
+assert.equal(new DataView(again.buffer, again.byteOffset, again.byteLength).getUint16(27, true), 4);
 assert.equal(e.ao_git_session_close(session), 0);
 assert.equal(e.ao_git_session_close(session), 1, "stale session handle must fail");
 const stale = run(session, request(1, 43));

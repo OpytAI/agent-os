@@ -90,6 +90,8 @@ defmodule AgentOS.Contracts.Git do
   def op_sparse, do: @op_sparse
   @op_submodule 288
   def op_submodule, do: @op_submodule
+  @op_merge 289
+  def op_merge, do: @op_merge
   @op_object 512
   def op_object, do: @op_object
   @op_ref 528
@@ -190,6 +192,58 @@ defmodule AgentOS.Contracts.Git do
   def reset_hard, do: @reset_hard
   @reset_merge 4
   def reset_merge, do: @reset_merge
+  @merge_strategy_default 0
+  def merge_strategy_default, do: @merge_strategy_default
+  @merge_strategy_ort 1
+  def merge_strategy_ort, do: @merge_strategy_ort
+  @merge_strategy_recursive 2
+  def merge_strategy_recursive, do: @merge_strategy_recursive
+  @merge_strategy_resolve 3
+  def merge_strategy_resolve, do: @merge_strategy_resolve
+  @merge_strategy_octopus 4
+  def merge_strategy_octopus, do: @merge_strategy_octopus
+  @merge_strategy_ours 5
+  def merge_strategy_ours, do: @merge_strategy_ours
+  @merge_strategy_subtree 6
+  def merge_strategy_subtree, do: @merge_strategy_subtree
+  @merge_ff 0
+  def merge_ff, do: @merge_ff
+  @merge_ff_no_ff 1
+  def merge_ff_no_ff, do: @merge_ff_no_ff
+  @merge_ff_only 2
+  def merge_ff_only, do: @merge_ff_only
+  @merge_favor_none 0
+  def merge_favor_none, do: @merge_favor_none
+  @merge_favor_ours 1
+  def merge_favor_ours, do: @merge_favor_ours
+  @merge_favor_theirs 2
+  def merge_favor_theirs, do: @merge_favor_theirs
+  @merge_diff_histogram 0
+  def merge_diff_histogram, do: @merge_diff_histogram
+  @merge_diff_myers 1
+  def merge_diff_myers, do: @merge_diff_myers
+  @merge_diff_minimal 2
+  def merge_diff_minimal, do: @merge_diff_minimal
+  @merge_diff_patience 3
+  def merge_diff_patience, do: @merge_diff_patience
+  @merge_style_merge 0
+  def merge_style_merge, do: @merge_style_merge
+  @merge_style_diff3 1
+  def merge_style_diff3, do: @merge_style_diff3
+  @merge_style_zdiff3 2
+  def merge_style_zdiff3, do: @merge_style_zdiff3
+  @merge_outcome_up_to_date 1
+  def merge_outcome_up_to_date, do: @merge_outcome_up_to_date
+  @merge_outcome_fast_forward 2
+  def merge_outcome_fast_forward, do: @merge_outcome_fast_forward
+  @merge_outcome_committed 3
+  def merge_outcome_committed, do: @merge_outcome_committed
+  @merge_outcome_conflicts 4
+  def merge_outcome_conflicts, do: @merge_outcome_conflicts
+  @merge_outcome_uncommitted 5
+  def merge_outcome_uncommitted, do: @merge_outcome_uncommitted
+  @merge_outcome_aborted 6
+  def merge_outcome_aborted, do: @merge_outcome_aborted
   @status_ok 0
   def status_ok, do: @status_ok
   @status_effect 1
@@ -1916,6 +1970,181 @@ defmodule AgentOS.Contracts.Git do
   def submodule_result_version, do: @submodule_result_version
 
   # SUBMODULE_RESULT
+  @merge_head_msg_id 42
+  @merge_head_version 1
+
+  def encode_merge_head(msg) when is_map(msg) do
+    IO.iodata_to_binary([
+      put_u16(@merge_head_msg_id),
+      put_u8(@merge_head_version),
+      put_str(field!(msg, :revision))
+    ])
+  end
+
+  def decode_merge_head(bytes) when is_binary(bytes) do
+    with {:ok, rest} <- read_header(bytes, @merge_head_msg_id, @merge_head_version),
+         {:ok, revision, rest} <- read_str(rest),
+         :ok <- read_eof(rest) do
+      {:ok, %{
+        revision: revision,
+      }}
+    end
+  end
+
+  def merge_head_msg_id, do: @merge_head_msg_id
+  def merge_head_version, do: @merge_head_version
+
+  # MERGE_HEAD
+  @merge_request_msg_id 43
+  @merge_request_version 1
+
+  def encode_merge_request(msg) when is_map(msg) do
+    IO.iodata_to_binary([
+      put_u16(@merge_request_msg_id),
+      put_u8(@merge_request_version),
+      put_u16(field!(msg, :action)),
+      put_message_list(field!(msg, :heads), &encode_merge_head/1),
+      put_u16(field!(msg, :strategy)),
+      put_u16(field!(msg, :fast_forward)),
+      put_u16(field!(msg, :favor)),
+      put_u16(field!(msg, :diff_algorithm)),
+      put_u16(field!(msg, :conflict_style)),
+      put_bool(field!(msg, :find_renames)),
+      put_bool(field!(msg, :no_commit)),
+      put_bool(field!(msg, :allow_unrelated_histories)),
+      case field(msg, :rename_threshold) do
+        nil -> <<0>>
+        value -> [<<1>>, put_u16(value)]
+      end,
+      case field(msg, :subtree_path) do
+        nil -> <<0>>
+        value -> [<<1>>, put_str(value)]
+      end,
+      case field(msg, :message) do
+        nil -> <<0>>
+        value -> [<<1>>, put_str(value)]
+      end,
+      case field(msg, :author) do
+        nil -> <<0>>
+        value -> [<<1>>, put_bytes(encode_signature(value))]
+      end,
+      case field(msg, :committer) do
+        nil -> <<0>>
+        value -> [<<1>>, put_bytes(encode_signature(value))]
+      end
+    ])
+  end
+
+  def decode_merge_request(bytes) when is_binary(bytes) do
+    with {:ok, rest} <- read_header(bytes, @merge_request_msg_id, @merge_request_version),
+         {:ok, action, rest} <- read_u16(rest),
+         {:ok, heads, rest} <- read_message_list(rest, &decode_merge_head/1),
+         {:ok, strategy, rest} <- read_u16(rest),
+         {:ok, fast_forward, rest} <- read_u16(rest),
+         {:ok, favor, rest} <- read_u16(rest),
+         {:ok, diff_algorithm, rest} <- read_u16(rest),
+         {:ok, conflict_style, rest} <- read_u16(rest),
+         {:ok, find_renames, rest} <- read_bool(rest),
+         {:ok, no_commit, rest} <- read_bool(rest),
+         {:ok, allow_unrelated_histories, rest} <- read_bool(rest),
+         {:ok, rename_threshold, rest} <- read_opt(rest, fn rest -> read_u16(rest) end),
+         {:ok, subtree_path, rest} <- read_opt(rest, fn rest -> read_str(rest) end),
+         {:ok, message, rest} <- read_opt(rest, fn rest -> read_str(rest) end),
+         {:ok, author, rest} <- read_opt(rest, fn rest -> read_message(rest, &decode_signature/1) end),
+         {:ok, committer, rest} <- read_opt(rest, fn rest -> read_message(rest, &decode_signature/1) end),
+         :ok <- read_eof(rest) do
+      {:ok, %{
+        action: action,
+        heads: heads,
+        strategy: strategy,
+        fast_forward: fast_forward,
+        favor: favor,
+        diff_algorithm: diff_algorithm,
+        conflict_style: conflict_style,
+        find_renames: find_renames,
+        no_commit: no_commit,
+        allow_unrelated_histories: allow_unrelated_histories,
+        rename_threshold: rename_threshold,
+        subtree_path: subtree_path,
+        message: message,
+        author: author,
+        committer: committer,
+      }}
+    end
+  end
+
+  def merge_request_msg_id, do: @merge_request_msg_id
+  def merge_request_version, do: @merge_request_version
+
+  # MERGE_REQUEST
+  @merge_conflict_msg_id 44
+  @merge_conflict_version 1
+
+  def encode_merge_conflict(msg) when is_map(msg) do
+    IO.iodata_to_binary([
+      put_u16(@merge_conflict_msg_id),
+      put_u8(@merge_conflict_version),
+      put_str(field!(msg, :path)),
+      put_u16(field!(msg, :ours)),
+      put_u16(field!(msg, :theirs))
+    ])
+  end
+
+  def decode_merge_conflict(bytes) when is_binary(bytes) do
+    with {:ok, rest} <- read_header(bytes, @merge_conflict_msg_id, @merge_conflict_version),
+         {:ok, path, rest} <- read_str(rest),
+         {:ok, ours, rest} <- read_u16(rest),
+         {:ok, theirs, rest} <- read_u16(rest),
+         :ok <- read_eof(rest) do
+      {:ok, %{
+        path: path,
+        ours: ours,
+        theirs: theirs,
+      }}
+    end
+  end
+
+  def merge_conflict_msg_id, do: @merge_conflict_msg_id
+  def merge_conflict_version, do: @merge_conflict_version
+
+  # MERGE_CONFLICT
+  @merge_result_msg_id 45
+  @merge_result_version 1
+
+  def encode_merge_result(msg) when is_map(msg) do
+    IO.iodata_to_binary([
+      put_u16(@merge_result_msg_id),
+      put_u8(@merge_result_version),
+      put_u32(field!(msg, :generation)),
+      put_u16(field!(msg, :outcome)),
+      case field(msg, :object_id) do
+        nil -> <<0>>
+        value -> [<<1>>, put_bytes(encode_object_id(value))]
+      end,
+      put_message_list(field!(msg, :conflicts), &encode_merge_conflict/1)
+    ])
+  end
+
+  def decode_merge_result(bytes) when is_binary(bytes) do
+    with {:ok, rest} <- read_header(bytes, @merge_result_msg_id, @merge_result_version),
+         {:ok, generation, rest} <- read_u32(rest),
+         {:ok, outcome, rest} <- read_u16(rest),
+         {:ok, object_id, rest} <- read_opt(rest, fn rest -> read_message(rest, &decode_object_id/1) end),
+         {:ok, conflicts, rest} <- read_message_list(rest, &decode_merge_conflict/1),
+         :ok <- read_eof(rest) do
+      {:ok, %{
+        generation: generation,
+        outcome: outcome,
+        object_id: object_id,
+        conflicts: conflicts,
+      }}
+    end
+  end
+
+  def merge_result_msg_id, do: @merge_result_msg_id
+  def merge_result_version, do: @merge_result_version
+
+  # MERGE_RESULT
   def decode_request_envelope(bytes) when is_binary(bytes) and byte_size(bytes) <= @max_frame_bytes do
 case bytes do
 <<@request_magic, @protocol_version::little-16, minor::little-16, opcode::little-16, flags::little-16, request_id::little-32, len::little-32, payload::binary-size(len)>>

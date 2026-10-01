@@ -80,3 +80,32 @@ fn local_status_commit_checkout_log_diff() {
         r#"{"op":"diff","args":{"cached":true}}"#
     );
 }
+
+#[test]
+fn merge_abort_continue_and_ordered_heads() {
+    assert_eq!(
+        encode(|out| argv::build_merge_request(&[b"git", b"merge", b"--abort"], out)),
+        r#"{"op":"merge","args":{"action":"abort"}}"#
+    );
+    assert_eq!(
+        encode(|out| argv::build_merge_request(&[b"git", b"merge", b"--continue"], out)),
+        r#"{"op":"merge","args":{"action":"continue"}}"#
+    );
+    assert_eq!(
+        encode(|out| argv::build_local_request(
+            b"merge",
+            &[b"git", b"merge", b"side", b"topic"],
+            out
+        )),
+        r#"{"op":"merge","args":{"heads":["side","topic"],"find_renames":true}}"#
+    );
+    let mut out = [0u8; 128];
+    assert_eq!(
+        argv::build_merge_request(&[b"git", b"merge", b"--squash", b"side"], &mut out),
+        Err(2)
+    );
+    assert_eq!(
+        argv::build_merge_request(&[b"git", b"merge", b"-s", b"theirs", b"side"], &mut out),
+        Err(2)
+    );
+}
