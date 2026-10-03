@@ -64,15 +64,20 @@ build_test(
     targets = [":glue"],
 )
 
-# Strict static packages reuse the production AgentOS syscall and JSON bindings, but do not carry
-# the interpreter's source loader or embedded Luau batteries. Luauc owns the VM/runtime semantics;
-# this downstream archive owns only the host capabilities made available to compiled programs.
+# Strict static packages reuse the production AgentOS syscall bindings and the native libraries
+# sys, json, hash, encoding, deflate, and re. They do not carry the interpreter's source loader
+# or embedded Luau batteries. Luauc owns the VM/runtime semantics; this archive owns the host
+# capabilities made available to compiled programs.
 zig_static_library(
     name = "aot_host",
     srcs = [
+        "deflate.zig",
+        "encoding.zig",
         "fs.zig",
+        "hash.zig",
         "json.zig",
         "lua.zig",
+        "re.zig",
         "sys.zig",
         "trap.zig",
         "wasi_shim.zig",

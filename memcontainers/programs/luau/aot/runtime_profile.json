@@ -15,5 +15,6 @@
     { "role": "invoke", "name": "agent_os_luauc_v1_invoke", "retain": true },
     { "role": "initialize", "name": "_start", "retain": true }
   ],
-  "retained_exports": []
+  "retained_exports": [],
+  "host_modules": ["deflate", "encoding", "hash", "json", "re", "sys"]
 }
