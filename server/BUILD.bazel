@@ -59,6 +59,9 @@ mix_library(
         "//memcontainers/hosts/wasmtime/nif:host_nif_release",
         # Native Gitz Port.
         "//memcontainers/lib/git-engine:git_engine_native_release",
+        "//memcontainers/programs/luauc:engine/luauc",
+        "//memcontainers/programs/luauc:engine/luauc-runtime.pack.wasm",
+        "//memcontainers/programs/luauc:engine/luauc-runtime.profile",
     ],
     tags = ["manual"],
     target_compatible_with = ELIXIR_ONLY,
@@ -76,6 +79,9 @@ mix_library(
         ":browser_ctl_artifact",
         "//memcontainers/hosts/wasmtime/nif:host_nif_release",
         "//memcontainers/lib/git-engine:git_engine_native_release",
+        "//memcontainers/programs/luauc:engine/luauc",
+        "//memcontainers/programs/luauc:engine/luauc-runtime.pack.wasm",
+        "//memcontainers/programs/luauc:engine/luauc-runtime.profile",
     ],
     tags = ["manual"],
     target_compatible_with = ELIXIR_ONLY,
@@ -319,6 +325,21 @@ canonical_host_file(
     actual = "//memcontainers/lib/git-engine:git_engine_native_release",
 )
 
+canonical_host_file(
+    name = "package_luauc_engine",
+    actual = "//memcontainers/programs/luauc:native_engine",
+)
+
+canonical_host_file(
+    name = "package_luauc_pack",
+    actual = "//memcontainers/programs/luauc:runtime_pack",
+)
+
+canonical_host_file(
+    name = "package_luauc_profile",
+    actual = "//memcontainers/programs/luauc:runtime_profile",
+)
+
 pkg_tar(
     name = "agent_os_package_runtime",
     create_parents = False,
@@ -332,6 +353,9 @@ pkg_tar(
         ":package_kernel": "priv/kernel/kernel.wasm",
         # Native Gitz Port; no shared library or C headers.
         ":package_git_engine": "priv/git-engine",
+        ":package_luauc_engine": "priv/luauc",
+        ":package_luauc_pack": "priv/luauc-runtime.pack.wasm",
+        ":package_luauc_profile": "priv/luauc-runtime.profile",
     },
     mode = "0644",
     modes = {
@@ -339,6 +363,7 @@ pkg_tar(
         "priv/images": "0755",
         "priv/kernel": "0755",
         "priv/git-engine": "0755",
+        "priv/luauc": "0755",
     },
     owner = "0.0",
     package_dir = "agent_os",

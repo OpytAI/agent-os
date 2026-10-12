@@ -9,7 +9,8 @@ The installer is served by the AgentOS site. In the commands below, `{domain}` m
 the documentation you are reading; the web reference fills it in automatically.
 
 It downloads `mc-core.mjs`, `kernel.wasm`, `catalog-compiler.wasm`, `git-engine.tar`
-(extracted to `git-engine/`), and one flavor tar. Every asset is checked against the release's
+(extracted to `git-engine/`), `luauc.wasm`, `luauc-runtime.pack.wasm`, `luauc-runtime.profile`,
+and one flavor tar. Every asset is checked against the release's
 `SHA256SUMS` before a staged install replaces the destination; a failed download or checksum leaves
 the existing installation intact.
 
@@ -86,6 +87,9 @@ const vm = await mc.create({
 | Flavor tar              | Booting an embedded VM from raw bytes                                                       |
 | `catalog-compiler.wasm` | Compiling connection catalogs or adding host tools in a browser                             |
 | `git-engine.tar`        | Host git (`mc.create({ git: true })`); installer also extracts `git-engine/` for inspection |
+| `luauc.wasm`            | Optional Luau AOT compiler (`mc.create({ compiler: true })`)                            |
+| `luauc-runtime.pack.wasm` | Runtime linked into compiled Luau programs                                        |
+| `luauc-runtime.profile` | ABI profile paired with the runtime pack                                         |
 | `mc-core.mjs`           | Using the standalone release SDK                                                            |
 
 The catalog compiler is not guest code and is not part of an image. It is pure host-side WebAssembly
@@ -127,7 +131,7 @@ See [Git](./git.md). The server-native Port binary is not a client release asset
 `defaultKernel()` reads the path in `MC_KERNEL_WASM` and returns `Uint8Array`.
 `defaultImage()` reads `MC_BASE_IMAGE`. They are used by local defaults and can be called directly.
 When `AGENTOS_DIR` (or `MC_ARTIFACT_HOME`) points at an install root, kernel / image / catalog /
-`git-engine.tar` also resolve from that directory (and the host artifact cache). Advanced helpers
+`git-engine.tar` and the three luauc compiler files also resolve from that directory (and the host artifact cache). Advanced helpers
 include `resolveArtifact`, `resolveKernel`, `resolveImageTar`, `resolveCatalogCompiler`,
 `artifactCacheRoot`, and `seedArtifactCacheFromDir` (installers may seed the cache from the
 install dir).

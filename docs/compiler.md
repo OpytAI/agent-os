@@ -24,6 +24,10 @@ const vm = await mc.create({
 supervises the native compiler port. One engine serves one VM. `CompilerEngine.compile` is the
 same compile for a caller with no VM.
 
+The release publishes all three browser/JavaScript artifacts. The installer downloads them and
+exports their paths in `env.sh`. The server package also contains the native compiler and its
+matching pack and profile under `priv/` for `attach_compiler/2`.
+
 ## Command
 
 `/bin/luau-compile` lives on the loom image, next to `/bin/luau` and `/bin/luau-analyze`.
@@ -50,7 +54,7 @@ VM ceiling. Tier names are `full`, `read-write`, `read-only`, and `isolated`.
 `CompilerEngine` loads one compiler and compiles a source package. `resolveLuaucEngine`,
 `resolveLuaucPack`, and `resolveLuaucProfile` find the three artifacts. Resolution checks the
 `MC_LUAUC_ENGINE`, `MC_LUAUC_PACK`, and `MC_LUAUC_PROFILE` paths, then the install directory, then
-the local cache. The installer does not download these files.
+the local cache. The installer downloads all three files.
 
 The served runtime reads `AGENTOS_LUAUC_ENGINE` for the native port and the same pack and profile
 variables. `AgentOS.ControlPlane.attach_compiler/2` attaches that port after create.

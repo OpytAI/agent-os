@@ -18,7 +18,7 @@
     <img alt="SDK: JavaScript" src="https://img.shields.io/badge/SDK-Node.js%20%7C%20Bun%20%7C%20Browser-3178c6">
 <!-- BEGIN generated:image-size-badges -->
     <br>
-    <img alt="Image size: minimal 950 KiB" src="https://img.shields.io/static/v1?label=minimal&amp;message=950%20KiB&amp;color=2e7d32">
+    <img alt="Image size: minimal 930 KiB" src="https://img.shields.io/static/v1?label=minimal&amp;message=930%20KiB&amp;color=2e7d32">
     <img alt="Image size: posix 1.9 MiB" src="https://img.shields.io/static/v1?label=posix&amp;message=1.9%20MiB&amp;color=2e7d32">
     <img alt="Image size: loom 5.4 MiB" src="https://img.shields.io/static/v1?label=loom&amp;message=5.4%20MiB&amp;color=d99a08">
     <img alt="Image size: atlas 6.3 MiB" src="https://img.shields.io/static/v1?label=atlas&amp;message=6.3%20MiB&amp;color=1565c0">
@@ -104,7 +104,7 @@ The VM does not change shape when its host changes:
 
 ## Quickstart
 
-Install the runtime, kernel, catalog compiler, git engine, and an image from the AgentOS site:
+Install the runtime, kernel, catalog compiler, git engine, optional Luau compiler, and an image from the AgentOS site:
 
 ```sh
 curl -fsSL https://agentos.opyt.cloud/install.sh | bash

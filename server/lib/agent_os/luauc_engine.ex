@@ -295,18 +295,31 @@ defmodule AgentOS.LuaucEngine do
       System.get_env("AGENTOS_LUAUC_ENGINE") ||
       System.get_env("MC_LUAUC_ENGINE") ||
       install_file("luauc") ||
+      priv_file("luauc") ||
       Path.expand("../memcontainers/programs/luauc/engine/luauc", File.cwd!())
   end
 
   defp resolve_artifact(name, env_names) do
     Enum.find_value(env_names, fn key -> System.get_env(key) end) ||
       install_file(name) ||
+      priv_file(name) ||
       Path.expand("../memcontainers/programs/luauc/engine/#{name}", File.cwd!())
   end
 
   defp install_file(name) do
     root = System.get_env("AGENTOS_DIR") || System.get_env("MC_ARTIFACT_HOME")
     if is_binary(root), do: Path.join(root, name), else: nil
+  end
+
+  defp priv_file(name) do
+    case :code.priv_dir(:agent_os) do
+      path when is_list(path) ->
+        candidate = Path.join(List.to_string(path), name)
+        if File.regular?(candidate), do: candidate, else: nil
+
+      _ ->
+        nil
+    end
   end
 
   defp request_id(<<_::binary-size(32), id::binary-size(16), _::binary>>), do: hex(id)

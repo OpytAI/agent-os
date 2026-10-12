@@ -82,3 +82,21 @@ genrule(
     """,
     visibility = ["//visibility:public"],
 )
+
+filegroup(
+    name = "native_engine",
+    srcs = [":engine/luauc"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "runtime_pack",
+    srcs = [":engine/luauc-runtime.pack.wasm"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "runtime_profile",
+    srcs = [":engine/luauc-runtime.profile"],
+    visibility = ["//visibility:public"],
+)

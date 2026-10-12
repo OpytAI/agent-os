@@ -33,7 +33,8 @@ usage: install.sh [--mode agentic|embedded] [--image minimal|posix|loom|atlas|pa
 
 Downloads the runtime files needed to run AgentOS from GitHub releases:
   mc-core.mjs, kernel.wasm, catalog-compiler.wasm, git-engine.tar
-  (extracted to git-engine/), and one image tar.
+  (extracted to git-engine/), luauc.wasm, luauc-runtime.pack.wasm,
+  luauc-runtime.profile, and one image tar.
 
 Modes:
   agentic   for Claude, Codex, opencode, and other coding agents; includes a skill file
@@ -214,8 +215,9 @@ description: Drive AgentOS — a WebAssembly-native VM/computer for agents — f
 AgentOS is a WebAssembly computer you drive from the host through the `mc` API exported by
 `mc-core.mjs` (the `@mc/core` bundle). It is the agent's own working machine, not a generic
 command runner. Use the release artifacts installed alongside this file — `mc-core.mjs`,
-`kernel.wasm`, one image `.tar`, `catalog-compiler.wasm` (when a VM uses connections), and
-`git-engine.tar` (host git for `mc.create({ git: true })`) — and rebuild from source only when
+`kernel.wasm`, one image `.tar`, `catalog-compiler.wasm` (when a VM uses connections),
+`git-engine.tar` (host git for `mc.create({ git: true })`), and the three luauc artifacts
+(optional AOT compilation) — and rebuild from source only when
 changing AgentOS itself.
 
 ## Images
@@ -285,6 +287,8 @@ Nothing ambient exists — no network, secrets, mounts, or host tools — until 
   (exec/luau/fs) never needs it.
 - Host git (opt-in): `mc.create({ git: true, … })` after `source env.sh` (or set `MC_GIT_ENGINE_TAR`).
   Installer ships `git-engine.tar`. Remotes need CAP_NET + connections; see docs/git.md.
+- Luau AOT (opt-in): `mc.create({ compiler: true, … })` after `source env.sh`. Run
+  `luau --compile -o program.wasm source.luau` in a VM with the loom image.
 - Network / mounts: `mc.create({ net: true, permissions: { network: "allow" }, mounts: [...] })`.
 
 ## Live agent sessions
@@ -335,7 +339,7 @@ print_example() {
   d="$(js_string "$abs_dir")"
 
   printf '\nInstalled AgentOS %s assets in %s\n' "$mode" "$abs_dir"
-  printf 'Assets: mc-core.mjs, kernel.wasm, catalog-compiler.wasm, git-engine/, %s\n' \
+  printf 'Assets: mc-core.mjs, kernel.wasm, catalog-compiler.wasm, git-engine/, luauc.wasm, luauc-runtime.pack.wasm, luauc-runtime.profile, %s\n' \
     "$image_asset"
   printf 'Checksums / more assets: %s\n' "$(release_page)"
   if [ "$mode" = "agentic" ]; then
@@ -418,7 +422,7 @@ printf 'Image: %s\n' "$IMAGE_ASSET"
 printf 'Release: %s\n' "$(release_page)"
 printf 'Target: %s\n\n' "$ABS_DIR"
 
-ASSETS=("mc-core.mjs" "kernel.wasm" "catalog-compiler.wasm" "$IMAGE_ASSET" "git-engine.tar")
+ASSETS=("mc-core.mjs" "kernel.wasm" "catalog-compiler.wasm" "$IMAGE_ASSET" "git-engine.tar" "luauc.wasm" "luauc-runtime.pack.wasm" "luauc-runtime.profile")
 download_asset "$BASE_URL" "SHA256SUMS" "${STAGE_DIR}/SHA256SUMS"
 for asset in "${ASSETS[@]}"; do
   download_asset "$BASE_URL" "$asset" "${STAGE_DIR}/${asset}"
@@ -438,6 +442,9 @@ export MC_BASE_IMAGE="${ABS_DIR}/${IMAGE_ASSET}"
 export MC_CATALOG_COMPILER_WASM="${ABS_DIR}/catalog-compiler.wasm"
 export MC_GIT_ENGINE_TAR="${ABS_DIR}/git-engine.tar"
 export MC_ARTIFACT_CACHE="${CACHE_DIR}"
+export MC_LUAUC_ENGINE="${ABS_DIR}/luauc.wasm"
+export MC_LUAUC_PACK="${ABS_DIR}/luauc-runtime.pack.wasm"
+export MC_LUAUC_PROFILE="${ABS_DIR}/luauc-runtime.profile"
 # Fetch stays off unless you set MC_ARTIFACT_FETCH=1
 ENV
 
@@ -450,6 +457,9 @@ cat >"${STAGE_DIR}/manifest.json" <<MAN
     "kernel": "kernel.wasm",
     "catalog-compiler": "catalog-compiler.wasm",
     "git-engine": "git-engine.tar",
+    "luauc-engine": "luauc.wasm",
+    "luauc-pack": "luauc-runtime.pack.wasm",
+    "luauc-profile": "luauc-runtime.profile",
     "image": "${IMAGE_ASSET}"
   }
 }
