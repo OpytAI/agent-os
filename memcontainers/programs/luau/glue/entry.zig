@@ -49,6 +49,7 @@ const kHelp =
     \\    luau -e CODE [ARG...]
     \\    luau FILE [ARG...]
     \\    luau --check FILE...
+    \\    luau --compile -o OUT [OPTION...] FILE...
     \\
     \\MODES
     \\    With no arguments, luau requires a terminal and opens an interactive
@@ -60,6 +61,7 @@ const kHelp =
     \\OPTIONS
     \\    -e CODE       execute inline source
     \\    --check       type-check the following files with luau-analyze
+    \\    --compile     compile the following files with luau-compile
     \\    -h, --help    show this help and exit
     \\    --version     show the Luau version and exit
     \\
@@ -316,6 +318,34 @@ fn runAnalyze(operands: [][*:0]u8) c_int {
     return @intCast(@as(i32, @bitCast(status)) & 0xff);
 }
 
+// `luau --compile …` runs the compiler client and forwards its exit.
+fn runCompile(operands: [][*:0]u8) c_int {
+    var blob: [8192]u8 = undefined;
+    var off: usize = 0;
+    const prog = "luau-compile";
+    @memcpy(blob[0..prog.len], prog);
+    off = prog.len;
+    blob[off] = 0;
+    off += 1;
+    for (operands) |op| {
+        const s = std.mem.span(op);
+        if (off + s.len + 1 > blob.len) return EXIT_USAGE;
+        @memcpy(blob[off .. off + s.len], s);
+        off += s.len;
+        blob[off] = 0;
+        off += 1;
+    }
+    var pid: u32 = 0;
+    if (mc.mc_sys_spawn(mc.addr(&blob), @intCast(off), 0, 1, 2, 0, mc.addr(&pid)) != 0) {
+        eprint("luau: cannot run luau-compile\n");
+        return EXIT_RUNTIME;
+    }
+    var status: u32 = 0;
+    var got: u32 = 0;
+    _ = mc.mc_sys_waitpid(@intCast(pid), 0, mc.addr(&status), mc.addr(&got));
+    return @intCast(@as(i32, @bitCast(status)) & 0xff);
+}
+
 export fn __main_argc_argv(argc: c_int, c_argv: [*][*:0]u8) c_int {
     const argv = c_argv[0..@intCast(argc)];
     _ = setvbuf(stdout, null, 1, 4096); // _IOLBF
@@ -330,6 +360,9 @@ export fn __main_argc_argv(argc: c_int, c_argv: [*][*:0]u8) c_int {
     }
     if (argv.len >= 2 and std.mem.eql(u8, std.mem.span(argv[1]), "--check")) {
         return runAnalyze(argv[2..]);
+    }
+    if (argv.len >= 2 and std.mem.eql(u8, std.mem.span(argv[1]), "--compile")) {
+        return runCompile(argv[2..]);
     }
 
     if (argv.len == 1 and !stdinIsTty()) {

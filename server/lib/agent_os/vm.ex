@@ -87,6 +87,18 @@ defmodule AgentOS.Vm do
     git_task_refs: %{},
     # mount_path => [{handle, body}]
     git_remote_queue: %{},
+    # One optional compiler Port. Compiles run off the VM process.
+    compiler_engine: nil,
+    compiler_mon: nil,
+    compiler_caller_mask: 255,
+    compiler_default_tier: 1,
+    compiler_mem_ceiling: 1024 * 1024 * 1024,
+    compiler_fuel_ceiling: 4_000_000_000_000,
+    compiler_profile_digest: <<0::256>>,
+    compiler_pack_digest: <<0::256>>,
+    luauc_tasks: %{},
+    luauc_task_refs: %{},
+    luauc_queue: [],
     # Unclaimed relay events popped while auto-answering git during tick
     # (D25/D30 product path). Served first by egress_next so non-git owners
     # still see them in order.
@@ -522,6 +534,16 @@ defmodule AgentOS.Vm do
     do: GenServer.call(server, {:attach_git, opts}, timeout(opts))
 
   @doc """
+  Attach the native luauc compiler Port to this VM.
+
+  `opts` accepts `:executable`, `:pack`, `:pack_path`, `:profile`, and
+  `:profile_path`. Omit the artifact keys to resolve them from the environment.
+  """
+  @spec attach_compiler(server(), keyword()) :: :ok | {:error, term()}
+  def attach_compiler(server, opts \\ []) when is_list(opts),
+    do: GenServer.call(server, {:attach_compiler, opts}, timeout(opts))
+
+  @doc """
   Detach and stop git-engine Port(s) for this VM; fail inflight remote handles.
 
   Options:
@@ -744,12 +766,22 @@ defmodule AgentOS.Vm do
                   git_on_push_approval: nil,
                   git_tasks: %{},
                   git_task_refs: %{},
-                  git_remote_queue: %{}
+                  git_remote_queue: %{},
+                  compiler_caller_mask: compiler_caller_mask(opts),
+                  compiler_default_tier: compiler_default_tier(opts),
+                  compiler_mem_ceiling: compiler_mem_ceiling(opts),
+                  compiler_fuel_ceiling: compiler_fuel_ceiling(opts)
                 }
 
                 case maybe_attach_git_on_boot(state0, opts) do
-                  {:ok, state} -> {:ok, state}
-                  {:error, reason} -> {:stop, reason}
+                  {:ok, state} ->
+                    case maybe_attach_compiler_on_boot(state, opts) do
+                      {:ok, state} -> {:ok, state}
+                      {:error, reason} -> {:stop, reason}
+                    end
+
+                  {:error, reason} ->
+                    {:stop, reason}
                 end
 
               {:error, reason} ->
@@ -865,9 +897,9 @@ defmodule AgentOS.Vm do
   end
 
   def handle_call({:tick, n}, _from, state) do
-    # D25/D30: when git is attached, answer pending mount/"git" host_calls so
-    # guest exec can progress without a separate ControlPlane.egress_next pump.
-    # Non-git events are stashed on egress_pending (see drain_git_relay/2).
+    # When git or the compiler is attached, answer those host calls so guest
+    # exec can progress without a separate ControlPlane.egress_next pump.
+    # Other events are stashed on egress_pending (see drain_git_relay/2).
     state = drain_git_relay(state, 64)
     reply = tick_n(state.nif, n)
     state = drain_git_relay(state, 64)
@@ -988,12 +1020,19 @@ defmodule AgentOS.Vm do
     end
   end
 
+  def handle_call({:attach_compiler, opts}, _from, state) do
+    case AgentOS.Luauc.Host.attach(state, opts) do
+      {:ok, state2} -> {:reply, :ok, touch(state2)}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
   def handle_call({:detach_git, opts}, _from, state) do
     {:reply, :ok, touch(do_detach_git(state, opts))}
   end
 
   def handle_call({:try_answer_git_host_call, event}, _from, state) do
-    case answer_git_event(state, event) do
+    case answer_host_engine_event(state, event) do
       {:answered, state2} -> {:reply, :answered, touch(state2)}
       :unclaimed -> {:reply, :unclaimed, state}
       {:error, reason} -> {:reply, {:error, reason}, state}
@@ -1243,6 +1282,68 @@ defmodule AgentOS.Vm do
 
       _other ->
         {:error, "git boot option must be true | false | keyword list"}
+    end
+  end
+
+  defp maybe_attach_compiler_on_boot(state, opts) do
+    case Keyword.get(opts, :compiler) do
+      nil ->
+        {:ok, state}
+
+      false ->
+        {:ok, state}
+
+      true ->
+        AgentOS.Luauc.Host.attach(state, [])
+
+      compiler_opts when is_list(compiler_opts) ->
+        AgentOS.Luauc.Host.attach(state, compiler_opts)
+
+      _other ->
+        {:error, "compiler boot option must be true | false | keyword list"}
+    end
+  end
+
+  defp compiler_caller_mask(opts) do
+    case Keyword.get(opts, :contract) do
+      nil ->
+        0xFF
+
+      {tier, _budget, _fuel} when tier == 0 ->
+        0xFF
+
+      {tier, _budget, _fuel} when is_integer(tier) and tier in 1..4 ->
+        AgentOS.Contracts.Constants.tier_caps(tier)
+
+      {tier, _budget, _fuel} when is_integer(tier) ->
+        0
+
+      _other ->
+        0xFF
+    end
+  end
+
+  defp compiler_default_tier(opts) do
+    case Keyword.get(opts, :contract) do
+      {tier, _budget, _fuel} when is_integer(tier) and tier in 1..4 -> tier
+      _other -> 1
+    end
+  end
+
+  @hard_mem 1024 * 1024 * 1024
+  @hard_fuel 4_000_000_000_000
+
+  defp compiler_mem_ceiling(opts) do
+    case Keyword.get(opts, :contract) do
+      {_tier, budget, _fuel} when is_integer(budget) and budget > 0 -> min(budget * 1024 * 1024, @hard_mem)
+      _other -> @hard_mem
+    end
+  end
+
+  defp compiler_fuel_ceiling(opts) do
+    case Keyword.get(opts, :contract) do
+      {_tier, _budget, fuel} when is_integer(fuel) and fuel > 0 -> min(fuel, @hard_fuel)
+      _other -> @hard_fuel
     end
   end
 
@@ -1843,16 +1944,24 @@ defmodule AgentOS.Vm do
 
   defp answer_git_event(_state, _event), do: :unclaimed
 
-  # Auto-answer git host_calls queued on the NIF relay (guest mount ops + remotes).
+  defp answer_host_engine_event(state, event) do
+    case answer_git_event(state, event) do
+      :unclaimed -> AgentOS.Luauc.Host.answer(state, event)
+      other -> other
+    end
+  end
+
+  # Auto-answer git and compiler host_calls queued on the NIF relay.
   # Called from tick so ControlPlane.exec/run product paths drain without a
   # separate egress pump. Unclaimed events (HTTP, tool_approval, …) are stashed
   # on `egress_pending` so egress_next still delivers them.
+  # A VM with neither engine skips the relay so git-less delivery stays the same.
   defp drain_git_relay(state, 0), do: state
 
   defp drain_git_relay(state, limit) when is_integer(limit) and limit > 0 do
     engines = state.git_engines || %{}
 
-    if engines == %{} and (state.git_tasks || %{}) == %{} do
+    if engines == %{} and (state.git_tasks || %{}) == %{} and not compiler_busy?(state) do
       state
     else
       case Nif.relay_next(state.nif) do
@@ -1860,7 +1969,7 @@ defmodule AgentOS.Vm do
           state
 
         {:ok, event} when is_map(event) ->
-          case answer_git_event(state, event) do
+          case answer_host_engine_event(state, event) do
             {:answered, state2} ->
               drain_git_relay(state2, limit - 1)
 
@@ -1880,6 +1989,11 @@ defmodule AgentOS.Vm do
   end
 
   defp drain_git_relay(state, _), do: state
+
+  defp compiler_busy?(state) do
+    is_pid(state.compiler_engine) or map_size(state.luauc_tasks || %{}) > 0 or
+      (state.luauc_queue || []) != []
+  end
 
   # Per-mount single-writer remote queue.
   defp answer_git_remote_async(state, handle, body) do
@@ -2044,6 +2158,16 @@ defmodule AgentOS.Vm do
   end
 
   @impl true
+  def handle_info({ref, {:luauc, handle, result, install}}, state)
+      when is_reference(ref) and is_integer(handle) do
+    if Map.has_key?(state.luauc_task_refs || %{}, ref) do
+      Process.demonitor(ref, [:flush])
+      {:noreply, touch(AgentOS.Luauc.Host.finish(state, ref, handle, result, install))}
+    else
+      {:noreply, state}
+    end
+  end
+
   def handle_info({ref, {handle, result}}, %{git_task_refs: refs} = state)
       when is_reference(ref) and is_integer(handle) and is_map(refs) do
     if Map.has_key?(refs, ref) do
@@ -2056,15 +2180,26 @@ defmodule AgentOS.Vm do
 
   def handle_info({:DOWN, mon, :process, pid, _reason}, state)
       when is_reference(mon) and is_pid(pid) do
-    # Match git-engine Port death by monitor ref.
-    case Enum.find(state.git_engines || %{}, fn {_path, meta} ->
-           Map.get(meta, :mon) == mon and Map.get(meta, :pid) == pid
-         end) do
-      {path, _} ->
-        {:noreply, touch(do_detach_git(state, mount_path: path))}
+    cond do
+      state.compiler_mon == mon ->
+        {:noreply, touch(AgentOS.Luauc.Host.engine_down(state))}
 
-      nil ->
-        handle_git_task_down(state, mon)
+      true ->
+        case AgentOS.Luauc.Host.task_down(state, mon) do
+          {:ok, state2} ->
+            {:noreply, touch(state2)}
+
+          :unknown ->
+            case Enum.find(state.git_engines || %{}, fn {_path, meta} ->
+                   Map.get(meta, :mon) == mon and Map.get(meta, :pid) == pid
+                 end) do
+              {path, _} ->
+                {:noreply, touch(do_detach_git(state, mount_path: path))}
+
+              nil ->
+                handle_git_task_down(state, mon)
+            end
+        end
     end
   end
 
@@ -2094,6 +2229,7 @@ defmodule AgentOS.Vm do
 
   @impl true
   def terminate(_reason, state) do
+    _ = AgentOS.Luauc.Host.stop(state)
     _ = do_detach_git(state, [])
     :ok
   end

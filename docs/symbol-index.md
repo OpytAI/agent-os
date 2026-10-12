@@ -9,6 +9,7 @@ uses them rather than as TypeScript-only interfaces.
 | ------------------------ | -------- | ----------------------------------------------------------------------------- |
 | `capabilityConnection`   | internal | [Advanced API](./advanced-api.md#capabilityconnection)                        |
 | `browser`                | stable   | [Browser sidecars](./browser-sidecars.md#browser-options)                     |
+| `CompilerEngine`         | advanced | [Compiler](./compiler.md)                                                     |
 | `defaultCatalogCompiler` | stable   | [Connections](./connections.md#catalog-compiler)                              |
 | `defaultImage`           | stable   | [Installation](./installation.md#default-artifact-loaders)                    |
 | `defaultKernel`          | stable   | [Installation](./installation.md#default-artifact-loaders)                    |
@@ -29,6 +30,9 @@ uses them rather than as TypeScript-only interfaces.
 | `registerGitHostCall`    | advanced | [Git](./git.md)                                                               |
 | `RemoteBackend`          | advanced | [Advanced API](./advanced-api.md#remotebackend)                               |
 | `remoteSidecars`         | advanced | [Sidecars](./sidecars.md#remotesidecars-options)                              |
+| `resolveLuaucEngine`     | advanced | [Compiler](./compiler.md)                                                     |
+| `resolveLuaucPack`       | advanced | [Compiler](./compiler.md)                                                     |
+| `resolveLuaucProfile`    | advanced | [Compiler](./compiler.md)                                                     |
 | `remoteBuild`            | stable   | [Remote build](./recording-remote-build.md#remotebuild-input-options)         |
 | `SidecarError`           | stable   | [Sidecars](./sidecars.md#sidecarerror)                                        |
 | `startCron`              | internal | [Cron](./cron.md#startcron)                                                   |

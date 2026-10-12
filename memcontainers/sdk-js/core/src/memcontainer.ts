@@ -1083,6 +1083,52 @@ async function makeEmbedded(
   const backend = new EmbeddedBackend(host, stdout, tools, sidecars, activeBase, store);
   attachLoadedGitEngines(backend, gitEngines);
   try {
+    const { bootstrapHostCompiler, callerMaskForBootTier, defaultTierForBootTier } = await import(
+      "./compiler/host.js"
+    );
+    const { HARD_FUEL, HARD_MEM, HARD_TABLE } = await import("./compiler/request.js");
+    let callerMask = 0xff;
+    let defaultTier = 1;
+    let memCeiling = HARD_MEM;
+    let fuelCeiling = HARD_FUEL;
+    if (!imageNeedsStore(opts.image) || store) {
+      const bootCfg = await imageConfig(opts.image, store);
+      const bootTier = tierOrdinal(bootCfg.tier);
+      callerMask = callerMaskForBootTier(bootTier);
+      defaultTier = defaultTierForBootTier(bootTier);
+      if (bootCfg.budgetMib !== undefined && bootCfg.budgetMib > 0) {
+        const bytes = BigInt(Math.trunc(bootCfg.budgetMib)) * 1024n * 1024n;
+        memCeiling = Number(bytes > BigInt(HARD_MEM) ? BigInt(HARD_MEM) : bytes);
+      }
+      if (bootCfg.fuel !== undefined && bootCfg.fuel > 0) {
+        const fuel = BigInt(Math.trunc(bootCfg.fuel));
+        fuelCeiling = fuel > HARD_FUEL ? HARD_FUEL : fuel;
+      }
+    }
+    const compiler = await bootstrapHostCompiler(tools, opts, {
+      callerMask,
+      defaultTier,
+      memCeiling,
+      fuelCeiling,
+      tableCeiling: HARD_TABLE,
+    });
+    if (compiler) {
+      const origClose = backend.close.bind(backend);
+      backend.close = async () => {
+        let firstError: unknown;
+        try {
+          await compiler.close();
+        } catch (error) {
+          firstError = error;
+        }
+        try {
+          await origClose();
+        } catch (error) {
+          firstError ??= error;
+        }
+        if (firstError !== undefined) throw firstError;
+      };
+    }
     // Re-register the host-call HANDLERS (the JS closures) on both paths — they can never live in a
     // snapshot, so a restored VM must be handed them again to route its host-tool catalog entries.
     for (const t of hostTools) backend.tool(t);

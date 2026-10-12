@@ -55,8 +55,9 @@ pkg_tar(
 # base — rootfs + the SYSTEM binaries/service faces: /bin/sh (the guest shell, boots as pid 1),
 # /bin/tools plus /svc/tools and /tools (catalog/search/call broker), /bin/adapters plus
 # /svc/adapters (shared parser/invoker service for adapter-backed tools), /bin/pkgfsd (the /pkg
-# daemon), and /bin/git (thin pure-mc ctl porcelain + CAP_NET remotes). Base owns the service/tool
-# directories; service layers add only binaries and fragments.
+# daemon), and /bin/git (thin pure-mc ctl porcelain + CAP_NET remotes). Base owns the
+# service/tool directories; service layers add only binaries
+# and fragments.
 # A real but command-less shell, the substrate later flavors build on (SYSTEMS.md) — NOT a
 # shipped flavor on its own (no coreutils); minimal/posix add PATH applets by layering on top.
 pkg_tar(
@@ -165,7 +166,9 @@ mc_service_layer(
 # json/hash/time/string batteries embedded), luau-analyze type checker (256 MiB · 400B · 40k), and
 # the lazy Lua/Luau syntax service with its generated client and skill. Parser and semantic tables
 # are compiled into the service; host-side manifests remain build outputs rather than guest files.
-# Thin /bin/git is on base (inherited via posix); remotes still need CAP_NET at runtime.
+# Thin /bin/git is on base (inherited via posix). /bin/luau-compile is on this image.
+# Git remotes and luau-compile host calls need CAP_NET at runtime. The compiler engine
+# stays off the image.
 pkg_tar(
     name = "loom",
     create_parents = False,
@@ -177,6 +180,7 @@ pkg_tar(
     files = {
         "//memcontainers/programs/luau/glue:luau": "/bin/luau",
         "//memcontainers/programs/luau/glue:luau-analyze": "/bin/luau-analyze",
+        "//memcontainers/programs/luauc:luau-compile": "/bin/luau-compile",
         # The agent-facing skill docs ride the flavor (not the binary) — luau + the doc generators.
         "//memcontainers/programs/luau/skills:luau.md": "/skills/luau.md",
         "//memcontainers/programs/luau/skills:docx.md": "/skills/docx.md",

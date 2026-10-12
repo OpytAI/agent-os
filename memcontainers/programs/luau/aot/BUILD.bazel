@@ -33,9 +33,14 @@ _PACK_EXPORTS = [
 zig_binary(
     name = "agent_os_runtime_pack_raw",
     csrcs = ["program_placeholder.c"],
+    # The C stack is 2 MiB. It sits under the static data and the 8 MiB program
+    # arena, so the wasm memory minimum stays inside the 16 MiB default guest
+    # budget and the Lua heap can still grow up to that budget.
     linkopts = [
         "-lc",
         "-lc++",
+        "--stack",
+        "2097152",
     ] + ["--export=" + symbol for symbol in _PACK_EXPORTS],
     main = "provider_entry.zig",
     tags = ["manual"],
@@ -60,6 +65,7 @@ luauc_runtime_profile(
     name = "agent_os_runtime",
     policy = "runtime_profile.json",
     raw_pack = ":agent_os_runtime_wasm",
+    visibility = ["//visibility:public"],
 )
 
 luauc_package(

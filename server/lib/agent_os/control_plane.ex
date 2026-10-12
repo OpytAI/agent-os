@@ -265,6 +265,15 @@ defmodule AgentOS.ControlPlane do
   def attach_git(id, opts \\ []), do: with_vm(id, &Vm.attach_git(&1, opts))
 
   @doc """
+  Attach the native luauc compiler Port to a VM.
+
+  Passes `opts` through to `AgentOS.Vm.attach_compiler/2`. Boot-time `:compiler`
+  on `create/2` uses the same options.
+  """
+  @spec attach_compiler(Vm.id(), keyword()) :: :ok | {:error, term()}
+  def attach_compiler(id, opts \\ []), do: with_vm(id, &Vm.attach_compiler(&1, opts))
+
+  @doc """
   Detach git-engine Port(s) from a VM.
 
   Options: `:mount_path` to detach one mount; omit to detach all.

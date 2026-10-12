@@ -136,6 +136,42 @@ js_test(
 )
 
 mc_ts_project(
+    name = "compiler_test_lib",
+    srcs = ["test/compiler.test.ts"],
+    deps = [
+        ":lib",
+        ":node_modules/@mc/contracts",
+        "//:node_modules/@types/bun",
+    ],
+)
+
+js_test(
+    name = "compiler_test",
+    timeout = "long",
+    data = [
+        ":test_package_json",
+        ":compiler_test_lib",
+        "//memcontainers/kernel/rust:kernel",
+        "//memcontainers/images:loom",
+        "//memcontainers/programs/luau/glue:office_batteries",
+        "//memcontainers/programs/luauc:engine/luauc.wasm",
+        "//memcontainers/programs/luauc:engine/luauc-runtime.pack.wasm",
+        "//memcontainers/programs/luauc:engine/luauc-runtime.profile",
+    ],
+    entry_point = "test/compiler.test.js",
+    # Luau sources from the glue package. They are data, not JavaScript.
+    no_copy_to_bin = ["//memcontainers/programs/luau/glue:office_batteries"],
+    env = {
+        "MC_KERNEL_WASM": "$(rlocationpath //memcontainers/kernel/rust:kernel)",
+        "MC_LOOM_IMAGE": "$(rlocationpath //memcontainers/images:loom)",
+        "MC_OFFICE_BATTERIES": "$(rlocationpaths //memcontainers/programs/luau/glue:office_batteries)",
+        "MC_LUAUC_ENGINE": "$(rlocationpath //memcontainers/programs/luauc:engine/luauc.wasm)",
+        "MC_LUAUC_PACK": "$(rlocationpath //memcontainers/programs/luauc:engine/luauc-runtime.pack.wasm)",
+        "MC_LUAUC_PROFILE": "$(rlocationpath //memcontainers/programs/luauc:engine/luauc-runtime.profile)",
+    },
+)
+
+mc_ts_project(
     name = "git_real_remote_test_lib",
     srcs = ["test/git-real-remote.test.ts"],
     deps = [

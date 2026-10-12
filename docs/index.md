@@ -43,6 +43,8 @@ contributor documentation, see [AgentOS on DeepWiki](https://deepwiki.com/OpytAI
   `vectorStore()`.
 - [Git](./git.md): optional host git — create option, worktree mount, thin `/bin/git`, and
   connection-bound remotes.
+- [Compiler](./compiler.md): optional luauc compiler — create option, `luau --compile`, and host
+  compile.
 - [Sidecars](./sidecars.md): grants, host attachments, external-resource lifecycle, and fork behavior.
 - [Browser sidecars](./browser-sidecars.md): typed Chromium sessions, pages, input, screenshots,
   cleanup, and the hosted or self-hosted infrastructure they require.

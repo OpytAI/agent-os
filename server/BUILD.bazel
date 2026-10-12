@@ -92,6 +92,9 @@ mix_test(
         "//memcontainers/images:posix",
         "//memcontainers/kernel/rust:kernel",
         "//memcontainers/lib/git-engine:git_engine_native_release",
+        "//memcontainers/programs/luauc:engine/luauc",
+        "//memcontainers/programs/luauc:engine/luauc-runtime.pack.wasm",
+        "//memcontainers/programs/luauc:engine/luauc-runtime.profile",
     ],
     env = {
         "ERL_COMPILER_OPTIONS": "deterministic",
@@ -99,6 +102,9 @@ mix_test(
         # elixir_test wrapper does not expand $(rootpath)/$(rlocationpath). Path is relative
         # to the mix project root after `cd $TEST_SRCDIR/$TEST_WORKSPACE/server`.
         "AGENTOS_GIT_ENGINE": "../memcontainers/lib/git-engine/git_engine_native_release",
+        "AGENTOS_LUAUC_ENGINE": "../memcontainers/programs/luauc/engine/luauc",
+        "AGENTOS_LUAUC_PACK": "../memcontainers/programs/luauc/engine/luauc-runtime.pack.wasm",
+        "AGENTOS_LUAUC_PROFILE": "../memcontainers/programs/luauc/engine/luauc-runtime.profile",
     },
     lib = ":lib_test",
     tags = ["manual"],

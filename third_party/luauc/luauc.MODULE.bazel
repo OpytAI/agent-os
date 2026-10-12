@@ -8,7 +8,7 @@
 bazel_dep(name = "luauc", version = "0.0.0")
 archive_override(
     module_name = "luauc",
-    integrity = "sha256-hn1SOocIww6fBnOv8r9WZxJ3ye7ZTDqptWyAKiZoWPA=",
-    strip_prefix = "luauc-70774c37016cc6adcb4f3beab2f5e50170e429c3",
-    url = "https://github.com/OpytAI/luauc/archive/70774c37016cc6adcb4f3beab2f5e50170e429c3.tar.gz",
+    integrity = "sha256-Q/ATr4SYGOS5Dw6B9wpDQveugwJqOAYA5at8/0kD3o8=",
+    strip_prefix = "luauc-e403110214e1a5aa780070d40b1af84ad321ad18",
+    url = "https://github.com/OpytAI/luauc/archive/e403110214e1a5aa780070d40b1af84ad321ad18.tar.gz",
 )

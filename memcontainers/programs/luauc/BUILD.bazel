@@ -1,0 +1,84 @@
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("//bazel:mc_program.bzl", "mc_rust_program")
+load("//bazel/tools/size:defs.bzl", "size_limit")
+
+# programs/luauc — thin pure-mc /bin/luau-compile over the optional compiler host call.
+# The guest carries no compiler and no runtime pack. The host port and wasm stay
+# under engine/.
+
+rust_binary(
+    name = "luauc_bin",
+    srcs = [
+        "src/main.rs",
+        "src/wire.rs",
+    ],
+    crate_root = "src/main.rs",
+    edition = "2021",
+    tags = ["manual"],
+    deps = [
+        "//memcontainers/sysroot/rust:lib",
+        "@crates//:talc",
+    ],
+)
+
+rust_test(
+    name = "wire_test",
+    srcs = [
+        "src/wire.rs",
+        "test/wire_test.rs",
+    ],
+    crate_root = "test/wire_test.rs",
+    edition = "2021",
+)
+
+# Full tier: mc_sys_host_call requires CAP_NET. 32 MiB lets the guest buffer one
+# compiler response. Fuel 0 keeps the kernel default.
+mc_rust_program(
+    name = "luau-compile",
+    lib = ":luauc_bin",
+    mem = 32 * 1024 * 1024,
+    tier = "full",
+    visibility = ["//visibility:public"],
+)
+
+size_limit(
+    name = "luau_compile_size_limit",
+    file = ":luau-compile",
+    max_bytes = 256 * 1024,
+)
+
+pkg_tar(
+    name = "luau_compile_layer",
+    create_parents = False,
+    files = {
+        ":luau-compile": "/bin/luau-compile",
+    },
+    owner = "0.0",
+    visibility = ["//visibility:public"],
+)
+
+# Host artifacts. Outs live under engine/ so they do not collide with :luau-compile.
+genrule(
+    name = "luauc_engine_files",
+    srcs = [
+        "@luauc//compiler:compiler_port",
+        "@luauc//compiler:compiler_wasm",
+        "//memcontainers/programs/luau/aot:agent_os_runtime_pack",
+        "//memcontainers/programs/luau/aot:agent_os_runtime_profile",
+    ],
+    outs = [
+        "engine/luauc",
+        "engine/luauc.wasm",
+        "engine/luauc-runtime.pack.wasm",
+        "engine/luauc-runtime.profile",
+    ],
+    cmd = """
+        cp $(location @luauc//compiler:compiler_port) $(location engine/luauc) &&
+        chmod a+x $(location engine/luauc) &&
+        cp $(location @luauc//compiler:compiler_wasm) $(location engine/luauc.wasm) &&
+        cp $(location //memcontainers/programs/luau/aot:agent_os_runtime_pack) $(location engine/luauc-runtime.pack.wasm) &&
+        cp $(location //memcontainers/programs/luau/aot:agent_os_runtime_profile) $(location engine/luauc-runtime.profile)
+    """,
+    visibility = ["//visibility:public"],
+)

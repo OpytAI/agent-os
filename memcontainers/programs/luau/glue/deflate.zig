@@ -77,7 +77,8 @@ fn lDecompress(L: ?*State) callconv(.c) c_int {
     // Output cap: the EXACT uncompressed size when the caller knows it (the zip central directory
     // passes usize as arg 2), else the hard ceiling. A stream that decodes to more than the cap is a
     // bomb (or corrupt) → a catchable error, never an unbounded ArrayList → OOM → guest crash.
-    const maxout: usize = if (c.lua_type(L, 2) == c.LUA_TNUMBER) blk: {
+    const exact = c.lua_type(L, 2) == c.LUA_TNUMBER;
+    const maxout: usize = if (exact) blk: {
         const want = c.lua_tonumberx(L, 2, null);
         break :blk if (want <= 0) 0 else @intFromFloat(want);
     } else HARD_MAX_OUT;
@@ -89,7 +90,14 @@ fn lDecompress(L: ?*State) callconv(.c) c_int {
 
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
-    out.ensureTotalCapacity(alloc, @min(maxout, 64 * 1024 * 1024)) catch return decFail(L, "deflate: out of memory");
+    // Unknown length used to reserve 64 MiB. The default guest budget is 16 MiB,
+    // so that reservation failed before the first output byte. An exact size
+    // still reserves that size. An unknown size grows from a small buffer, and
+    // the loop below still rejects a stream past maxout.
+    const grown = n *| 4;
+    const unknown_reserve: usize = if (grown > 64 * 1024) 64 * 1024 else grown + 64;
+    const reserve: usize = if (exact) @min(maxout, 64 * 1024 * 1024) else @min(maxout, unknown_reserve);
+    out.ensureTotalCapacity(alloc, reserve) catch return decFail(L, "deflate: out of memory");
     var tmp: [8192]u8 = undefined;
     while (true) {
         const got = dec.reader.readSliceShort(&tmp) catch return decFail(L, "deflate: corrupt stream");

@@ -8,6 +8,31 @@ exports_files(
     visibility = ["//memcontainers/programs/browser:__pkg__"],
 )
 
+# Batteries the compiler test feeds to `luau --compile`. Require names are the
+# file stems. /bin/luau embeds every lib/*.luau through the glue library.
+filegroup(
+    name = "office_batteries",
+    srcs = [
+        "lib/calc.luau",
+        "lib/chart.luau",
+        "lib/color.luau",
+        "lib/docx.luau",
+        "lib/http.luau",
+        "lib/log.luau",
+        "lib/media.luau",
+        "lib/opc.luau",
+        "lib/path.luau",
+        "lib/pptx.luau",
+        "lib/time.luau",
+        "lib/url.luau",
+        "lib/xform.luau",
+        "lib/xlsx.luau",
+        "lib/xml.luau",
+        "lib/zip.luau",
+    ],
+    visibility = ["//memcontainers/sdk-js/core:__pkg__"],
+)
+
 # The Luau glue, written in Zig (the C/C++ → Zig rewrite, SYSTEMS.md). Luauc's patched Luau
 # component sources link against this. trap + the mc syscall shim are
 # self-contained (no Lua C API); the bindings (sys/stdlib + json/hash/re/encoding/deflate + the

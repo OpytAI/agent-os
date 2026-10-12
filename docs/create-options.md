@@ -28,6 +28,7 @@ fields—`mc.use()`. Applicability and defaults vary by runtime.
 | `sidecars`           | grant-descriptor map                     | `{}`                            | Portable sidecar grants attached at boot                                                                                                                                                 |
 | `deterministic`      | boolean                                  | `false`                         | Repeatable guest clock and random source                                                                                                                                                 |
 | `git`                | `true` \| object (`GitCreateOptions`)    | omit (off)                      | Host Gitz source plane. **Presence enables**. `true` resolves `git-engine.tar`; object configures mounts, identity, durability, policy, and optional artifact bytes. See [Git](./git.md) |
+| `compiler`           | `true` \| object                         | omit (off)                      | Optional luauc compiler. **Presence enables**. `true` resolves `luauc.wasm`, the runtime pack, and the profile. An object may pass `engine`, `pack`, and `profile` bytes. The guest command is `luau --compile`. See [Compiler](./compiler.md) |
 
 ## `runtime`
 
@@ -256,3 +257,20 @@ const full = await mc.create({
 
 Omit `git` for VMs that do not need host git. Remote runtime placement and server Port wiring are
 covered on [Git](./git.md); architecture is `SYSTEMS.md` §11b.
+
+## `compiler`
+
+Host Luau compilation. JavaScript loads zero-import `luauc.wasm`. The served runtime owns the native
+compiler port. **Opt-in by presence** — omit the field and `luau --compile` reports that the compiler
+is not attached. `/bin/luau` stays available either way. See [Compiler](./compiler.md).
+
+| Form   | Meaning                                                                                          |
+| ------ | ------------------------------------------------------------------------------------------------ |
+| `true` | Resolve `luauc.wasm`, `luauc-runtime.pack.wasm`, and `luauc-runtime.profile`.                    |
+| object | Optional `engine`, `pack`, and `profile` bytes. Omitted fields use the same resolution as `true`. |
+
+```js
+const compiled = await mc.create({
+  compiler: true,
+});
+```

@@ -160,6 +160,14 @@ export interface CreateOptions {
    * - **object** — {@link GitCreateOptions} (optional `engine` tar bytes + config)
    */
   git?: true | GitCreateOptions;
+  /**
+   * Optional luauc compiler. Omit it and the VM loads no compiler.
+   * `true` resolves `luauc.wasm`, the runtime pack, and the runtime profile.
+   * The object form supplies those bytes. A profile that disagrees with the
+   * pack's `luauc.runtime.v1` section fails create. An omitted profile is copied
+   * from that section.
+   */
+  compiler?: true | { engine?: Uint8Array; pack?: Uint8Array; profile?: Uint8Array };
 }
 
 export type ConnectionAuth =

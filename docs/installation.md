@@ -153,6 +153,9 @@ registry.
 | `MC_BASE_IMAGE`            | `defaultImage()`      | Local path to the default image tar                            |
 | `MC_CATALOG_COMPILER_WASM` | Catalog compilation   | Local path to `catalog-compiler.wasm`                          |
 | `MC_GIT_ENGINE_TAR`        | Host git / LLB        | Local path to `git-engine.tar`                                 |
+| `MC_LUAUC_ENGINE`          | Host compiler         | Local path to `luauc.wasm`                                     |
+| `MC_LUAUC_PACK`            | Host compiler         | Local path to `luauc-runtime.pack.wasm`                        |
+| `MC_LUAUC_PROFILE`         | Host compiler         | Local path to `luauc-runtime.profile`                          |
 | `AGENTOS_DIR`              | Artifact resolve      | Install root (`kernel.wasm`, `git-engine.tar`, flavor tars, …) |
 | `MC_ARTIFACT_HOME`         | Artifact resolve      | Alias for install root (same role as `AGENTOS_DIR`)            |
 | `MC_ARTIFACT_CACHE`        | Artifact resolve      | Host cache root (blobs + materialized engine dirs)             |

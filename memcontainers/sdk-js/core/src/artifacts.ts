@@ -69,6 +69,9 @@ export type ArtifactKind =
   | "kernel"
   | "catalog-compiler"
   | "git-engine"
+  | "luauc-engine"
+  | "luauc-pack"
+  | "luauc-profile"
   | `image:${string}`;
 
 const FLAVOR_RE = /^(minimal|posix|loom|atlas|paper)$/;
@@ -87,6 +90,9 @@ function assetFileName(kind: ArtifactKind): string {
   if (kind === "kernel") return "kernel.wasm";
   if (kind === "catalog-compiler") return "catalog-compiler.wasm";
   if (kind === "git-engine") return "git-engine.tar";
+  if (kind === "luauc-engine") return "luauc.wasm";
+  if (kind === "luauc-pack") return "luauc-runtime.pack.wasm";
+  if (kind === "luauc-profile") return "luauc-runtime.profile";
   if (kind.startsWith("image:")) return `${kind.slice("image:".length)}.tar`;
   throw new Error(`unknown artifact kind ${kind}`);
 }
@@ -95,6 +101,9 @@ function envPathFor(kind: ArtifactKind): string | undefined {
   if (kind === "kernel") return env("MC_KERNEL_WASM");
   if (kind === "catalog-compiler") return env("MC_CATALOG_COMPILER_WASM");
   if (kind === "git-engine") return env("MC_GIT_ENGINE_TAR");
+  if (kind === "luauc-engine") return env("MC_LUAUC_ENGINE");
+  if (kind === "luauc-pack") return env("MC_LUAUC_PACK");
+  if (kind === "luauc-profile") return env("MC_LUAUC_PROFILE");
   if (kind.startsWith("image:")) {
     const flavor = kind.slice("image:".length);
     const base = env("MC_BASE_IMAGE");
@@ -233,6 +242,9 @@ function envNameFor(kind: ArtifactKind): string {
   if (kind === "kernel") return "MC_KERNEL_WASM";
   if (kind === "catalog-compiler") return "MC_CATALOG_COMPILER_WASM";
   if (kind === "git-engine") return "MC_GIT_ENGINE_TAR";
+  if (kind === "luauc-engine") return "MC_LUAUC_ENGINE";
+  if (kind === "luauc-pack") return "MC_LUAUC_PACK";
+  if (kind === "luauc-profile") return "MC_LUAUC_PROFILE";
   if (kind.startsWith("image:")) return "MC_BASE_IMAGE (or AGENTOS_DIR/<flavor>.tar)";
   return "MC_ARTIFACT";
 }
@@ -331,6 +343,18 @@ export async function resolveGitEngineTar(bytes?: Uint8Array): Promise<Uint8Arra
   return resolveArtifact("git-engine", { bytes });
 }
 
+export async function resolveLuaucEngine(bytes?: Uint8Array): Promise<Uint8Array> {
+  return resolveArtifact("luauc-engine", { bytes });
+}
+
+export async function resolveLuaucPack(bytes?: Uint8Array): Promise<Uint8Array> {
+  return resolveArtifact("luauc-pack", { bytes });
+}
+
+export async function resolveLuaucProfile(bytes?: Uint8Array): Promise<Uint8Array> {
+  return resolveArtifact("luauc-profile", { bytes });
+}
+
 /** Resolve and extract the sole browser runtime from git-engine.tar in memory. */
 export async function resolveGitEngineWasm(engineTar?: Uint8Array): Promise<Uint8Array> {
   return readTarFile(await resolveGitEngineTar(engineTar), "git_engine.wasm");
@@ -363,6 +387,9 @@ export async function seedArtifactCacheFromDir(
     "kernel.wasm",
     "catalog-compiler.wasm",
     "git-engine.tar",
+    "luauc.wasm",
+    "luauc-runtime.pack.wasm",
+    "luauc-runtime.profile",
     "minimal.tar",
     "posix.tar",
     "loom.tar",
@@ -377,6 +404,9 @@ export async function seedArtifactCacheFromDir(
     if (name === "kernel.wasm") kind = "kernel";
     else if (name === "catalog-compiler.wasm") kind = "catalog-compiler";
     else if (name === "git-engine.tar") kind = "git-engine";
+    else if (name === "luauc.wasm") kind = "luauc-engine";
+    else if (name === "luauc-runtime.pack.wasm") kind = "luauc-pack";
+    else if (name === "luauc-runtime.profile") kind = "luauc-profile";
     else kind = imageKind(name.replace(/\.tar$/, ""));
     await publishBlob(kind, bytes, version);
   }

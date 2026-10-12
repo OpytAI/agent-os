@@ -81,6 +81,9 @@ export {
   resolveImageTar,
   resolveCatalogCompiler,
   resolveGitEngineTar,
+  resolveLuaucEngine,
+  resolveLuaucPack,
+  resolveLuaucProfile,
   artifactCacheRoot,
   seedArtifactCacheFromDir,
 } from "./artifacts.js";
@@ -100,6 +103,7 @@ export {
   materializeLlbGit,
   createEngineGitSource,
 } from "./git/index.js";
+export { CompilerEngine } from "./compiler/engine.js";
 export type {
   GitRequest,
   GitResponse,
