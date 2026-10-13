@@ -5,7 +5,7 @@ load(":defs.bzl", "gh_release")
 #
 # Client-side release assets: kernel.wasm, the five SHIPPED flavor tars (minimal, posix, loom, atlas,
 # paper), the self-contained @mc/core ESM bundle (mc-core.mjs), catalog-compiler.wasm, browser-ctl,
-# git-engine.tar, and the optional luauc compiler, pack, and profile. The tool also generates and
+# git-engine.tar, and luauc.tar. The tool also generates and
 # uploads a SHA256SUMS over those bytes. Deliberately excluded: base/rootfs (substrate, not a
 # flavor), svc_test, the `mc` host binary, the Elixir/server package (incl. native Port), and a
 # manifest.json index. Adding an asset is one line in `assets`.
@@ -30,9 +30,7 @@ gh_release(
         "//memcontainers/programs/browser:browser_ctl_layer": "browser-ctl.tar",
         "//memcontainers/lib/catalog-compiler:wasm": "catalog-compiler.wasm",
         "//memcontainers/lib/git-engine:git_engine_browser_archive": "git-engine.tar",
-        "//memcontainers/programs/luauc:engine/luauc.wasm": "luauc.wasm",
-        "//memcontainers/programs/luauc:engine/luauc-runtime.pack.wasm": "luauc-runtime.pack.wasm",
-        "//memcontainers/programs/luauc:engine/luauc-runtime.profile": "luauc-runtime.profile",
+        "//memcontainers/programs/luauc:browser_archive": "luauc.tar",
     },
     repo = "OpytAI/agent-os",
     visibility = ["//visibility:public"],

@@ -33,8 +33,8 @@ usage: install.sh [--mode agentic|embedded] [--image minimal|posix|loom|atlas|pa
 
 Downloads the runtime files needed to run AgentOS from GitHub releases:
   mc-core.mjs, kernel.wasm, catalog-compiler.wasm, git-engine.tar
-  (extracted to git-engine/), luauc.wasm, luauc-runtime.pack.wasm,
-  luauc-runtime.profile, and one image tar.
+  (extracted to git-engine/), luauc.tar (extracted to compiler files),
+  and one image tar.
 
 Modes:
   agentic   for Claude, Codex, opencode, and other coding agents; includes a skill file
@@ -179,6 +179,30 @@ extract_git_engine() {
     die "git-engine.tar missing Gitz license after extract"
 }
 
+extract_luauc() {
+  local root="$1"
+  local archive="${root}/luauc.tar"
+  local listing="${root}/.luauc-entries"
+  local entry expected
+  tar -tf "$archive" >"$listing" || die "cannot list luauc.tar"
+  for expected in luauc.wasm luauc-runtime.pack.wasm luauc-runtime.profile; do
+    [ "$(awk -v wanted="$expected" '$0 == wanted { count++ } END { print count+0 }' "$listing")" = 1 ] ||
+      die "luauc.tar must contain exactly one ${expected}"
+  done
+  while IFS= read -r entry; do
+    case "$entry" in
+    luauc.wasm | luauc-runtime.pack.wasm | luauc-runtime.profile) ;;
+    *) die "luauc.tar contains unexpected entry: ${entry}" ;;
+    esac
+  done <"$listing"
+  rm "$listing"
+
+  for entry in luauc.wasm luauc-runtime.pack.wasm luauc-runtime.profile; do
+    tar -xOf "$archive" "$entry" >"${root}/${entry}" || die "failed to extract ${entry} from luauc.tar"
+    [ -s "${root}/${entry}" ] || die "luauc.tar contains empty ${entry}"
+  done
+}
+
 commit_install() {
   local staged="$1"
   local target="$2"
@@ -216,7 +240,7 @@ AgentOS is a WebAssembly computer you drive from the host through the `mc` API e
 `mc-core.mjs` (the `@mc/core` bundle). It is the agent's own working machine, not a generic
 command runner. Use the release artifacts installed alongside this file — `mc-core.mjs`,
 `kernel.wasm`, one image `.tar`, `catalog-compiler.wasm` (when a VM uses connections),
-`git-engine.tar` (host git for `mc.create({ git: true })`), and the three luauc artifacts
+`git-engine.tar` (host git for `mc.create({ git: true })`), and `luauc.tar`
 (optional AOT compilation) — and rebuild from source only when
 changing AgentOS itself.
 
@@ -339,7 +363,7 @@ print_example() {
   d="$(js_string "$abs_dir")"
 
   printf '\nInstalled AgentOS %s assets in %s\n' "$mode" "$abs_dir"
-  printf 'Assets: mc-core.mjs, kernel.wasm, catalog-compiler.wasm, git-engine/, luauc.wasm, luauc-runtime.pack.wasm, luauc-runtime.profile, %s\n' \
+  printf 'Assets: mc-core.mjs, kernel.wasm, catalog-compiler.wasm, git-engine/, luauc.tar, %s\n' \
     "$image_asset"
   printf 'Checksums / more assets: %s\n' "$(release_page)"
   if [ "$mode" = "agentic" ]; then
@@ -422,13 +446,14 @@ printf 'Image: %s\n' "$IMAGE_ASSET"
 printf 'Release: %s\n' "$(release_page)"
 printf 'Target: %s\n\n' "$ABS_DIR"
 
-ASSETS=("mc-core.mjs" "kernel.wasm" "catalog-compiler.wasm" "$IMAGE_ASSET" "git-engine.tar" "luauc.wasm" "luauc-runtime.pack.wasm" "luauc-runtime.profile")
+ASSETS=("mc-core.mjs" "kernel.wasm" "catalog-compiler.wasm" "$IMAGE_ASSET" "git-engine.tar" "luauc.tar")
 download_asset "$BASE_URL" "SHA256SUMS" "${STAGE_DIR}/SHA256SUMS"
 for asset in "${ASSETS[@]}"; do
   download_asset "$BASE_URL" "$asset" "${STAGE_DIR}/${asset}"
 done
 verify_assets "$STAGE_DIR" "${ASSETS[@]}"
 extract_git_engine "$STAGE_DIR"
+extract_luauc "$STAGE_DIR"
 
 # Seed local artifact cache + env for clean mc.create (no path laundry).
 CACHE_DIR="${ABS_DIR}/.artifact-cache"
@@ -457,9 +482,7 @@ cat >"${STAGE_DIR}/manifest.json" <<MAN
     "kernel": "kernel.wasm",
     "catalog-compiler": "catalog-compiler.wasm",
     "git-engine": "git-engine.tar",
-    "luauc-engine": "luauc.wasm",
-    "luauc-pack": "luauc-runtime.pack.wasm",
-    "luauc-profile": "luauc-runtime.profile",
+    "luauc": "luauc.tar",
     "image": "${IMAGE_ASSET}"
   }
 }

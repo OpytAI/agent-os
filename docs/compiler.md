@@ -24,9 +24,9 @@ const vm = await mc.create({
 supervises the native compiler port. One engine serves one VM. `CompilerEngine.compile` is the
 same compile for a caller with no VM.
 
-The release publishes all three browser/JavaScript artifacts. The installer downloads them and
-exports their paths in `env.sh`. The server package also contains the native compiler and its
-matching pack and profile under `priv/` for `attach_compiler/2`.
+The release publishes `luauc.tar` with the three browser/JavaScript artifacts. The installer
+extracts them and exports their paths in `env.sh`. The server package also contains the native
+compiler and its matching pack and profile under `priv/` for `attach_compiler/2`.
 
 ## Command
 

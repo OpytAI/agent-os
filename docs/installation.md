@@ -9,7 +9,7 @@ The installer is served by the AgentOS site. In the commands below, `{domain}` m
 the documentation you are reading; the web reference fills it in automatically.
 
 It downloads `mc-core.mjs`, `kernel.wasm`, `catalog-compiler.wasm`, `git-engine.tar`
-(extracted to `git-engine/`), `luauc.wasm`, `luauc-runtime.pack.wasm`, `luauc-runtime.profile`,
+(extracted to `git-engine/`), `luauc.tar` (extracted to three compiler files),
 and one flavor tar. Every asset is checked against the release's
 `SHA256SUMS` before a staged install replaces the destination; a failed download or checksum leaves
 the existing installation intact.
@@ -87,9 +87,7 @@ const vm = await mc.create({
 | Flavor tar              | Booting an embedded VM from raw bytes                                                       |
 | `catalog-compiler.wasm` | Compiling connection catalogs or adding host tools in a browser                             |
 | `git-engine.tar`        | Host git (`mc.create({ git: true })`); installer also extracts `git-engine/` for inspection |
-| `luauc.wasm`            | Optional Luau AOT compiler (`mc.create({ compiler: true })`)                            |
-| `luauc-runtime.pack.wasm` | Runtime linked into compiled Luau programs                                        |
-| `luauc-runtime.profile` | ABI profile paired with the runtime pack                                         |
+| `luauc.tar`             | Optional Luau AOT compiler, runtime pack, and profile (`mc.create({ compiler: true })`)     |
 | `mc-core.mjs`           | Using the standalone release SDK                                                            |
 
 The catalog compiler is not guest code and is not part of an image. It is pure host-side WebAssembly

@@ -5,7 +5,8 @@
 //   POST   api.github.com/repos/{repo}/releases                       -> {id, upload_url, html_url}
 //   POST   uploads.github.com/.../releases/{id}/assets?name=<file>    -> per asset (octet-stream body)
 // The leading GET makes a re-run IDEMPOTENT: an existing release is reused (its notes re-synced, its
-// same-named assets REPLACED via delete-then-upload) instead of failing with 422 "already_exists".
+// same-named assets REPLACED via delete-then-upload, obsolete assets removed after upload) instead
+// of failing with 422 "already_exists".
 //
 // Alongside the graph assets it uploads a generated SHA256SUMS — `sha256sum -c`-compatible, hashed
 // over the EXACT bytes uploaded (the tool reads each asset once to hash, once to upload), so the
@@ -310,7 +311,7 @@ async function main() {
   let release = await findRelease(repo, opts.tag, token);
   if (release) {
     console.error(
-      `\nrelease ${opts.tag} exists (#${release.id}) — reusing; syncing notes, replacing same-named assets`,
+      `\nrelease ${opts.tag} exists (#${release.id}) — reusing; syncing notes and assets`,
     );
     await updateReleaseBody(repo, release.id, notes, token);
   } else {
@@ -327,6 +328,14 @@ async function main() {
     console.error(
       `  uploaded ${a.name.padEnd(16)} ${human(a.size).padStart(10)}  ${up.browser_download_url}`,
     );
+  }
+
+  const wanted = new Set(uploads.map((asset) => asset.name));
+  for (const [name, id] of existing) {
+    if (!wanted.has(name)) {
+      await deleteAsset(repo, id, token);
+      console.error(`  removed obsolete ${name}`);
+    }
   }
 
   console.error(`\n✓ ${release.html_url}`);

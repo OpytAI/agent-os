@@ -100,3 +100,15 @@ filegroup(
     srcs = [":engine/luauc-runtime.profile"],
     visibility = ["//visibility:public"],
 )
+
+pkg_tar(
+    name = "browser_archive",
+    files = {
+        ":engine/luauc.wasm": "luauc.wasm",
+        ":engine/luauc-runtime.pack.wasm": "luauc-runtime.pack.wasm",
+        ":engine/luauc-runtime.profile": "luauc-runtime.profile",
+    },
+    mode = "0644",
+    owner = "0.0",
+    visibility = ["//visibility:public"],
+)
