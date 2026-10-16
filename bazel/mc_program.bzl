@@ -4,6 +4,8 @@ the actual compile is done by zig, so no cc_library / cc_toolchain is needed (Ag
 zig toolchain, not a CC one). See SYSTEMS.md §10."""
 
 load("@bazel_skylib//lib:paths.bzl", "paths")
+load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
+load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("//bazel:release_wasm.bzl", "release_wasm")
 load("//bazel:wasm_opt.bzl", "wasm_opt")
 

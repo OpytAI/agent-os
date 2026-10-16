@@ -4,4 +4,5 @@
 exports_files([
     "patches/0001-erlang_config-otp-public-visibility.patch",
     "patches/0002-quiet-install-lock-contention.patch",
+    "patches/0003-bazel9-cc-info.patch",
 ])

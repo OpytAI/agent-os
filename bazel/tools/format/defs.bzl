@@ -1,8 +1,10 @@
-"""Repository-aware wrappers for formatters not modeled by rules_lint."""
+"""Repository-aware wrappers for first-party formatters."""
+
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
 def source_formatter(name, language, tool, data = []):
     """Creates matching write and check commands for one first-party language."""
-    native.sh_binary(
+    sh_binary(
         name = name,
         srcs = ["//bazel/tools/format:runner.sh"],
         args = [
@@ -13,7 +15,7 @@ def source_formatter(name, language, tool, data = []):
         data = [tool] + data,
         deps = ["@bazel_tools//tools/bash/runfiles"],
     )
-    native.sh_binary(
+    sh_binary(
         name = name + ".check",
         srcs = ["//bazel/tools/format:runner.sh"],
         args = [

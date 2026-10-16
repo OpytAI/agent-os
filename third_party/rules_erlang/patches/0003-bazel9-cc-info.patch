@@ -1,0 +1,18 @@
+Load the C++ providers from rules_cc for Bazel 9.
+
+diff --git a/MODULE.bazel b/MODULE.bazel
+--- a/MODULE.bazel
++++ b/MODULE.bazel
+@@ -8,3 +8,4 @@
+     name = "bazel_skylib",
+     version = "1.7.1",
+ )
++bazel_dep(name = "rules_cc", version = "0.2.18")
+diff --git a/tools/erlang_headers.bzl b/tools/erlang_headers.bzl
+--- a/tools/erlang_headers.bzl
++++ b/tools/erlang_headers.bzl
+@@ -1,2 +1,4 @@
++load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
++load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
+ load("//:util.bzl", "path_join")
+ load(

@@ -34,6 +34,10 @@ fi
 cd "$workspace"
 
 case "$language" in
+c_cpp) patterns=('*.c' '*.cc' '*.cpp' '*.cxx' '*.h' '*.hh' '*.hpp' '*.hxx') ;;
+rust) patterns=('*.rs') ;;
+shell) patterns=('*.sh' '*.bash') ;;
+starlark) patterns=('*.bzl' '*.bazel' 'BUILD' 'WORKSPACE') ;;
 oxc) patterns=('*.js' '*.mjs' '*.cjs' '*.jsx' '*.ts' '*.mts' '*.cts' '*.tsx' '*.json' '*.jsonc' '*.css' '*.scss' '*.less' '*.html' '*.md' '*.toml' '*.yaml' '*.yml') ;;
 zig) patterns=('*.zig') ;;
 elixir) patterns=('*.ex' '*.exs') ;;
@@ -80,6 +84,30 @@ if ((${#files[@]} == 0)); then
 fi
 
 case "$language" in
+c_cpp)
+  if [[ "$mode" == check ]]; then
+    exec "$tool" --style=file --fallback-style=none --dry-run -Werror "${files[@]}"
+  fi
+  exec "$tool" --style=file --fallback-style=none -i "${files[@]}"
+  ;;
+rust)
+  if [[ "$mode" == check ]]; then
+    exec "$tool" --check "${files[@]}"
+  fi
+  exec "$tool" "${files[@]}"
+  ;;
+shell)
+  if [[ "$mode" == check ]]; then
+    exec "$tool" -d -i 2 "${files[@]}"
+  fi
+  exec "$tool" -w -i 2 "${files[@]}"
+  ;;
+starlark)
+  if [[ "$mode" == check ]]; then
+    exec "$tool" -mode=check "${files[@]}"
+  fi
+  exec "$tool" -mode=fix "${files[@]}"
+  ;;
 oxc)
   if [[ "$mode" == check ]]; then
     exec "$tool" --check "${files[@]}"

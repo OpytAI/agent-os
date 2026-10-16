@@ -23,6 +23,7 @@ archive_override(
     patches = [
         "//third_party/rules_erlang:patches/0001-erlang_config-otp-public-visibility.patch",
         "//third_party/rules_erlang:patches/0002-quiet-install-lock-contention.patch",
+        "//third_party/rules_erlang:patches/0003-bazel9-cc-info.patch",
     ],
     strip_prefix = "rules_erlang-b4b01911b99944fa0c9efb66bf3d9030ee784fa9/",
     url = "https://github.com/discord/rules_erlang/archive/b4b01911b99944fa0c9efb66bf3d9030ee784fa9.tar.gz",

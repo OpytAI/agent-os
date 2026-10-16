@@ -48,9 +48,8 @@ rust_library(
     ],
 )
 
-# The raw `mc` binary. Built in whatever config its consumer is in — the public `mc` below
-# wraps it to force opt + host_musl. Kept separate so the build_test can compile-check it
-# fast (fastbuild) without dragging in an opt wasmtime compile.
+# The raw `mc` binary. The public `mc` below wraps it to force opt for the
+# complete host graph, including Wasmtime.
 rust_binary(
     name = "mc_bin",
     srcs = [
@@ -75,25 +74,26 @@ host_release_binary(
     visibility = ["//visibility:public"],
 )
 
-# Compile-check the library + the binary's own sources fast (fastbuild). The opt+musl `mc`
-# is exercised when built directly and, structurally, by every e2e boot.
+# Compile-check the same optimized `mc` binary that users and e2e builds use.
 build_test(
     name = "build_test",
-    targets = [
-        ":lib",
-        ":mc_bin",
-    ],
+    targets = [":mc"],
 )
 
 # Cross-host snapshot fixture (A3/A8) — see test/snapshot_fixture.rs. Boots the kernel under THIS host,
 # writes a marker through the control channel, snapshots, and emits the bytes the JS host's restore test
 # rehydrates. Outside the `host` lib's src/ glob, so it is not part of the library.
 rust_binary(
-    name = "snapshot_fixture",
+    name = "snapshot_fixture_bin",
     srcs = ["test/snapshot_fixture.rs"],
     crate_root = "test/snapshot_fixture.rs",
     edition = "2021",
     deps = [":lib"],
+)
+
+host_release_binary(
+    name = "snapshot_fixture",
+    bin = ":snapshot_fixture_bin",
 )
 
 rust_opt_test(

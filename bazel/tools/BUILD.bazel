@@ -1,4 +1,3 @@
-load("@aspect_rules_lint//format:defs.bzl", "format_multirun")
 load("@npm//:@johnnymorganz/stylua-bin/package_json.bzl", stylua_bin = "bin")
 load("@npm//:@wasm-fmt/clang-format/package_json.bzl", clang_format_bin = "bin")
 load("@npm//:oxfmt/package_json.bzl", oxfmt_bin = "bin")
@@ -38,25 +37,28 @@ elixir_binary(
     actual = "//bazel/tools/format:elixir_fmt_tool",
 )
 
-# Standard languages use rules_lint's tracked-file discovery and .gitattributes ownership gates.
-format_multirun(
-    name = "format_standard",
-    c = ":clang_format",
-    cc = ":clang_format",
-    jobs = 1,  # C and C++ both claim headers; serialize them to avoid concurrent rewrites.
-    rust = "@rules_rust//tools/upstream_wrapper:rustfmt",
-    shell = "@aspect_rules_lint//format:shfmt",
-    shell_check_args = [
-        "-d",
-        "-i",
-        "2",
-    ],
-    shell_fix_args = [
-        "-w",
-        "-i",
-        "2",
-    ],
-    starlark = "@buildifier_prebuilt//:buildifier",
+source_formatter(
+    name = "format_c_cpp",
+    language = "c_cpp",
+    tool = ":clang_format",
+)
+
+source_formatter(
+    name = "format_rust",
+    language = "rust",
+    tool = "@rules_rust//tools/upstream_wrapper:rustfmt",
+)
+
+source_formatter(
+    name = "format_shell",
+    language = "shell",
+    tool = "@multitool//tools/shfmt",
+)
+
+source_formatter(
+    name = "format_starlark",
+    language = "starlark",
+    tool = "@buildifier_prebuilt//:buildifier",
 )
 
 source_formatter(
@@ -86,7 +88,10 @@ source_formatter(
 multirun(
     name = "format",
     commands = [
-        ":format_standard",
+        ":format_c_cpp",
+        ":format_rust",
+        ":format_shell",
+        ":format_starlark",
         ":format_oxc",
         ":format_zig",
         ":format_elixir",
@@ -100,7 +105,10 @@ multirun(
 multirun(
     name = "format.check",
     commands = [
-        ":format_standard.check",
+        ":format_c_cpp.check",
+        ":format_rust.check",
+        ":format_shell.check",
+        ":format_starlark.check",
         ":format_oxc.check",
         ":format_zig.check",
         ":format_elixir.check",

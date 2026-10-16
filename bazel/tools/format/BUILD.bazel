@@ -4,7 +4,10 @@ load("//bazel:elixir_transition.bzl", "ELIXIR_ONLY")
 
 package(default_visibility = ["//bazel/tools:__pkg__"])
 
-exports_files(["runner.sh"])
+exports_files([
+    "runner.sh",
+    "multitool.lock.json",
+])
 
 elixir_app(
     srcs = ["elixir_formatter.ex"],
