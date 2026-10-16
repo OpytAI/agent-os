@@ -277,9 +277,19 @@ fn valid_header(header: Header, minimum: usize) -> bool {
     header.version == 1 && header.flags == 0 && header.size as usize >= minimum
 }
 
+fn ranges_overlap(a: usize, a_len: usize, b: usize, b_len: usize) -> bool {
+    match (a.checked_add(a_len), b.checked_add(b_len)) {
+        (Some(a_end), Some(b_end)) => a < b_end && b < a_end,
+        _ => true,
+    }
+}
+
 unsafe fn validate_options(options: *const RuntimeOptions) -> Result<(), ResultCode> {
     if options.is_null() {
         return Ok(());
+    }
+    if (options as usize) % align_of::<Header>() != 0 {
+        return Err(contract::MC_HOST_INVALID_ARGUMENT);
     }
     let header = unsafe { (*options).header };
     if !valid_header(header, size_of::<RuntimeOptions>())
@@ -306,30 +316,67 @@ unsafe fn write_error(error: *mut Error, code: ResultCode, message: &str) {
     if error.is_null() {
         return;
     }
-    let error = unsafe { &mut *error };
-    if !valid_header(error.header, size_of::<Error>()) {
+    if (error as usize) % align_of::<Header>() != 0 {
         return;
     }
-    error.domain = if code == contract::MC_HOST_OK {
+    let caller_header = unsafe { ptr::read(error.cast::<Header>()) };
+    if !valid_header(caller_header, size_of::<Header>()) {
+        return;
+    }
+    let count = (caller_header.size as usize).min(size_of::<Error>());
+    let mut value = Error {
+        header: Header {
+            size: count as u32,
+            version: 1,
+            flags: 0,
+        },
+        domain: 0,
+        code: code as i32,
+        retryable: u8::from(code == contract::MC_HOST_BUSY),
+        reserved: [0; 7],
+        message: Buffer {
+            data: ptr::null_mut(),
+            capacity: 0,
+            required: message.len() as u64,
+        },
+    };
+    value.domain = if code == contract::MC_HOST_OK
+        || code == contract::MC_HOST_WOULD_BLOCK
+        || code == contract::MC_HOST_BUFFER_TOO_SMALL
+    {
         0
     } else if code == contract::MC_HOST_STALE_HANDLE || code == contract::MC_HOST_WRONG_KIND {
         3
     } else {
         1
     };
-    error.code = code as i32;
-    error.retryable = u8::from(code == contract::MC_HOST_BUSY);
-    error.reserved = [0; 7];
-    error.message.required = message.len() as u64;
-    if !error.message.data.is_null() && error.message.capacity != 0 {
-        if let Ok(capacity) = usize::try_from(error.message.capacity) {
-            let count = capacity.saturating_sub(1).min(message.len());
-            unsafe {
-                ptr::copy_nonoverlapping(message.as_ptr(), error.message.data, count);
-                *error.message.data.add(count) = 0;
+    if count == size_of::<Error>() && (error as usize) % align_of::<Error>() == 0 {
+        let caller_buffer = unsafe { ptr::read(ptr::addr_of!((*error).message)) };
+        value.message.data = caller_buffer.data;
+        value.message.capacity = caller_buffer.capacity;
+        if !caller_buffer.data.is_null() && caller_buffer.capacity != 0 {
+            if let Ok(capacity) = usize::try_from(caller_buffer.capacity) {
+                let written = capacity.saturating_sub(1).min(message.len());
+                let dst = caller_buffer.data as usize;
+                let error_start = error as usize;
+                let overlaps_error = dst < error_start.saturating_add(count)
+                    && dst.saturating_add(written.saturating_add(1)) > error_start;
+                if !overlaps_error {
+                    unsafe {
+                        ptr::copy_nonoverlapping(message.as_ptr(), caller_buffer.data, written);
+                        *caller_buffer.data.add(written) = 0;
+                    }
+                }
             }
         }
     }
+    unsafe {
+        ptr::copy_nonoverlapping(
+            (&value as *const Error).cast::<u8>(),
+            error.cast::<u8>(),
+            count,
+        )
+    };
 }
 
 fn guard(error: *mut Error, action: impl FnOnce() -> Result<(), ResultCode>) -> ResultCode {
@@ -352,8 +399,22 @@ unsafe extern "C" fn runtime_create(
     error: *mut Error,
 ) -> ResultCode {
     guard(error, || {
-        if out.is_null() {
+        if out.is_null() || (out as usize) % align_of::<RuntimeHandle>() != 0 {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        if !options.is_null() {
+            if (options as usize) % align_of::<Header>() != 0 {
+                return Err(contract::MC_HOST_INVALID_ARGUMENT);
+            }
+            let option_size = (unsafe { (*options).header.size as usize }).max(size_of::<Header>());
+            if ranges_overlap(
+                options as usize,
+                option_size,
+                out as usize,
+                size_of::<RuntimeHandle>(),
+            ) {
+                return Err(contract::MC_HOST_INVALID_ARGUMENT);
+            }
         }
         unsafe { *out = 0 };
         unsafe { validate_options(options)? };
@@ -377,16 +438,32 @@ unsafe extern "C" fn runtime_close(handle: RuntimeHandle, error: *mut Error) -> 
 
 unsafe extern "C" fn library_info(out: *mut LibraryInfo, error: *mut Error) -> ResultCode {
     guard(error, || {
-        if out.is_null() || !valid_header(unsafe { (*out).header }, size_of::<LibraryInfo>()) {
+        if out.is_null() || (out as usize) % align_of::<Header>() != 0 {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
-        unsafe {
-            (*out).header.size = size_of::<LibraryInfo>() as u32;
-            (*out).abi_major = contract::MC_HOST_ABI_MAJOR;
-            (*out).abi_minor = contract::MC_HOST_ABI_MINOR;
-            (*out).implementation_table_size = size_of::<Api>() as u32;
-            (*out).feature_bits = 0;
+        let caller_header = unsafe { ptr::read(out.cast::<Header>()) };
+        if !valid_header(caller_header, size_of::<Header>()) {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
+        let count = (caller_header.size as usize).min(size_of::<LibraryInfo>());
+        let value = LibraryInfo {
+            header: Header {
+                size: count as u32,
+                version: 1,
+                flags: 0,
+            },
+            abi_major: contract::MC_HOST_ABI_MAJOR,
+            abi_minor: contract::MC_HOST_ABI_MINOR,
+            implementation_table_size: size_of::<Api>() as u32,
+            feature_bits: 0,
+        };
+        unsafe {
+            ptr::copy_nonoverlapping(
+                (&value as *const LibraryInfo).cast::<u8>(),
+                out.cast::<u8>(),
+                count,
+            )
+        };
         Ok(())
     })
 }

@@ -32,6 +32,38 @@ int main(int argc, char **argv) {
   need(info.abi_major == 1 && info.feature_bits == 0, "library metadata");
 
   struct {
+    mc_host_header_v1 header;
+    uint64_t canary;
+  } short_info = {{sizeof(mc_host_header_v1), 1, 0}, UINT64_C(0x76543210abcdef01)};
+  need(api.library_info((mc_host_library_info_v1 *)&short_info, NULL) == MC_HOST_OK,
+       "short output info");
+  need(short_info.header.size == sizeof(mc_host_header_v1) &&
+           short_info.canary == UINT64_C(0x76543210abcdef01),
+       "short info does not overwrite caller memory");
+
+  struct {
+    mc_host_library_info_v1 known;
+    uint64_t canary;
+  } wide_info = {MC_HOST_INIT(mc_host_library_info_v1),
+                 UINT64_C(0x12345678abcdef01)};
+  wide_info.known.header.size = sizeof(wide_info);
+  need(api.library_info(&wide_info.known, NULL) == MC_HOST_OK,
+       "wide output info");
+  need(wide_info.known.header.size == sizeof(mc_host_library_info_v1) &&
+           wide_info.canary == UINT64_C(0x12345678abcdef01),
+       "wide info reports written prefix");
+
+  struct {
+    mc_host_header_v1 header;
+    uint64_t canary;
+  } short_error = {{sizeof(mc_host_header_v1), 1, 0}, UINT64_C(0x31415926abcdef01)};
+  need(api.runtime_close(0, (mc_host_error_v1 *)&short_error) ==
+           MC_HOST_STALE_HANDLE, "short output error");
+  need(short_error.header.size == sizeof(mc_host_header_v1) &&
+           short_error.canary == UINT64_C(0x31415926abcdef01),
+       "short error does not overwrite caller memory");
+
+  struct {
     mc_host_runtime_options_v1 known;
     uint8_t future[8];
   } options = {MC_HOST_INIT(mc_host_runtime_options_v1), {0}};
@@ -45,6 +77,16 @@ int main(int argc, char **argv) {
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK,
        "accept zero future option");
   need(runtime != 0, "runtime handle");
+
+  union {
+    mc_host_runtime_options_v1 options;
+    mc_host_runtime_t handle;
+  } overlap = {.options = MC_HOST_INIT(mc_host_runtime_options_v1)};
+  need(api.runtime_create(&overlap.options, &overlap.handle, NULL) ==
+           MC_HOST_INVALID_ARGUMENT, "reject overlapping input and output");
+  need(overlap.options.header.size == sizeof(mc_host_runtime_options_v1),
+       "overlap rejection leaves input unchanged");
+
   need(api.get_interface(runtime, MC_HOST_IFACE_VM_V1, 1, 0, NULL, NULL) ==
            MC_HOST_INVALID_ARGUMENT, "reject malformed interface request");
   mc_host_header_v1 absent = {sizeof(absent), 1, 0};
