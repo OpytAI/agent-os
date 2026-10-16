@@ -54,6 +54,7 @@ mod connections;
 mod exports;
 mod host_call;
 mod net;
+pub mod output_queue;
 mod persist;
 mod snapshot;
 
@@ -460,13 +461,43 @@ pub(crate) fn host_call_read_into(
 /// with unrelated embedders. The normal Rust convenience path retains one
 /// process cache so existing callers still compile a kernel only once.
 pub struct KernelModuleCache {
-    entries: Mutex<HashMap<SnapshotDigest, (Arc<[u8]>, Engine, Module)>>,
+    entries: Mutex<CompiledModules>,
+    max_modules: usize,
+    max_bytes: usize,
 }
 
+struct CompiledModules {
+    entries: HashMap<SnapshotDigest, (Arc<[u8]>, Engine, Module)>,
+    retained_bytes: usize,
+}
+
+#[derive(Debug)]
+pub struct KernelCacheLimit;
+
+impl std::fmt::Display for KernelCacheLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("compiled-kernel cache limit exceeded")
+    }
+}
+
+impl std::error::Error for KernelCacheLimit {}
+
 impl KernelModuleCache {
+    /// Existing Rust callers keep their process-local convenience cache.
     pub fn new() -> Self {
+        Self::bounded(usize::MAX, usize::MAX)
+    }
+
+    /// Embedding runtimes retain at most this many distinct compiled modules
+    /// and source bytes, even after every kernel handle has closed.
+    pub fn bounded(max_modules: usize, max_bytes: usize) -> Self {
         Self {
-            entries: Mutex::new(HashMap::new()),
+            entries: Mutex::new(CompiledModules {
+                entries: HashMap::new(),
+                retained_bytes: 0,
+            }),
+            max_modules,
+            max_bytes,
         }
     }
 
@@ -484,11 +515,19 @@ impl KernelModuleCache {
             .entries
             .lock()
             .map_err(|_| anyhow!("compiled-kernel cache lock poisoned"))?;
-        if let Some((cached_bytes, engine, module)) = entries.get(&key) {
+        if let Some((cached_bytes, engine, module)) = entries.entries.get(&key) {
             if cached_bytes.as_ref() != wasm {
                 return Err(anyhow!("compiled-kernel digest collision"));
             }
             return Ok((engine.clone(), module.clone()));
+        }
+        if entries.entries.len() >= self.max_modules
+            || entries
+                .retained_bytes
+                .checked_add(wasm.len())
+                .is_none_or(|bytes| bytes > self.max_bytes)
+        {
+            return Err(KernelCacheLimit.into());
         }
         let mut config = Config::new();
         // Keep the established stack cap. A deeper guest should trap inside
@@ -499,7 +538,10 @@ impl KernelModuleCache {
             .async_stack_size(KERNEL_WASM_STACK_BYTES);
         let engine = Engine::new(&config).map_err(|e| anyhow!("creating wasmtime engine: {e}"))?;
         let module = wt(Module::new(&engine, wasm), "compiling kernel.wasm")?;
-        entries.insert(key, (Arc::from(wasm), engine.clone(), module.clone()));
+        entries.retained_bytes += wasm.len();
+        entries
+            .entries
+            .insert(key, (Arc::from(wasm), engine.clone(), module.clone()));
         Ok((engine, module))
     }
 }
