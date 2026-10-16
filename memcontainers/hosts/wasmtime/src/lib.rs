@@ -1390,9 +1390,9 @@ impl KernelHost {
     }
 
     /// Capture the entire VM as a portable byte blob: the linear-memory image — all kernel
-    /// and guest state — behind a small header (A8). Refuses while a host-egress operation
-    /// is in flight, since an open connection's raw host handle would not survive a
-    /// restore; let in-flight requests finish first. Pair with
+    /// and guest state — behind a small header (A8). Refuses while host egress or a
+    /// host-backed commit is pending: neither a live host handle nor an unacknowledged
+    /// external write may be copied into a second VM. Pair with
     /// [`KernelHostBuilder::restore`] to rehydrate or fork.
     ///
     /// PERF-013 counters are scrubbed before the memory image is read so diagnostic state
@@ -1604,13 +1604,19 @@ impl KernelHost {
     }
 
     fn ensure_snapshot_ready(&mut self) -> Result<()> {
-        if let Some(f) = self.exports.mc_inflight_egress.clone() {
-            let n = wt(f.call(&mut self.store, ()), "mc_inflight_egress")?;
-            if n > 0 {
-                return Err(anyhow!(
-                    "cannot snapshot: {n} host-egress operation(s) in flight; quiesce first"
-                ));
-            }
+        let inflight = self.inflight_egress()?;
+        if inflight != 0 {
+            return Err(anyhow!(
+                "cannot snapshot: {inflight} host-egress operation(s) in flight; quiesce first"
+            ));
+        }
+        // A commit may be parked in kernel memory before its host call starts.
+        // Capturing it would let both source and restored VM perform the write.
+        let pending = self.pending_commits()?;
+        if pending != 0 {
+            return Err(anyhow!(
+                "cannot snapshot: {pending} host-backed commit(s) pending; quiesce first"
+            ));
         }
         Ok(())
     }
