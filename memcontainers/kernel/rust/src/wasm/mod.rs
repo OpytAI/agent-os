@@ -646,21 +646,19 @@ pub fn new_engine() -> Engine {
     config.ignore_custom_sections(true);
     // Eager: translate every function at `Module::new`, not lazily on first call.
     // wasmi's default `LazyTranslation` charges the *guest's fuel* for translating
-    // a function the first time it is called; if a fuel slice runs dry mid-
-    // translation, resuming that is the path wasmi 1.0.9 corrupts (host SIGSEGV /
-    // `BadConversionToInteger` in-sandbox). Translating up front moves all
+    // a function the first time it is called; a dry-fuel compile in wasmi 2.0.0
+    // returns a non-resumable error from the resumable call path. Eager mode moves
     // translation out of the fuel-metered execution path, so heavy guests (typst,
     // agent) run safely on the normal cooperative `FUEL_QUANTUM` slices — no
     // single-slice workaround needed. Cost: the whole module is translated once at
-    // load (cached permanently in `GuestRuntime`, captured in snapshots). Root
-    // cause + proof: SYSTEMS.md §4.3.
+    // load (cached permanently in `GuestRuntime`, captured in snapshots).
     config.compilation_mode(wasmi::CompilationMode::Eager);
     Engine::new(&config)
 }
 
-/// The one guest-Wasm language profile used by both engine-free preflight and wasmi. Wasmi 1.0.9
-/// does not expose its configured feature set, so the mapping below keeps the two validators in
-/// lockstep instead of letting unsupported proposals reach the permanent engine arena.
+/// The one guest-Wasm language profile used by both engine-free preflight and
+/// wasmi. The mapping below keeps the two validators in lockstep instead of
+/// letting unsupported proposals reach the permanent engine arena.
 fn guest_wasm_features() -> WasmFeatures {
     let mut features = WasmFeatures::empty();
     for feature in [

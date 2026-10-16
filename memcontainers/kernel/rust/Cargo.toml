@@ -1,8 +1,7 @@
 # Manifest for crate_universe dependency resolution only — the kernel BUILDS via Bazel
 # (rust_shared_library → kernel.wasm), not cargo. It lists the external crates.io deps;
 # the `abi` role is filled by the generated //contracts:*_rust bindings (a Bazel dep),
-# not a crate. Keep the versions in lockstep with memcontainers crates/kernel (the
-# wasmi 1.0.9 + eager-mode requirement is documented in SYSTEMS.md §4.3).
+# not a crate. Keep the versions in lockstep with memcontainers crates/kernel.
 [package]
 name = "kernel"
 version = "0.1.0"
@@ -13,9 +12,13 @@ crate-type = ["cdylib"]
 
 [dependencies]
 talc = "5.0.3"
-# `=1.0.9` exactly: wasmi MUST run in eager compilation mode at this version — lazy
-# translation charges *guest* fuel and corrupts the host on a dry-fuel resume (the
-# load-bearing landmine, SYSTEMS.md §4.3). A `^` range would
-# drift to 1.1.x and silently break that contract.
-wasmi = { version = "=1.0.9", default-features = false }
+# Keep eager translation outside guest fuel slices. Validation and memory64
+# match the guest feature profile. Portable indirect dispatch stores opcodes
+# instead of handler pointers in kernel memory, which survives snapshot restore.
+wasmi = { version = "=2.0.0", default-features = false, features = [
+  "validate",
+  "memory64",
+  "portable-dispatch",
+  "indirect-dispatch",
+] }
 wasmparser = { version = "=0.228.0", default-features = false, features = ["features", "validate"] }

@@ -38,7 +38,7 @@ rust_shared_library(
         "//memcontainers/pkgcore:lib",  # no_std SHA-256 for toolsfs shard integrity checks
         "//memcontainers/toolcore:lib",  # no_std tool catalog parser for the read-only /tools tree
         "@crates//:talc",  # wasm linear-memory allocator (A8: all state in linear mem)
-        "@crates//:wasmi",  # eager-mode =1.0.9 (the landmine), native dep
+        "@crates//:wasmi",  # eager Wasmi 2 interpreter
         "@crates//:wasmparser",  # engine-free validation before permanent wasmi arena admission
     ],
 )
@@ -61,12 +61,14 @@ wasm_opt(
 # B5 size budget gate (the shared //bazel/tools/size rule) — a regression past the ceiling fails CI rather than
 # silently bloating the agent's footprint. memcontainers ships ~1.67 MB; we carry the resident-service
 # (svc) subsystem it lacks, but the B5 size-opt (LTO + panic=abort) more than pays for it — the artifact
-# is ~1.11 MB after post-link optimization. Hold the ceiling tight enough to catch a meaningful
-# regression while leaving room for intentional kernel growth.
+# was ~1.11 MB before Wasmi 2. The eager Wasmi 2.0.0 image is 1,402,648 bytes
+# after post-link optimization. Its validation, memory64, and portable dispatch
+# support are required by the guest and snapshot contracts. Keep a small margin
+# above that measured image while still catching future size regressions.
 size_limit(
     name = "size_limit",
     file = ":kernel",
-    max_bytes = 1200000,
+    max_bytes = 1450000,
 )
 
 # Anchors the kernel in the test graph: asserts kernel.wasm builds.
