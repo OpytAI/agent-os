@@ -10,10 +10,8 @@
 //! only nondeterminism is the clock + entropy, and the deterministic sources make a run
 //! byte-for-byte replayable, SYSTEMS.md section 8).
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -458,42 +456,61 @@ pub(crate) fn host_call_read_into(
 
 // ---------- Module cache ----------
 
-/// Compiled-module cache keyed by the wasm bytes' hash. Booting the same `kernel.wasm`
-/// many times (a test suite) compiles it once.
-static MODULE_CACHE: OnceLock<Mutex<HashMap<u64, (Engine, Module)>>> = OnceLock::new();
-
-fn get_or_compile(wasm: &[u8]) -> Result<(Engine, Module)> {
-    let mut h = DefaultHasher::new();
-    wasm.hash(&mut h);
-    let key = h.finish();
-
-    // Hold the lock ACROSS the compile, not just around the lookup. A test binary runs its
-    // cases in parallel (one thread per core), so they boot at once; if the lock were
-    // released between the miss and the insert, every case would see an empty cache and
-    // redundantly cranelift-compile kernel.wasm (~0.9s each — the cost that dominates a
-    // boot). Held across `Module::new`, the first caller compiles and the rest block here
-    // and reuse it: the module is compiled exactly once.
-    let mut cache = MODULE_CACHE
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap();
-    if let Some((e, m)) = cache.get(&key) {
-        return Ok((e.clone(), m.clone()));
-    }
-    let mut config = Config::new();
-    // The Zig kernel embeds wasm3; Luau analyzer/docgen paths run through long
-    // asyncified interpreter call chains, but the cap must stay below libtest's
-    // native thread stack so pathological guests trap inside the VM instead of
-    // aborting the host process.
-    config
-        .wasm_tail_call(true)
-        .max_wasm_stack(KERNEL_WASM_STACK_BYTES)
-        .async_stack_size(KERNEL_WASM_STACK_BYTES);
-    let engine = Engine::new(&config).map_err(|e| anyhow!("creating wasmtime engine: {e}"))?;
-    let module = wt(Module::new(&engine, wasm), "compiling kernel.wasm")?;
-    cache.insert(key, (engine.clone(), module.clone()));
-    Ok((engine, module))
+/// A runtime can own its compiled modules without sharing mutable cache state
+/// with unrelated embedders. The normal Rust convenience path retains one
+/// process cache so existing callers still compile a kernel only once.
+pub struct KernelModuleCache {
+    entries: Mutex<HashMap<SnapshotDigest, (Arc<[u8]>, Engine, Module)>>,
 }
+
+impl KernelModuleCache {
+    pub fn new() -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn load(&self, wasm: &[u8]) -> Result<SnapshotDigest> {
+        let digest = sha256_digest(wasm);
+        let _ = self.get_or_compile(wasm)?;
+        Ok(digest)
+    }
+
+    fn get_or_compile(&self, wasm: &[u8]) -> Result<(Engine, Module)> {
+        let key = sha256_digest(wasm);
+        // Hold this lock across compilation. Two simultaneous loads of one
+        // kernel then share the exact same compiled module.
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| anyhow!("compiled-kernel cache lock poisoned"))?;
+        if let Some((cached_bytes, engine, module)) = entries.get(&key) {
+            if cached_bytes.as_ref() != wasm {
+                return Err(anyhow!("compiled-kernel digest collision"));
+            }
+            return Ok((engine.clone(), module.clone()));
+        }
+        let mut config = Config::new();
+        // Keep the established stack cap. A deeper guest should trap inside
+        // Wasmtime rather than exhaust a suitably sized native test thread.
+        config
+            .wasm_tail_call(true)
+            .max_wasm_stack(KERNEL_WASM_STACK_BYTES)
+            .async_stack_size(KERNEL_WASM_STACK_BYTES);
+        let engine = Engine::new(&config).map_err(|e| anyhow!("creating wasmtime engine: {e}"))?;
+        let module = wt(Module::new(&engine, wasm), "compiling kernel.wasm")?;
+        entries.insert(key, (Arc::from(wasm), engine.clone(), module.clone()));
+        Ok((engine, module))
+    }
+}
+
+impl Default for KernelModuleCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+static MODULE_CACHE: OnceLock<KernelModuleCache> = OnceLock::new();
 
 // ---------- Builder ----------
 
@@ -512,6 +529,7 @@ pub struct KernelHostBuilder {
     persist: Option<Box<dyn PersistCapability>>,
     host_call: Option<Box<dyn HostCallCapability>>,
     workers: Option<i32>,
+    module_cache: Option<Arc<KernelModuleCache>>,
 }
 
 impl KernelHostBuilder {
@@ -531,6 +549,7 @@ impl KernelHostBuilder {
             persist: None,
             host_call: None,
             workers: None,
+            module_cache: None,
         }
     }
 
@@ -569,6 +588,12 @@ impl KernelHostBuilder {
     /// cooperative-backed host drives these workers from its tick loop, not OS threads.
     pub fn with_workers(mut self, workers: i32) -> Self {
         self.workers = Some(workers);
+        self
+    }
+
+    /// Share immutable compiled kernels within one embedding runtime.
+    pub fn with_module_cache(mut self, cache: Arc<KernelModuleCache>) -> Self {
+        self.module_cache = Some(cache);
         self
     }
 
@@ -648,9 +673,15 @@ impl KernelHostBuilder {
         }
     }
 
-    pub fn build(self) -> Result<KernelHost> {
+    /// Initialize a kernel without running hidden scheduler ticks toward the
+    /// shell prompt. An external event loop calls `tick` explicitly afterward.
+    pub fn build_pre_prompt(self) -> Result<KernelHost> {
         let kernel_digest = sha256_digest(&self.wasm_bytes);
-        let (engine, module) = get_or_compile(&self.wasm_bytes)?;
+        let cache = self
+            .module_cache
+            .as_deref()
+            .unwrap_or_else(|| MODULE_CACHE.get_or_init(KernelModuleCache::new));
+        let (engine, module) = cache.get_or_compile(&self.wasm_bytes)?;
         let state = self.into_state();
         let (mut store, instance, memory) = instantiate(&engine, &module, state)?;
 
@@ -671,13 +702,16 @@ impl KernelHostBuilder {
             instance.get_typed_func::<(), i32>(&mut store, "mc_init"),
             "looking up mc_init",
         )?;
-        let _ = wt(mc_init.call(&mut store, ()), "calling mc_init")?;
+        let init_status = wt(mc_init.call(&mut store, ()), "calling mc_init")?;
+        if init_status != 0 {
+            return Err(anyhow!("mc_init failed with status {init_status}"));
+        }
 
         // Drive the count the kernel actually negotiated (mc_init ran mc_threads_init), not
         // the advertised request — so the host never invokes the worker export more times
         // than the kernel agreed.
         let workers = store.data().workers_granted;
-        let mut host = finalize(
+        finalize(
             store,
             instance,
             memory,
@@ -685,8 +719,11 @@ impl KernelHostBuilder {
             scratch_len,
             workers,
             kernel_digest,
-        )?;
+        )
+    }
 
+    pub fn build(self) -> Result<KernelHost> {
+        let mut host = self.build_pre_prompt()?;
         // The login shell (pid 1) prints its first prompt only after running, which needs
         // ticks. Drive boot until the prompt settles so callers observe a ready shell.
         for _ in 0..8192 {
@@ -720,7 +757,11 @@ impl KernelHostBuilder {
         let image_len = validated.view.memory_len;
         let view = validated.view;
         let baseline_tree = validated.base_tree.clone();
-        let (engine, module) = get_or_compile(&self.wasm_bytes)?;
+        let cache = self
+            .module_cache
+            .as_deref()
+            .unwrap_or_else(|| MODULE_CACHE.get_or_init(KernelModuleCache::new));
+        let (engine, module) = cache.get_or_compile(&self.wasm_bytes)?;
         let state = self.into_state();
         let (mut store, instance, memory) = instantiate(&engine, &module, state)?;
 

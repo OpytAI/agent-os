@@ -126,6 +126,21 @@ rust_opt_test(
     ],
 )
 
+rust_opt_test(
+    name = "embedder_lifecycle_test",
+    srcs = ["test/embedder_lifecycle.rs"],
+    crate_root = "test/embedder_lifecycle.rs",
+    data = [
+        "//memcontainers/images:base",
+        "//memcontainers/kernel/rust:kernel",
+    ],
+    edition = "2021",
+    deps = [
+        ":lib",
+        "@rules_rust//rust/runfiles",
+    ],
+)
+
 # Run the optimized `mc` over the same kernel and base as e2e (B1). Keep `mc` in
 # srcs so Bazel builds it in the target configuration shared with the host tests,
 # instead of creating a second Wasmtime build in the genrule's exec configuration.
