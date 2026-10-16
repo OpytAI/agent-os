@@ -4,7 +4,7 @@
 //! runtime cannot free memory that a concurrent call has already borrowed.
 
 use std::ffi::c_void;
-use std::mem::size_of;
+use std::mem::{align_of, offset_of, size_of};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::sync::{Mutex, OnceLock};
@@ -70,19 +70,80 @@ struct Api {
     abi_minor: u16,
     implementation_table_size: u32,
     feature_bits: u64,
-    runtime_create: unsafe extern "C" fn(*const RuntimeOptions, *mut RuntimeHandle, *mut Error) -> ResultCode,
+    runtime_create:
+        unsafe extern "C" fn(*const RuntimeOptions, *mut RuntimeHandle, *mut Error) -> ResultCode,
     runtime_close: unsafe extern "C" fn(RuntimeHandle, *mut Error) -> ResultCode,
     library_info: unsafe extern "C" fn(*mut LibraryInfo, *mut Error) -> ResultCode,
-    get_interface: unsafe extern "C" fn(RuntimeHandle, u32, u16, u32, *mut c_void, *mut Error) -> ResultCode,
+    get_interface:
+        unsafe extern "C" fn(RuntimeHandle, u32, u16, u32, *mut c_void, *mut Error) -> ResultCode,
 }
 
-// Both languages check the same public layout numbers. A later projector
-// phase will derive these assertions from embedder.kdl instead of hand-coding them.
-const _: [(); 8] = [(); size_of::<Header>()];
-const _: [(); 24] = [(); size_of::<Buffer>()];
-const _: [(); 48] = [(); size_of::<Error>()];
-const _: [(); 24] = [(); size_of::<LibraryInfo>()];
-const _: [(); 56] = [(); size_of::<Api>()];
+// The manifest in embedder.kdl is checked independently by Rust and C. A
+// field reorder or platform-specific padding change fails compilation.
+const _: () = {
+    assert!(size_of::<Header>() == contract::MC_HOST_LAYOUT_HEADER_SIZE);
+    assert!(align_of::<Header>() == contract::MC_HOST_LAYOUT_HEADER_ALIGN);
+    assert!(offset_of!(Header, size) == contract::MC_HOST_LAYOUT_HEADER_SIZE_OFFSET);
+    assert!(offset_of!(Header, version) == contract::MC_HOST_LAYOUT_HEADER_VERSION_OFFSET);
+    assert!(offset_of!(Header, flags) == contract::MC_HOST_LAYOUT_HEADER_FLAGS_OFFSET);
+
+    assert!(size_of::<Buffer>() == contract::MC_HOST_LAYOUT_BUFFER_SIZE);
+    assert!(align_of::<Buffer>() == contract::MC_HOST_LAYOUT_BUFFER_ALIGN);
+    assert!(offset_of!(Buffer, data) == contract::MC_HOST_LAYOUT_BUFFER_DATA_OFFSET);
+    assert!(offset_of!(Buffer, capacity) == contract::MC_HOST_LAYOUT_BUFFER_CAPACITY_OFFSET);
+    assert!(offset_of!(Buffer, required) == contract::MC_HOST_LAYOUT_BUFFER_REQUIRED_OFFSET);
+
+    assert!(size_of::<Error>() == contract::MC_HOST_LAYOUT_ERROR_SIZE);
+    assert!(align_of::<Error>() == contract::MC_HOST_LAYOUT_ERROR_ALIGN);
+    assert!(offset_of!(Error, header) == contract::MC_HOST_LAYOUT_ERROR_HEADER_OFFSET);
+    assert!(offset_of!(Error, domain) == contract::MC_HOST_LAYOUT_ERROR_DOMAIN_OFFSET);
+    assert!(offset_of!(Error, code) == contract::MC_HOST_LAYOUT_ERROR_CODE_OFFSET);
+    assert!(offset_of!(Error, retryable) == contract::MC_HOST_LAYOUT_ERROR_RETRYABLE_OFFSET);
+    assert!(offset_of!(Error, reserved) == contract::MC_HOST_LAYOUT_ERROR_RESERVED_OFFSET);
+    assert!(offset_of!(Error, message) == contract::MC_HOST_LAYOUT_ERROR_MESSAGE_OFFSET);
+
+    assert!(size_of::<RuntimeOptions>() == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_SIZE);
+    assert!(align_of::<RuntimeOptions>() == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_ALIGN);
+    assert!(
+        offset_of!(RuntimeOptions, header)
+            == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_HEADER_OFFSET
+    );
+
+    assert!(size_of::<LibraryInfo>() == contract::MC_HOST_LAYOUT_LIBRARY_INFO_SIZE);
+    assert!(align_of::<LibraryInfo>() == contract::MC_HOST_LAYOUT_LIBRARY_INFO_ALIGN);
+    assert!(offset_of!(LibraryInfo, header) == contract::MC_HOST_LAYOUT_LIBRARY_INFO_HEADER_OFFSET);
+    assert!(
+        offset_of!(LibraryInfo, abi_major)
+            == contract::MC_HOST_LAYOUT_LIBRARY_INFO_ABI_MAJOR_OFFSET
+    );
+    assert!(
+        offset_of!(LibraryInfo, abi_minor)
+            == contract::MC_HOST_LAYOUT_LIBRARY_INFO_ABI_MINOR_OFFSET
+    );
+    assert!(
+        offset_of!(LibraryInfo, implementation_table_size)
+            == contract::MC_HOST_LAYOUT_LIBRARY_INFO_IMPLEMENTATION_TABLE_SIZE_OFFSET
+    );
+    assert!(
+        offset_of!(LibraryInfo, feature_bits)
+            == contract::MC_HOST_LAYOUT_LIBRARY_INFO_FEATURE_BITS_OFFSET
+    );
+
+    assert!(size_of::<Api>() == contract::MC_HOST_LAYOUT_API_SIZE);
+    assert!(align_of::<Api>() == contract::MC_HOST_LAYOUT_API_ALIGN);
+    assert!(offset_of!(Api, header) == contract::MC_HOST_LAYOUT_API_HEADER_OFFSET);
+    assert!(offset_of!(Api, abi_major) == contract::MC_HOST_LAYOUT_API_ABI_MAJOR_OFFSET);
+    assert!(offset_of!(Api, abi_minor) == contract::MC_HOST_LAYOUT_API_ABI_MINOR_OFFSET);
+    assert!(
+        offset_of!(Api, implementation_table_size)
+            == contract::MC_HOST_LAYOUT_API_IMPLEMENTATION_TABLE_SIZE_OFFSET
+    );
+    assert!(offset_of!(Api, feature_bits) == contract::MC_HOST_LAYOUT_API_FEATURE_BITS_OFFSET);
+    assert!(offset_of!(Api, runtime_create) == contract::MC_HOST_LAYOUT_API_RUNTIME_CREATE_OFFSET);
+    assert!(offset_of!(Api, runtime_close) == contract::MC_HOST_LAYOUT_API_RUNTIME_CLOSE_OFFSET);
+    assert!(offset_of!(Api, library_info) == contract::MC_HOST_LAYOUT_API_LIBRARY_INFO_OFFSET);
+    assert!(offset_of!(Api, get_interface) == contract::MC_HOST_LAYOUT_API_GET_INTERFACE_OFFSET);
+};
 
 struct RuntimeSlot {
     namespace: u16,
@@ -131,11 +192,15 @@ impl RuntimeTable {
     }
 
     fn slot_mut(&mut self, handle: RuntimeHandle) -> Result<&mut RuntimeSlot, ResultCode> {
-        let (namespace, kind, generation, index) = unpack(handle).ok_or(contract::MC_HOST_STALE_HANDLE)?;
+        let (namespace, kind, generation, index) =
+            unpack(handle).ok_or(contract::MC_HOST_STALE_HANDLE)?;
         if kind != RUNTIME_KIND {
             return Err(contract::MC_HOST_WRONG_KIND);
         }
-        let slot = self.slots.get_mut(index).ok_or(contract::MC_HOST_STALE_HANDLE)?;
+        let slot = self
+            .slots
+            .get_mut(index)
+            .ok_or(contract::MC_HOST_STALE_HANDLE)?;
         if !slot.open || slot.namespace != namespace || slot.generation != generation {
             return Err(contract::MC_HOST_STALE_HANDLE);
         }
@@ -172,7 +237,12 @@ fn unpack(handle: RuntimeHandle) -> Option<(u16, u8, u32, usize)> {
     if index == 0 || generation == 0 {
         return None;
     }
-    Some(((handle >> 48) as u16, ((handle >> 40) & 0xff) as u8, generation, index - 1))
+    Some((
+        (handle >> 48) as u16,
+        ((handle >> 40) & 0xff) as u8,
+        generation,
+        index - 1,
+    ))
 }
 
 fn runtimes() -> &'static Mutex<RuntimeTable> {
@@ -186,7 +256,10 @@ impl ActiveRuntime {
     fn acquire(handle: RuntimeHandle) -> Result<Self, ResultCode> {
         let mut table = runtimes().lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
         let slot = table.slot_mut(handle)?;
-        slot.active_calls = slot.active_calls.checked_add(1).ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
+        slot.active_calls = slot
+            .active_calls
+            .checked_add(1)
+            .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
         Ok(Self(handle))
     }
 }
@@ -210,12 +283,19 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<(), ResultC
         return Ok(());
     }
     let header = unsafe { (*options).header };
-    if !valid_header(header, size_of::<RuntimeOptions>()) || header.size as usize > MAX_INPUT_STRUCT_SIZE {
+    if !valid_header(header, size_of::<RuntimeOptions>())
+        || header.size as usize > MAX_INPUT_STRUCT_SIZE
+    {
         return Err(contract::MC_HOST_INVALID_ARGUMENT);
     }
     let tail_len = header.size as usize - size_of::<RuntimeOptions>();
     if tail_len != 0 {
-        let tail = unsafe { std::slice::from_raw_parts((options as *const u8).add(size_of::<RuntimeOptions>()), tail_len) };
+        let tail = unsafe {
+            std::slice::from_raw_parts(
+                (options as *const u8).add(size_of::<RuntimeOptions>()),
+                tail_len,
+            )
+        };
         if tail.iter().any(|byte| *byte != 0) {
             return Err(contract::MC_HOST_UNSUPPORTED);
         }
@@ -258,27 +338,42 @@ fn guard(error: *mut Error, action: impl FnOnce() -> Result<(), ResultCode>) -> 
     let (code, message) = match outcome {
         Ok(Ok(())) => (contract::MC_HOST_OK, ""),
         Ok(Err(code)) => (code, "native host call rejected"),
-        Err(_) => (contract::MC_HOST_INTERNAL, "panic contained at native host boundary"),
+        Err(_) => (
+            contract::MC_HOST_INTERNAL,
+            "panic contained at native host boundary",
+        ),
     };
     unsafe { write_error(error, code, message) };
     code
 }
 
-unsafe extern "C" fn runtime_create(options: *const RuntimeOptions, out: *mut RuntimeHandle, error: *mut Error) -> ResultCode {
+unsafe extern "C" fn runtime_create(
+    options: *const RuntimeOptions,
+    out: *mut RuntimeHandle,
+    error: *mut Error,
+) -> ResultCode {
     guard(error, || {
         if out.is_null() {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
         unsafe { *out = 0 };
         unsafe { validate_options(options)? };
-        let handle = runtimes().lock().map_err(|_| contract::MC_HOST_INTERNAL)?.insert()?;
+        let handle = runtimes()
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .insert()?;
         unsafe { *out = handle };
         Ok(())
     })
 }
 
 unsafe extern "C" fn runtime_close(handle: RuntimeHandle, error: *mut Error) -> ResultCode {
-    guard(error, || runtimes().lock().map_err(|_| contract::MC_HOST_INTERNAL)?.close(handle))
+    guard(error, || {
+        runtimes()
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .close(handle)
+    })
 }
 
 unsafe extern "C" fn library_info(out: *mut LibraryInfo, error: *mut Error) -> ResultCode {
@@ -297,7 +392,14 @@ unsafe extern "C" fn library_info(out: *mut LibraryInfo, error: *mut Error) -> R
     })
 }
 
-unsafe extern "C" fn get_interface(handle: RuntimeHandle, _id: u32, _version: u16, _size: u32, _out: *mut c_void, error: *mut Error) -> ResultCode {
+unsafe extern "C" fn get_interface(
+    handle: RuntimeHandle,
+    _id: u32,
+    _version: u16,
+    _size: u32,
+    _out: *mut c_void,
+    error: *mut Error,
+) -> ResultCode {
     guard(error, || {
         let _active = ActiveRuntime::acquire(handle)?;
         Err(contract::MC_HOST_UNSUPPORTED)
@@ -305,7 +407,11 @@ unsafe extern "C" fn get_interface(handle: RuntimeHandle, _id: u32, _version: u1
 }
 
 static API: Api = Api {
-    header: Header { size: size_of::<Api>() as u32, version: 1, flags: 0 },
+    header: Header {
+        size: size_of::<Api>() as u32,
+        version: 1,
+        flags: 0,
+    },
     abi_major: contract::MC_HOST_ABI_MAJOR,
     abi_minor: contract::MC_HOST_ABI_MINOR,
     implementation_table_size: size_of::<Api>() as u32,
@@ -317,7 +423,12 @@ static API: Api = Api {
 };
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mc_host_get_api(major: u16, minimum_minor: u16, caller_size: u32, out: *mut c_void) -> ResultCode {
+pub unsafe extern "C" fn mc_host_get_api(
+    major: u16,
+    minimum_minor: u16,
+    caller_size: u32,
+    out: *mut c_void,
+) -> ResultCode {
     match catch_unwind(AssertUnwindSafe(|| {
         if major != contract::MC_HOST_ABI_MAJOR || minimum_minor > contract::MC_HOST_ABI_MINOR {
             return contract::MC_HOST_UNSUPPORTED_ABI;
@@ -343,10 +454,16 @@ mod tests {
         let mut table = RuntimeTable::default();
         let first = table.insert().unwrap();
         table.close(first).unwrap();
-        assert!(matches!(table.slot_mut(first), Err(contract::MC_HOST_STALE_HANDLE)));
+        assert!(matches!(
+            table.slot_mut(first),
+            Err(contract::MC_HOST_STALE_HANDLE)
+        ));
         let second = table.insert().unwrap();
         assert_ne!(first, second);
-        assert!(matches!(table.slot_mut(first), Err(contract::MC_HOST_STALE_HANDLE)));
+        assert!(matches!(
+            table.slot_mut(first),
+            Err(contract::MC_HOST_STALE_HANDLE)
+        ));
         assert!(table.slot_mut(second).is_ok());
     }
 }

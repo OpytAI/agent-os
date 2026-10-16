@@ -2625,6 +2625,49 @@ fn emit_embedder(lang: &str, nodes: &[Node], contract: &str) -> String {
         .and_then(|node| node.props.get("minor"))
         .map(Val::as_int)
         .unwrap_or(0);
+    let layouts = nodes
+        .iter()
+        .filter(|node| node.name == "layout")
+        .collect::<Vec<_>>();
+
+    let layout_constants = |rust: bool| {
+        let mut out = String::new();
+        for layout in &layouts {
+            let name = layout.arg_str(0);
+            assert!(!name.is_empty(), "embedder layout needs a name");
+            for (suffix, property) in [("SIZE", "size"), ("ALIGN", "align")] {
+                let value = layout
+                    .props
+                    .get(property)
+                    .expect("embedder layout property")
+                    .as_int();
+                assert!(value > 0, "embedder layout property must be positive");
+                let constant = format!("MC_HOST_LAYOUT_{name}_{suffix}");
+                if rust {
+                    out.push_str(&format!("pub const {constant}: usize = {value};\n"));
+                } else {
+                    out.push_str(&format!("#define {constant} {value}\n"));
+                }
+            }
+            for field in layout.children_named("offset") {
+                let field_name = field.arg_str(0).to_ascii_uppercase();
+                assert!(!field_name.is_empty(), "embedder offset needs a name");
+                let value = field
+                    .props
+                    .get("value")
+                    .expect("embedder field offset")
+                    .as_int();
+                assert!(value >= 0, "embedder field offset must be nonnegative");
+                let constant = format!("MC_HOST_LAYOUT_{name}_{field_name}_OFFSET");
+                if rust {
+                    out.push_str(&format!("pub const {constant}: usize = {value};\n"));
+                } else {
+                    out.push_str(&format!("#define {constant} {value}\n"));
+                }
+            }
+        }
+        out
+    };
 
     match lang {
         "rust" => {
@@ -2633,6 +2676,7 @@ fn emit_embedder(lang: &str, nodes: &[Node], contract: &str) -> String {
             out.push_str(&format!(
                 "pub const MC_HOST_ABI_MAJOR: u16 = {major};\npub const MC_HOST_ABI_MINOR: u16 = {minor};\n"
             ));
+            out.push_str(&layout_constants(true));
             out
         }
         "c" => {
@@ -2643,6 +2687,7 @@ fn emit_embedder(lang: &str, nodes: &[Node], contract: &str) -> String {
             out.push_str(&format!(
                 "#define MC_HOST_ABI_MAJOR UINT16_C({major})\n#define MC_HOST_ABI_MINOR UINT16_C({minor})\n"
             ));
+            out.push_str(&layout_constants(false));
             for (name, value, ty) in constants {
                 let macro_name = match ty {
                     "u8" => "UINT8_C",
@@ -2664,6 +2709,23 @@ fn emit_embedder(lang: &str, nodes: &[Node], contract: &str) -> String {
             ));
             for (name, value, ty) in constants {
                 out.push_str(&format!("| `{name}` | `{ty}` | {value} |\n"));
+            }
+            out.push_str("\n| Layout | Size | Align |\n| --- | ---: | ---: |\n");
+            for layout in layouts {
+                out.push_str(&format!(
+                    "| `{}` | {} | {} |\n",
+                    layout.arg_str(0),
+                    layout
+                        .props
+                        .get("size")
+                        .expect("embedder layout size")
+                        .as_int(),
+                    layout
+                        .props
+                        .get("align")
+                        .expect("embedder layout align")
+                        .as_int(),
+                ));
             }
             out
         }

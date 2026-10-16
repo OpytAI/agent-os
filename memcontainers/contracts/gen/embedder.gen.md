@@ -66,3 +66,12 @@ ABI **1.0**.
 | `MC_HOST_EVENT_PERSIST_LIST` | `u32` | 11 |
 | `MC_HOST_EVENT_TOOL_APPROVAL` | `u32` | 12 |
 | `MC_HOST_EVENT_OPERATION_CANCEL` | `u32` | 13 |
+
+| Layout | Size | Align |
+| --- | ---: | ---: |
+| `HEADER` | 8 | 4 |
+| `BUFFER` | 24 | 8 |
+| `ERROR` | 48 | 8 |
+| `RUNTIME_OPTIONS` | 8 | 4 |
+| `LIBRARY_INFO` | 24 | 8 |
+| `API` | 56 | 8 |

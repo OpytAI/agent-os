@@ -3,9 +3,50 @@
 // This contract owns the native adapter's values and portable envelopes. It does
 // not redefine the kernel bridge, control, or MCSN snapshot protocols. Interface
 // IDs and operation kinds reserve names; feature discovery determines availability.
-// The C ABI table and layout projection is a separate implementation phase.
+// Layout entries are the stable v1 manifest for the public C declarations and
+// their Rust FFI mirrors. Generated constants are checked by both compilers.
 
 abi-version major=1 minor=0
+
+layout "HEADER" size=8 align=4 {
+  offset "size" value=0
+  offset "version" value=4
+  offset "flags" value=6
+}
+layout "BUFFER" size=24 align=8 {
+  offset "data" value=0
+  offset "capacity" value=8
+  offset "required" value=16
+}
+layout "ERROR" size=48 align=8 {
+  offset "header" value=0
+  offset "domain" value=8
+  offset "code" value=12
+  offset "retryable" value=16
+  offset "reserved" value=17
+  offset "message" value=24
+}
+layout "RUNTIME_OPTIONS" size=8 align=4 {
+  offset "header" value=0
+}
+layout "LIBRARY_INFO" size=24 align=8 {
+  offset "header" value=0
+  offset "abi_major" value=8
+  offset "abi_minor" value=10
+  offset "implementation_table_size" value=12
+  offset "feature_bits" value=16
+}
+layout "API" size=56 align=8 {
+  offset "header" value=0
+  offset "abi_major" value=8
+  offset "abi_minor" value=10
+  offset "implementation_table_size" value=12
+  offset "feature_bits" value=16
+  offset "runtime_create" value=24
+  offset "runtime_close" value=32
+  offset "library_info" value=40
+  offset "get_interface" value=48
+}
 
 constant "MC_HOST_OK" value=0 type="u32"
 constant "MC_HOST_BUFFER_TOO_SMALL" value=1 type="u32"
