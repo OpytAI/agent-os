@@ -1,0 +1,6 @@
+MC_HOST_1.0 {
+  global:
+    mc_host_get_api;
+  local:
+    *;
+};

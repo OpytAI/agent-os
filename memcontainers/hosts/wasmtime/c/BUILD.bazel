@@ -1,0 +1,57 @@
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("@rules_rust//rust:defs.bzl", "rust_shared_library")
+load("//memcontainers/hosts/wasmtime:defs.bzl", "host_release_shared_library")
+
+# The shared library starts with the ABI/lifetime core. Feature bits remain zero
+# until a real kernel-backed interface and its C loader tests land.
+rust_shared_library(
+    name = "mc_host",
+    srcs = ["src/lib.rs"],
+    crate_root = "src/lib.rs",
+    crate_name = "mc_host",
+    edition = "2021",
+    compile_data = ["mc_host.map"],
+    rustc_flags = [
+        "-Clink-arg=-Wl,--exclude-libs,ALL",
+        "-Clink-arg=-Wl,--version-script=memcontainers/hosts/wasmtime/c/mc_host.map",
+    ],
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+    deps = ["//memcontainers/contracts:embedder_rust"],
+)
+
+host_release_shared_library(
+    name = "mc_host_release",
+    out = "libmc_host.so",
+    lib = ":mc_host",
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "headers",
+    hdrs = ["include/mc_host.h"],
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+    deps = ["//memcontainers/contracts:embedder_c"],
+)
+
+cc_test(
+    name = "abi_layout_test",
+    srcs = ["test/abi_layout.c"],
+    deps = [":headers"],
+)
+
+cc_test(
+    name = "cpp_header_test",
+    srcs = ["test/header.cc"],
+    deps = [":headers"],
+)
+
+cc_test(
+    name = "loader_test",
+    srcs = ["test/loader.c"],
+    args = ["$(location :mc_host_release)"],
+    data = [":mc_host_release"],
+    linkopts = ["-ldl"],
+    deps = [":headers"],
+)

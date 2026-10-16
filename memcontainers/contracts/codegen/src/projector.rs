@@ -3,8 +3,8 @@
 //! projection; `abi_library` invokes it once per (module, language) pair.
 //!
 //! Invocation:  projector --module <m> --lang <l> --contract <path.kdl> [--contract <path.kdl> ...]
-//!   module = constants | mc | env | ctl | wire | llb | syntax | sidecar | browser | runner | snapshot | shell
-//!   lang   = rust | zig | ts | elixir | luau | md | asyncapi | openapi      (which projection)
+//!   module = constants | mc | env | ctl | wire | llb | syntax | sidecar | browser | runner | snapshot | shell | embedder
+//!   lang   = rust | zig | ts | elixir | luau | c | md | asyncapi | openapi  (which projection)
 //!   Repeat `--contract` merges files in order: same grouping name folds children;
 //!   a child with a conflicting value is a hard error.
 //!
@@ -2602,6 +2602,75 @@ fn emit_codec_module(lang: &str, nodes: &[Node], contract: &str) -> String {
     o
 }
 
+/// Project the native embedder contract. Its messages reuse the canonical portable
+/// codec, while the C projection supplies the numeric authority included by mc_host.h.
+fn emit_embedder(lang: &str, nodes: &[Node], contract: &str) -> String {
+    let constants = nodes
+        .iter()
+        .filter(|node| node.name == "constant")
+        .map(|node| {
+            (
+                node.arg_str(0),
+                node.props.get("value").map(Val::as_int).unwrap_or(0),
+                node.prop_str("type").unwrap_or("u32"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let abi = nodes.iter().find(|node| node.name == "abi-version");
+    let major = abi
+        .and_then(|node| node.props.get("major"))
+        .map(Val::as_int)
+        .unwrap_or(0);
+    let minor = abi
+        .and_then(|node| node.props.get("minor"))
+        .map(Val::as_int)
+        .unwrap_or(0);
+
+    match lang {
+        "rust" => {
+            let mut out = emit_codec_module(lang, nodes, contract);
+            out.push_str("\n// Native embedder ABI constants.\n");
+            out.push_str(&format!(
+                "pub const MC_HOST_ABI_MAJOR: u16 = {major};\npub const MC_HOST_ABI_MINOR: u16 = {minor};\n"
+            ));
+            out
+        }
+        "c" => {
+            let mut out = banner(lang, contract);
+            out.push_str(
+                "#ifndef MC_EMBEDDER_CONTRACT_H\n#define MC_EMBEDDER_CONTRACT_H\n\n#include <stdint.h>\n\n",
+            );
+            out.push_str(&format!(
+                "#define MC_HOST_ABI_MAJOR UINT16_C({major})\n#define MC_HOST_ABI_MINOR UINT16_C({minor})\n"
+            ));
+            for (name, value, ty) in constants {
+                let macro_name = match ty {
+                    "u8" => "UINT8_C",
+                    "u16" => "UINT16_C",
+                    "u64" => "UINT64_C",
+                    "i32" => "INT32_C",
+                    "i64" => "INT64_C",
+                    _ => "UINT32_C",
+                };
+                out.push_str(&format!("#define {name} {macro_name}({value})\n"));
+            }
+            out.push_str("\n#endif /* MC_EMBEDDER_CONTRACT_H */\n");
+            out
+        }
+        "md" => {
+            let mut out = String::from("# Native embedder contract\n\n");
+            out.push_str(&format!(
+                "ABI **{major}.{minor}**.\n\n| Constant | Type | Value |\n| --- | --- | ---: |\n"
+            ));
+            for (name, value, ty) in constants {
+                out.push_str(&format!("| `{name}` | `{ty}` | {value} |\n"));
+            }
+            out
+        }
+        other => panic!("unsupported embedder language {other}"),
+    }
+}
+
 fn emit_shell_module(lang: &str, nodes: &[Node], contract: &str) -> String {
     let mut out = emit_table(
         lang,
@@ -3764,7 +3833,7 @@ fn main() -> ExitCode {
     }
     let (Some(lang), Some(module)) = (lang, module) else {
         eprintln!(
-            "usage: projector --module <constants|mc|env|ctl|wire|llb|syntax|sidecar|browser|runner|snapshot|shell|git> --lang <rust|zig|ts|elixir|luau|md|asyncapi|openapi> --contract <path.kdl> [--contract <path.kdl> ...]"
+            "usage: projector --module <constants|mc|env|ctl|wire|llb|syntax|sidecar|browser|runner|snapshot|shell|git|embedder> --lang <rust|zig|ts|elixir|luau|c|md|asyncapi|openapi> --contract <path.kdl> [--contract <path.kdl> ...]"
         );
         return ExitCode::FAILURE;
     };
@@ -3829,6 +3898,7 @@ fn main() -> ExitCode {
         "snapshot" => emit_snapshot(&lang, &nodes, &file),
         "shell" => emit_shell_module(&lang, &nodes, &file),
         "git" => emit_git(&lang, &nodes, &file),
+        "embedder" => emit_embedder(&lang, &nodes, &file),
         other => {
             eprintln!("projector: unknown module {other}");
             return ExitCode::FAILURE;

@@ -5,6 +5,7 @@ load("@aspect_rules_js//js:defs.bzl", "js_library", "js_test")
 # relative reach into gen/. One subpath export per descriptor (see package.json).
 load("@aspect_rules_js//npm:defs.bzl", "npm_package")
 load("@rules_rust//rust:defs.bzl", "rust_test")
+load("@rules_cc//cc:defs.bzl", "cc_test")
 
 # The generated TS descriptors compiled into ONE consumable lib — the JS host (hosts/js) and @mc/core
 # wire their `env` bridge + `mc_ctl_*` export lookup from these (BRIDGE_IMPORTS / CONTROL_EXPORTS /
@@ -43,6 +44,7 @@ exports_files([
     "browser.kdl",
     "runner.kdl",
     "git.kdl",
+    "embedder.kdl",
     # The generated Zig `mc` module IS the guest sysroot's `mc` (//memcontainers/sysroot/zig:mc
     # compiles it under import_name "mc"): a guest `@import("mc")` gets the whole generated
     # boundary — every syscall extern + the `addr` helper — with nothing hand-kept (Zig 0.16
@@ -197,6 +199,14 @@ abi_library(
     ],
 )
 
+# Native application to host values. Interface IDs are reserved here; the runtime
+# reports only the interfaces it actually implements.
+abi_library(
+    name = "embedder",
+    contract = "embedder.kdl",
+    langs = ["rust", "c", "md"],
+)
+
 mc_ts_project(
     name = "ts",
     srcs = [
@@ -236,6 +246,19 @@ rust_test(
         ":ctl_rust",
         ":llb_rust",
     ],
+)
+
+rust_test(
+    name = "embedder_codec_test",
+    srcs = ["test/embedder_codec_test.rs"],
+    edition = "2021",
+    deps = [":embedder_rust"],
+)
+
+cc_test(
+    name = "embedder_header_test",
+    srcs = ["test/embedder_header_test.c"],
+    deps = [":embedder_c"],
 )
 
 rust_test(

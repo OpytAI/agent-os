@@ -1,0 +1,124 @@
+// contracts/embedder.kdl — application → native wasmtime-host embedding boundary.
+//
+// This contract owns the native adapter's values and portable envelopes. It does
+// not redefine the kernel bridge, control, or MCSN snapshot protocols. Interface
+// IDs and operation kinds reserve names; feature discovery determines availability.
+// The C ABI table and layout projection is a separate implementation phase.
+
+abi-version major=1 minor=0
+
+constant "MC_HOST_OK" value=0 type="u32"
+constant "MC_HOST_BUFFER_TOO_SMALL" value=1 type="u32"
+constant "MC_HOST_WOULD_BLOCK" value=2 type="u32"
+constant "MC_HOST_INVALID_ARGUMENT" value=3 type="u32"
+constant "MC_HOST_INVALID_STATE" value=4 type="u32"
+constant "MC_HOST_STALE_HANDLE" value=5 type="u32"
+constant "MC_HOST_WRONG_KIND" value=6 type="u32"
+constant "MC_HOST_BUSY" value=7 type="u32"
+constant "MC_HOST_NOT_QUIESCENT" value=8 type="u32"
+constant "MC_HOST_UNSUPPORTED" value=9 type="u32"
+constant "MC_HOST_UNSUPPORTED_ABI" value=10 type="u32"
+constant "MC_HOST_CANCELLED" value=11 type="u32"
+constant "MC_HOST_RESOURCE_LIMIT" value=12 type="u32"
+constant "MC_HOST_KERNEL_ERROR" value=13 type="u32"
+constant "MC_HOST_GUEST_TRAP" value=14 type="u32"
+constant "MC_HOST_SNAPSHOT_ERROR" value=15 type="u32"
+constant "MC_HOST_HOST_IO" value=16 type="u32"
+constant "MC_HOST_POISONED" value=17 type="u32"
+constant "MC_HOST_INTERNAL" value=18 type="u32"
+constant "MC_HOST_OUTPUT_LOST" value=19 type="u32"
+
+constant "MC_HOST_IFACE_VM_V1" value=1 type="u32"
+constant "MC_HOST_IFACE_OPERATION_V1" value=2 type="u32"
+constant "MC_HOST_IFACE_EFFECT_V1" value=3 type="u32"
+constant "MC_HOST_IFACE_SNAPSHOT_V1" value=4 type="u32"
+constant "MC_HOST_IFACE_NATIVE_CAPS_V1" value=5 type="u32"
+constant "MC_HOST_IFACE_CATALOG_V1" value=6 type="u32"
+constant "MC_HOST_IFACE_PERF_V1" value=7 type="u32"
+constant "MC_HOST_IFACE_OUTPUT_V1" value=8 type="u32"
+constant "MC_HOST_IFACE_ATTACHMENT_V1" value=9 type="u32"
+
+constant "MC_HOST_TICK_WAITING" value=0 type="u32"
+constant "MC_HOST_TICK_RUNNABLE" value=1 type="u32"
+constant "MC_HOST_TICK_EXITED" value=2 type="u32"
+
+constant "MC_HOST_OP_EXEC_SHELL" value=1 type="u32"
+constant "MC_HOST_OP_EXEC_DIRECT" value=2 type="u32"
+constant "MC_HOST_OP_FS_READ" value=3 type="u32"
+constant "MC_HOST_OP_FS_WRITE" value=4 type="u32"
+constant "MC_HOST_OP_FS_READDIR" value=5 type="u32"
+constant "MC_HOST_OP_FS_STAT" value=6 type="u32"
+constant "MC_HOST_OP_FS_READLINK" value=7 type="u32"
+constant "MC_HOST_OP_FS_MKDIR" value=8 type="u32"
+constant "MC_HOST_OP_FS_UNLINK" value=9 type="u32"
+constant "MC_HOST_OP_FS_CHMOD" value=10 type="u32"
+constant "MC_HOST_OP_FS_SYMLINK" value=11 type="u32"
+constant "MC_HOST_OP_MOUNT" value=12 type="u32"
+constant "MC_HOST_OP_UNMOUNT" value=13 type="u32"
+constant "MC_HOST_OP_AUTOCOMPLETE" value=14 type="u32"
+constant "MC_HOST_OP_SERVICE_CALL" value=15 type="u32"
+constant "MC_HOST_OP_COMMIT_LAYER" value=16 type="u32"
+constant "MC_HOST_OP_CATALOG_INJECT" value=17 type="u32"
+
+constant "MC_HOST_EVENT_HTTP_REQUEST" value=1 type="u32"
+constant "MC_HOST_EVENT_HTTP_CANCEL" value=2 type="u32"
+constant "MC_HOST_EVENT_WS_CONNECT" value=3 type="u32"
+constant "MC_HOST_EVENT_WS_SEND" value=4 type="u32"
+constant "MC_HOST_EVENT_WS_CLOSE" value=5 type="u32"
+constant "MC_HOST_EVENT_HOST_CALL" value=6 type="u32"
+constant "MC_HOST_EVENT_HOST_CALL_CLOSE" value=7 type="u32"
+constant "MC_HOST_EVENT_PERSIST_GET" value=8 type="u32"
+constant "MC_HOST_EVENT_PERSIST_PUT" value=9 type="u32"
+constant "MC_HOST_EVENT_PERSIST_DELETE" value=10 type="u32"
+constant "MC_HOST_EVENT_PERSIST_LIST" value=11 type="u32"
+constant "MC_HOST_EVENT_TOOL_APPROVAL" value=12 type="u32"
+constant "MC_HOST_EVENT_OPERATION_CANCEL" value=13 type="u32"
+
+message "AttachmentDefinition" id=20 version=1 {
+  field "kind" type="u32"
+  field "payload" type="bytes"
+  doc "Versioned closed attachment variant. The generated kind table defines the payload message."
+}
+
+message "OperationRequest" id=21 version=1 {
+  field "kind" type="u32"
+  field "payload" type="bytes"
+  doc "One asynchronous host-control request. Payload is the generated kind-specific message."
+}
+
+message "OperationResult" id=22 version=1 {
+  field "kind" type="u32"
+  field "status" type="i32"
+  field "payload" type="bytes"
+  doc "One asynchronous host-control terminal value. Guest status remains data."
+}
+
+message "EffectEvent" id=23 version=1 {
+  field "kind" type="u32"
+  field "event_id" type="i64"
+  field "vm_id" type="i64"
+  field "operation_id" type="i64" opt=1
+  field "socket_id" type="i64" opt=1
+  field "flags" type="u32"
+  field "payload" type="bytes"
+  doc "Generation-bound, typed native-host effect envelope."
+}
+
+message "EffectResponse" id=24 version=1 {
+  field "kind" type="u32"
+  field "event_id" type="i64"
+  field "payload" type="bytes"
+  doc "Exactly one kind-matched terminal response for an effect event."
+}
+
+message "AttachmentManifestEntry" id=25 version=1 {
+  field "kind" type="u32"
+  field "identity" type="str"
+  field "digest" type="bytes"
+  doc "Non-secret attachment identity included in strict-restore companion metadata."
+}
+
+message "AttachmentManifest" id=26 version=1 {
+  field "entries" type="list<AttachmentManifestEntry>"
+  doc "Canonical non-secret attachment manifest. Credentials and callback addresses are absent."
+}
