@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { KernelHostBuilder } from "../src/index.js";
 import type { StreamSink } from "../src/index.js";
 
-/** The marker the wasmtime fixture writes before snapshotting — keep in lockstep with snapshot_fixture.rs. */
+/** The marker mc writes before snapshotting — keep in lockstep with write_snapshot_fixture in main.rs. */
 const MARKER = "rust-host snapshot -> js-host restore";
 
 function runfile(rel: string | undefined, envVar: string): string {

@@ -80,22 +80,6 @@ build_test(
     targets = [":mc"],
 )
 
-# Cross-host snapshot fixture (A3/A8) — see test/snapshot_fixture.rs. Boots the kernel under THIS host,
-# writes a marker through the control channel, snapshots, and emits the bytes the JS host's restore test
-# rehydrates. Outside the `host` lib's src/ glob, so it is not part of the library.
-rust_binary(
-    name = "snapshot_fixture_bin",
-    srcs = ["test/snapshot_fixture.rs"],
-    crate_root = "test/snapshot_fixture.rs",
-    edition = "2021",
-    deps = [":lib"],
-)
-
-host_release_binary(
-    name = "snapshot_fixture",
-    bin = ":snapshot_fixture_bin",
-)
-
 rust_opt_test(
     name = "tool_plane_test",
     size = "medium",
@@ -142,31 +126,33 @@ rust_opt_test(
     ],
 )
 
-# Run the fixture over the SAME kernel + base the e2e boots (B1) to produce the cross-host snapshot the
-# JS `//memcontainers/hosts/js:cross_host_test` consumes — so the snapshot a test restores is always the
-# one this kernel produces, never a stale checked-in blob.
+# Run the optimized `mc` over the same kernel and base as e2e (B1). Keep `mc` in
+# srcs so Bazel builds it in the target configuration shared with the host tests,
+# instead of creating a second Wasmtime build in the genrule's exec configuration.
+# The JS cross_host_test restores the snapshot produced here.
 genrule(
     name = "cross_host_snapshot",
     srcs = [
+        ":mc",
         "//memcontainers/kernel/rust:kernel",
         "//memcontainers/images:base",
     ],
     outs = ["cross_host_snapshot.bin"],
-    cmd = "$(execpath :snapshot_fixture) $(execpath //memcontainers/kernel/rust:kernel) " +
-          "$(execpath //memcontainers/images:base) $@",
-    tools = [":snapshot_fixture"],
+    cmd = "$(execpath :mc) --kernel $(execpath //memcontainers/kernel/rust:kernel) " +
+          "--image $(execpath //memcontainers/images:base) --snapshot-fixture-output $@",
     visibility = ["//visibility:public"],
 )
 
 genrule(
     name = "cross_host_incremental_snapshot",
     srcs = [
+        ":mc",
         "//memcontainers/kernel/rust:kernel",
         "//memcontainers/images:base",
     ],
     outs = ["cross_host_incremental_snapshot.bin"],
-    cmd = "$(execpath :snapshot_fixture) $(execpath //memcontainers/kernel/rust:kernel) " +
-          "$(execpath //memcontainers/images:base) $@ incremental",
-    tools = [":snapshot_fixture"],
+    cmd = "$(execpath :mc) --kernel $(execpath //memcontainers/kernel/rust:kernel) " +
+          "--image $(execpath //memcontainers/images:base) --snapshot-fixture-output $@ " +
+          "--snapshot-fixture-incremental",
     visibility = ["//visibility:public"],
 )

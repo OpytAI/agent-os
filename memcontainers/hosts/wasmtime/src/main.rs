@@ -4,11 +4,11 @@
 //! library; this is the thin front door, named `mc` for the running system's identity,
 //! not `agent-os-*`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use host::{DiskPersist, KernelHostBuilder, RealNet, StdioSink, TickState};
+use host::{CaptureSink, DiskPersist, KernelHostBuilder, RealNet, StdioSink, TickState};
 
 mod terminal;
 use terminal::Terminal;
@@ -43,6 +43,14 @@ struct Cli {
     /// it, `/var/persist` is read/write-denied (the default-deny gate, A9).
     #[arg(long, value_name = "PATH")]
     persist_dir: Option<PathBuf>,
+
+    /// Write the cross-host test snapshot to PATH.
+    #[arg(long, hide = true, value_name = "PATH")]
+    snapshot_fixture_output: Option<PathBuf>,
+
+    /// Write the incremental cross-host test snapshot bundle.
+    #[arg(long, hide = true, requires = "snapshot_fixture_output")]
+    snapshot_fixture_incremental: bool,
 }
 
 fn main() -> Result<()> {
@@ -56,6 +64,15 @@ fn main() -> Result<()> {
         ),
         None => None,
     };
+
+    if let Some(out) = &cli.snapshot_fixture_output {
+        return write_snapshot_fixture(
+            wasm_bytes,
+            base_image.context("snapshot fixture requires --image")?,
+            out,
+            cli.snapshot_fixture_incremental,
+        );
+    }
 
     let mut builder = KernelHostBuilder::new(wasm_bytes)
         .with_base_image(base_image)
@@ -109,6 +126,54 @@ fn main() -> Result<()> {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 
+    Ok(())
+}
+
+fn write_snapshot_fixture(
+    kernel: Vec<u8>,
+    base: Vec<u8>,
+    out: &Path,
+    incremental: bool,
+) -> Result<()> {
+    const MARKER: &[u8] = b"rust-host snapshot -> js-host restore";
+
+    let (sink, _stdout) = CaptureSink::new();
+    let mut host = KernelHostBuilder::new(kernel)
+        .with_base_image(Some(base))
+        .with_stdout(Box::new(sink))
+        .deterministic()
+        .build()
+        .context("booting kernel.wasm under the wasmtime host")?;
+
+    if incremental {
+        let base_snap = host.snapshot().context("snapshotting the baseline VM")?;
+        host.write_file("/tmp/xhost", MARKER)
+            .context("writing the cross-host marker")?;
+        let delta = host
+            .snapshot_incremental(&base_snap)
+            .context("snapshotting changed pages")?;
+        let mut bundle = Vec::with_capacity(4 + base_snap.len() + delta.len());
+        bundle.extend_from_slice(&(base_snap.len() as u32).to_le_bytes());
+        bundle.extend_from_slice(&base_snap);
+        bundle.extend_from_slice(&delta);
+        std::fs::write(out, &bundle)
+            .with_context(|| format!("writing incremental bundle to {}", out.display()))?;
+        eprintln!(
+            "cross-host incremental snapshot: {} bytes over {} byte baseline",
+            delta.len(),
+            base_snap.len()
+        );
+        return Ok(());
+    }
+
+    host.write_file("/tmp/xhost", MARKER)
+        .context("writing the cross-host marker")?;
+    let snap = host.snapshot().context("snapshotting the booted VM")?;
+    std::fs::write(out, &snap).with_context(|| format!("writing snapshot to {}", out.display()))?;
+    eprintln!(
+        "cross-host snapshot: {} bytes produced by the wasmtime host",
+        snap.len()
+    );
     Ok(())
 }
 
