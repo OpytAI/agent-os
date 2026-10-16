@@ -23,8 +23,9 @@ use_repo(zig, "zig_toolchains")
 
 # Gitz — pure-Zig Git library (go-git v5.19.2 port). Commit-locked 0.0.0
 # archive_override: bump commit + integrity together.
-GITZ_COMMIT = "efdaa4a84f29b9a2384134aab188779ca8ecf6a7"
-GITZ_INTEGRITY = "sha256-T1YeSKFg0IWZwX5hnurL5JksIkvZ+LFt02Qliwcf+U4="
+GITZ_COMMIT = "f18b320da479737e2920aca94bdd902ed68fb3b1"
+
+GITZ_INTEGRITY = "sha256-6Nk0pK/XJea5Ry4hCXZWYbAOTmP8k3hF/iJJSccoLXA="
 
 bazel_dep(name = "gitz", version = "0.0.0")
 archive_override(
@@ -36,8 +37,9 @@ archive_override(
 
 # utilz — Unix utilities in Zig. Commit-locked 0.0.0 archive_override:
 # bump commit + strip_prefix + integrity together.
-UTILZ_COMMIT = "eca2dc637a448839f76f67a329650f55a8d07954"
-UTILZ_INTEGRITY = "sha256-hcec1665890F8LgMx8NxugM3U7NsIrUgXEnGcwM4Dvs="
+UTILZ_COMMIT = "d0d6f37893821de193e55eb40fecc08e70c4c3ba"
+
+UTILZ_INTEGRITY = "sha256-SxdWsaaCOrRcPeKhjFzRA6/O0EQ7PO9QhjMqUIZ+74s="
 
 bazel_dep(name = "utilz", version = "0.0.0")
 archive_override(
@@ -48,8 +50,9 @@ archive_override(
 )
 
 # shcore — embed a Unix shell anywhere. Same pin rule as gitz/utilz.
-SHCORE_COMMIT = "2817e8c9eb98ad9bec8f6c8d787ca6cad66cd865"
-SHCORE_INTEGRITY = "sha256-SlDvHw+OXUyNDBqjtzBzXEtpfMZLuYnLcIZgVUEd0TQ="
+SHCORE_COMMIT = "779fe0c5e6f2e7a417a6c60c14aa77d16c703262"
+
+SHCORE_INTEGRITY = "sha256-jvAqvi1K11LVByyBh95kyJvQu5KzSaN0XDpf9yAq0Cg="
 
 bazel_dep(name = "shcore", version = "0.0.0")
 archive_override(
