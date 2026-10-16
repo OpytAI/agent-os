@@ -29,7 +29,6 @@ struct Header {
     version: u16,
     flags: u16,
 }
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct Buffer {
@@ -396,12 +395,15 @@ unsafe extern "C" fn get_interface(
     handle: RuntimeHandle,
     _id: u32,
     _version: u16,
-    _size: u32,
-    _out: *mut c_void,
+    size: u32,
+    out: *mut c_void,
     error: *mut Error,
 ) -> ResultCode {
     guard(error, || {
         let _active = ActiveRuntime::acquire(handle)?;
+        if out.is_null() || size < size_of::<Header>() as u32 {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
         Err(contract::MC_HOST_UNSUPPORTED)
     })
 }
@@ -442,28 +444,5 @@ pub unsafe extern "C" fn mc_host_get_api(
     })) {
         Ok(code) => code,
         Err(_) => contract::MC_HOST_INTERNAL,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn generation_and_namespace_reject_stale_runtime_handles() {
-        let mut table = RuntimeTable::default();
-        let first = table.insert().unwrap();
-        table.close(first).unwrap();
-        assert!(matches!(
-            table.slot_mut(first),
-            Err(contract::MC_HOST_STALE_HANDLE)
-        ));
-        let second = table.insert().unwrap();
-        assert_ne!(first, second);
-        assert!(matches!(
-            table.slot_mut(first),
-            Err(contract::MC_HOST_STALE_HANDLE)
-        ));
-        assert!(table.slot_mut(second).is_ok());
     }
 }

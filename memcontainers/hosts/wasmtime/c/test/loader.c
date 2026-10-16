@@ -46,7 +46,11 @@ int main(int argc, char **argv) {
        "accept zero future option");
   need(runtime != 0, "runtime handle");
   need(api.get_interface(runtime, MC_HOST_IFACE_VM_V1, 1, 0, NULL, NULL) ==
-           MC_HOST_UNSUPPORTED, "unimplemented VM interface");
+           MC_HOST_INVALID_ARGUMENT, "reject malformed interface request");
+  mc_host_header_v1 absent = {sizeof(absent), 1, 0};
+  need(api.get_interface(runtime, MC_HOST_IFACE_VM_V1, 1, sizeof(absent),
+                         &absent, NULL) == MC_HOST_UNSUPPORTED,
+       "unimplemented VM interface");
   need(api.runtime_close(runtime, NULL) == MC_HOST_OK, "close runtime");
   need(api.runtime_close(runtime, NULL) == MC_HOST_STALE_HANDLE, "stale close");
 
