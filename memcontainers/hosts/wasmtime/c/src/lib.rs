@@ -33,7 +33,8 @@ const FEATURE_BITS: u64 = contract::MC_HOST_FEATURE_VM_BASIC
     | contract::MC_HOST_FEATURE_OUTPUT
     | contract::MC_HOST_FEATURE_SNAPSHOT
     | contract::MC_HOST_FEATURE_EXEC_OPERATION
-    | contract::MC_HOST_FEATURE_FS_OPERATION;
+    | contract::MC_HOST_FEATURE_FS_OPERATION
+    | contract::MC_HOST_FEATURE_AUTOCOMPLETE_OPERATION;
 
 #[repr(C)]
 #[derive(Clone, Copy)]

@@ -2,10 +2,12 @@
 
 use std::mem::{align_of, size_of};
 
-use constants_rust::{EXEC_MODE_DIRECT, EXEC_MODE_SHELL};
-use ctl_rust::ExecRequest;
+use constants_rust::{
+    AUTOCOMPLETE_MAX_FRAME_BYTES, AUTOCOMPLETE_MAX_ITEMS, EXEC_MODE_DIRECT, EXEC_MODE_SHELL,
+};
+use ctl_rust::{AutocompleteRequest, ExecRequest};
 use embedder_rust::{self as contract, FilesystemRequest, OperationRequest};
-use host::ControlFsAction;
+use host::ControlRetryAction;
 
 use super::vm_api::{bytes, copy_output, output_size};
 use super::*;
@@ -41,7 +43,7 @@ fn valid_exec_request(kind: u32, request: &ExecRequest) -> bool {
             .all(|(key, value)| !key.contains('\0') && !value.contains('\0'))
 }
 
-fn filesystem_action(kind: u32, payload: &[u8]) -> Result<ControlFsAction, ResultCode> {
+fn filesystem_action(kind: u32, payload: &[u8]) -> Result<ControlRetryAction, ResultCode> {
     let request =
         FilesystemRequest::decode(payload).map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
     let FilesystemRequest {
@@ -55,20 +57,20 @@ fn filesystem_action(kind: u32, payload: &[u8]) -> Result<ControlFsAction, Resul
     }
     let no_extra = data.is_none() && target.is_none() && mode.is_none();
     let action = match kind {
-        contract::MC_HOST_OP_FS_READ if no_extra => ControlFsAction::Read(path),
-        contract::MC_HOST_OP_FS_READLINK if no_extra => ControlFsAction::Readlink(path),
-        contract::MC_HOST_OP_FS_READDIR if no_extra => ControlFsAction::Readdir(path),
-        contract::MC_HOST_OP_FS_STAT if no_extra => ControlFsAction::Stat(path),
-        contract::MC_HOST_OP_FS_MKDIR if no_extra => ControlFsAction::Mkdir(path),
-        contract::MC_HOST_OP_FS_UNLINK if no_extra => ControlFsAction::Unlink(path),
+        contract::MC_HOST_OP_FS_READ if no_extra => ControlRetryAction::Read(path),
+        contract::MC_HOST_OP_FS_READLINK if no_extra => ControlRetryAction::Readlink(path),
+        contract::MC_HOST_OP_FS_READDIR if no_extra => ControlRetryAction::Readdir(path),
+        contract::MC_HOST_OP_FS_STAT if no_extra => ControlRetryAction::Stat(path),
+        contract::MC_HOST_OP_FS_MKDIR if no_extra => ControlRetryAction::Mkdir(path),
+        contract::MC_HOST_OP_FS_UNLINK if no_extra => ControlRetryAction::Unlink(path),
         contract::MC_HOST_OP_FS_WRITE if target.is_none() && mode.is_none() => {
-            ControlFsAction::Write {
+            ControlRetryAction::Write {
                 path,
                 data: data.ok_or(contract::MC_HOST_INVALID_ARGUMENT)?,
             }
         }
         contract::MC_HOST_OP_FS_CHMOD if data.is_none() && target.is_none() => {
-            ControlFsAction::Chmod {
+            ControlRetryAction::Chmod {
                 path,
                 mode: mode.ok_or(contract::MC_HOST_INVALID_ARGUMENT)?,
             }
@@ -77,7 +79,7 @@ fn filesystem_action(kind: u32, payload: &[u8]) -> Result<ControlFsAction, Resul
             let target = target
                 .filter(|value| !value.is_empty())
                 .ok_or(contract::MC_HOST_INVALID_ARGUMENT)?;
-            ControlFsAction::Symlink { target, link: path }
+            ControlRetryAction::Symlink { target, link: path }
         }
         _ => return Err(contract::MC_HOST_INVALID_ARGUMENT),
     };
@@ -107,6 +109,29 @@ pub unsafe extern "C" fn start(
         let envelope =
             OperationRequest::decode(frame).map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
         let operation = match envelope.kind {
+            contract::MC_HOST_OP_AUTOCOMPLETE => {
+                let request = AutocompleteRequest::decode(&envelope.payload)
+                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+                if envelope.payload.len() > AUTOCOMPLETE_MAX_FRAME_BYTES as usize
+                    || request.cursor as usize > request.source.len()
+                    || request.limit > AUTOCOMPLETE_MAX_ITEMS as u32
+                    || request
+                        .cwd
+                        .as_ref()
+                        .is_some_and(|value| value.contains('\0'))
+                    || request
+                        .env
+                        .iter()
+                        .any(|(key, value)| key.contains('\0') || value.contains('\0'))
+                {
+                    return Err(contract::MC_HOST_INVALID_ARGUMENT);
+                }
+                ActiveRuntime::acquire(runtime)?.state.start_retry(
+                    vm,
+                    envelope.kind,
+                    ControlRetryAction::Autocomplete(envelope.payload),
+                )?
+            }
             contract::MC_HOST_OP_EXEC_SHELL | contract::MC_HOST_OP_EXEC_DIRECT => {
                 let request = ExecRequest::decode(&envelope.payload)
                     .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
@@ -129,7 +154,7 @@ pub unsafe extern "C" fn start(
                 let action = filesystem_action(envelope.kind, &envelope.payload)?;
                 ActiveRuntime::acquire(runtime)?
                     .state
-                    .start_fs(vm, envelope.kind, action)?
+                    .start_retry(vm, envelope.kind, action)?
             }
             _ => return Err(contract::MC_HOST_UNSUPPORTED),
         };

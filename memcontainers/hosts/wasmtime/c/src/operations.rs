@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use ctl_rust::ExecOutcome;
 use embedder_rust::{self as contract, OperationResult};
-use host::{ControlAttempt, ControlFsAction, KernelHost};
+use host::{ControlAttempt, ControlRetryAction, KernelHost};
 
 const MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
 
@@ -17,8 +17,8 @@ pub struct OperationRecord {
 enum OperationState {
     New,
     PendingExec(i32),
-    NewFs(ControlFsAction),
-    PendingFs(ControlFsAction),
+    NewRetry(ControlRetryAction),
+    PendingRetry(ControlRetryAction),
     Ready(Arc<[u8]>),
     Failed(u32),
     Cancelled,
@@ -41,11 +41,11 @@ impl OperationRecord {
         }
     }
 
-    pub fn new_fs(vm: u64, kind: u32, action: ControlFsAction) -> Self {
+    pub fn new_retry(vm: u64, kind: u32, action: ControlRetryAction) -> Self {
         Self {
             vm,
             kind,
-            state: Mutex::new(OperationState::NewFs(action)),
+            state: Mutex::new(OperationState::NewRetry(action)),
         }
     }
 
@@ -62,9 +62,9 @@ impl OperationRecord {
         let state = self.state.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
         let (state_code, error, result_length) = match &*state {
             OperationState::New => (contract::MC_HOST_OP_NEW, 0, 0),
-            OperationState::NewFs(_) => (contract::MC_HOST_OP_NEW, 0, 0),
+            OperationState::NewRetry(_) => (contract::MC_HOST_OP_NEW, 0, 0),
             OperationState::PendingExec(_) => (contract::MC_HOST_OP_PENDING, 0, 0),
-            OperationState::PendingFs(_) => (contract::MC_HOST_OP_PENDING, 0, 0),
+            OperationState::PendingRetry(_) => (contract::MC_HOST_OP_PENDING, 0, 0),
             OperationState::Ready(bytes) => (contract::MC_HOST_OP_READY, 0, bytes.len() as u64),
             OperationState::Failed(error) => (contract::MC_HOST_OP_FAILED, *error, 0),
             OperationState::Cancelled => (
@@ -87,32 +87,32 @@ impl OperationRecord {
             *state,
             OperationState::New
                 | OperationState::PendingExec(_)
-                | OperationState::NewFs(_)
-                | OperationState::PendingFs(_)
+                | OperationState::NewRetry(_)
+                | OperationState::PendingRetry(_)
         ))
     }
 
-    pub fn fs_waiting(&self) -> Result<bool, u32> {
+    pub fn retry_waiting(&self) -> Result<bool, u32> {
         let state = self.state.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
         Ok(matches!(
             *state,
-            OperationState::NewFs(_) | OperationState::PendingFs(_)
+            OperationState::NewRetry(_) | OperationState::PendingRetry(_)
         ))
     }
 
-    pub fn advance_fs(&self, host: &mut KernelHost) -> Result<(), u32> {
+    pub fn advance_retry(&self, host: &mut KernelHost) -> Result<(), u32> {
         let mut state = self.state.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
         let action = match &*state {
-            OperationState::NewFs(action) | OperationState::PendingFs(action) => action,
+            OperationState::NewRetry(action) | OperationState::PendingRetry(action) => action,
             _ => return Ok(()),
         };
         let result = host
-            .control_fs_attempt(action)
+            .control_retry_attempt(action)
             .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?;
         match result {
             ControlAttempt::Pending => {
-                if let OperationState::NewFs(action) = &*state {
-                    *state = OperationState::PendingFs(action.clone());
+                if let OperationState::NewRetry(action) = &*state {
+                    *state = OperationState::PendingRetry(action.clone());
                 }
             }
             ControlAttempt::Complete { status, payload } => {
@@ -224,7 +224,7 @@ impl OperationRecord {
                     .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?;
                 *state = OperationState::Cancelled;
             }
-            OperationState::New | OperationState::NewFs(_) | OperationState::PendingFs(_) => {
+            OperationState::New | OperationState::NewRetry(_) | OperationState::PendingRetry(_) => {
                 *state = OperationState::Cancelled
             }
             OperationState::Ready(_) | OperationState::Failed(_) | OperationState::Cancelled => {}

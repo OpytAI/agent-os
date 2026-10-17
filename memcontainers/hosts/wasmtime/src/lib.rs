@@ -1138,7 +1138,8 @@ pub struct ExecOptions {
 }
 
 #[derive(Clone)]
-pub enum ControlFsAction {
+pub enum ControlRetryAction {
+    Autocomplete(Vec<u8>),
     Read(String),
     Readlink(String),
     Readdir(String),
@@ -1828,9 +1829,20 @@ impl KernelHost {
 
     /// Execute exactly one filesystem control attempt. Native embedders retry a
     /// pending request after each explicit tick; this method never ticks.
-    pub fn control_fs_attempt(&mut self, action: &ControlFsAction) -> Result<ControlAttempt> {
+    pub fn control_retry_attempt(&mut self, action: &ControlRetryAction) -> Result<ControlAttempt> {
         let (result, carries_bytes) = match action {
-            ControlFsAction::Read(path) => {
+            ControlRetryAction::Autocomplete(request) => {
+                let f = self.exports.require_ctl_autocomplete()?;
+                self.ctl_put(request)?;
+                (
+                    wt(
+                        f.call(&mut self.store, request.len() as i32),
+                        "mc_ctl_autocomplete",
+                    )?,
+                    true,
+                )
+            }
+            ControlRetryAction::Read(path) => {
                 let f = self.exports.require_ctl_read()?;
                 self.ctl_put(path.as_bytes())?;
                 (
@@ -1841,7 +1853,7 @@ impl KernelHost {
                     true,
                 )
             }
-            ControlFsAction::Readlink(path) => {
+            ControlRetryAction::Readlink(path) => {
                 let f = self.exports.require_ctl_readlink()?;
                 self.ctl_put(path.as_bytes())?;
                 (
@@ -1852,7 +1864,7 @@ impl KernelHost {
                     true,
                 )
             }
-            ControlFsAction::Readdir(path) => {
+            ControlRetryAction::Readdir(path) => {
                 let f = self.exports.require_ctl_readdir()?;
                 self.ctl_put(path.as_bytes())?;
                 (
@@ -1863,7 +1875,7 @@ impl KernelHost {
                     true,
                 )
             }
-            ControlFsAction::Stat(path) => {
+            ControlRetryAction::Stat(path) => {
                 let f = self.exports.require_ctl_stat()?;
                 self.ctl_put(path.as_bytes())?;
                 (
@@ -1874,7 +1886,7 @@ impl KernelHost {
                     true,
                 )
             }
-            ControlFsAction::Write { path, data } => {
+            ControlRetryAction::Write { path, data } => {
                 let f = self.exports.require_ctl_write()?;
                 let mut request = Vec::with_capacity(path.len() + data.len());
                 request.extend_from_slice(path.as_bytes());
@@ -1891,7 +1903,7 @@ impl KernelHost {
                     false,
                 )
             }
-            ControlFsAction::Mkdir(path) => {
+            ControlRetryAction::Mkdir(path) => {
                 let f = self.exports.require_ctl_mkdir()?;
                 self.ctl_put(path.as_bytes())?;
                 (
@@ -1902,7 +1914,7 @@ impl KernelHost {
                     false,
                 )
             }
-            ControlFsAction::Unlink(path) => {
+            ControlRetryAction::Unlink(path) => {
                 let f = self.exports.require_ctl_unlink()?;
                 self.ctl_put(path.as_bytes())?;
                 (
@@ -1913,7 +1925,7 @@ impl KernelHost {
                     false,
                 )
             }
-            ControlFsAction::Chmod { path, mode } => {
+            ControlRetryAction::Chmod { path, mode } => {
                 let f = self.exports.require_ctl_chmod()?;
                 self.ctl_put(path.as_bytes())?;
                 (
@@ -1924,7 +1936,7 @@ impl KernelHost {
                     false,
                 )
             }
-            ControlFsAction::Symlink { target, link } => {
+            ControlRetryAction::Symlink { target, link } => {
                 let f = self.exports.require_ctl_symlink()?;
                 let mut request = Vec::with_capacity(target.len() + link.len());
                 request.extend_from_slice(target.as_bytes());

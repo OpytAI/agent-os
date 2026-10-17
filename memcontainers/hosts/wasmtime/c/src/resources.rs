@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, Weak};
 use embedder_rust as contract;
 use host::output_queue::{OutputQueue, OutputRecord, OutputStats, LOG, STDERR, STDOUT};
 use host::{
-    inspect_snapshot_bytes, ControlFsAction, ExecOptions, KernelCacheLimit, KernelHost,
+    inspect_snapshot_bytes, ControlRetryAction, ExecOptions, KernelCacheLimit, KernelHost,
     KernelHostBuilder, KernelModuleCache, SnapshotDescription, TickState,
 };
 
@@ -419,8 +419,8 @@ impl VmRecord {
                 }
             }
             for operation in operations {
-                if operation.fs_waiting()? {
-                    if operation.advance_fs(host).is_err() {
+                if operation.retry_waiting()? {
+                    if operation.advance_retry(host).is_err() {
                         self.observed
                             .lock()
                             .map_err(|_| contract::MC_HOST_INTERNAL)?
@@ -1022,7 +1022,12 @@ impl RuntimeState {
         }
     }
 
-    pub fn start_fs(&self, vm_handle: u64, kind: u32, action: ControlFsAction) -> Result<u64, u32> {
+    pub fn start_retry(
+        &self,
+        vm_handle: u64,
+        kind: u32,
+        action: ControlRetryAction,
+    ) -> Result<u64, u32> {
         let vm = self.vm(vm_handle)?;
         let host = vm.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
         if host.is_none() {
@@ -1039,7 +1044,7 @@ impl RuntimeState {
         if vm.live_operations()?.len() >= MAX_OPERATIONS_PER_VM {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
-        let record = Arc::new(OperationRecord::new_fs(vm_handle, kind, action));
+        let record = Arc::new(OperationRecord::new_retry(vm_handle, kind, action));
         let handle = {
             let mut resources = self
                 .resources

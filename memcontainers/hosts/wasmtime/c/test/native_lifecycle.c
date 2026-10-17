@@ -120,6 +120,64 @@ static wire filesystem_request(uint32_t kind, const char *path,
   return envelope;
 }
 
+static wire autocomplete_request(const char *source) {
+  wire request = {0}, envelope = {0};
+  put_u16(&request, 9); /* control.kdl AutocompleteRequest v1 */
+  put_u8(&request, 1);
+  put_bytes(&request, (const uint8_t *)source, strlen(source));
+  put_u32(&request, (uint32_t)strlen(source)); /* cursor */
+  put_u8(&request, 0); /* cwd */
+  put_u32(&request, 0); /* env */
+  put_u32(&request, 16); /* result limit */
+  put_u16(&envelope, 21);
+  put_u8(&envelope, 1);
+  put_u32(&envelope, MC_HOST_OP_AUTOCOMPLETE);
+  put_bytes(&envelope, request.bytes, request.length);
+  return envelope;
+}
+
+static void run_autocomplete(const mc_host_vm_api_v1 *vm_api,
+                             const mc_host_operation_api_v1 *op_api,
+                             mc_host_runtime_t runtime, mc_host_handle_t vm) {
+  wire request = autocomplete_request("gi");
+  mc_host_handle_t operation = 0;
+  check(op_api->start(runtime, vm,
+                      (mc_host_bytes_v1){request.bytes, request.length},
+                      &operation, NULL), "start autocomplete");
+  mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
+  check(op_api->poll(runtime, operation, &status, NULL), "poll autocomplete before drive");
+  need(status.state == MC_HOST_OP_NEW, "autocomplete does not drive during start");
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    options.stop_mask = MC_HOST_DRIVE_ON_OPERATION;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "drive autocomplete");
+    check(op_api->poll(runtime, operation, &status, NULL), "poll autocomplete");
+    if (status.state == MC_HOST_OP_READY) break;
+    need(status.state == MC_HOST_OP_PENDING, "autocomplete stays pending");
+  }
+  need(status.state == MC_HOST_OP_READY && status.result_length < 4096,
+       "autocomplete completes");
+  uint8_t result[4096];
+  mc_host_buffer_v1 buffer = {result, sizeof(result), 0};
+  check(op_api->result(runtime, operation, &buffer, NULL), "read autocomplete result");
+  size_t offset = 0;
+  need(read_u16(result, buffer.required, &offset) == 22 &&
+           read_u8(result, buffer.required, &offset) == 1 &&
+           read_u32(result, buffer.required, &offset) == MC_HOST_OP_AUTOCOMPLETE &&
+           read_u32(result, buffer.required, &offset) == 0,
+       "autocomplete operation envelope");
+  uint32_t payload_len = read_u32(result, buffer.required, &offset);
+  need(payload_len == buffer.required - offset &&
+           read_u16(result, buffer.required, &offset) == 11 &&
+           read_u8(result, buffer.required, &offset) == 1 &&
+           read_u32(result, buffer.required, &offset) == 0 &&
+           read_u32(result, buffer.required, &offset) == 2,
+       "real shell autocomplete result");
+  check(op_api->close(runtime, operation, NULL), "close autocomplete");
+}
+
 static void run_filesystem_operations(const mc_host_vm_api_v1 *vm_api,
                                       const mc_host_operation_api_v1 *op_api,
                                       mc_host_runtime_t runtime, mc_host_handle_t vm) {
@@ -403,6 +461,7 @@ int main(int argc, char **argv) {
   drive_to_prompt(&vm_api, &output_api, runtime, vm, NULL);
   run_control_command(&vm_api, &op_api, &snap_api, runtime, vm);
   run_filesystem_operations(&vm_api, &op_api, runtime, vm);
+  run_autocomplete(&vm_api, &op_api, runtime, vm);
 
   mc_host_snapshot_begin_options_v1 full_options = MC_HOST_INIT(mc_host_snapshot_begin_options_v1);
   full_options.mode = MC_HOST_SNAPSHOT_FULL;
