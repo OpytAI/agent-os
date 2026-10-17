@@ -13,6 +13,7 @@ use embedder_rust as contract;
 
 mod output_api;
 mod resources;
+mod snapshot_api;
 mod vm_api;
 use resources::RuntimeState;
 
@@ -228,6 +229,53 @@ struct OutputApi {
     ack: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
     release: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
     stats: unsafe extern "C" fn(u64, u64, *mut OutputStatsInfo, *mut Error) -> ResultCode,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SnapshotBeginOptions {
+    header: Header,
+    mode: u32,
+    reserved: u32,
+    baseline: u64,
+}
+
+#[repr(C)]
+struct SnapshotInfo {
+    header: Header,
+    kind: u32,
+    mcsn_version: u32,
+    kernel_digest: [u8; 32],
+    baseline_id: [u8; 32],
+    content_digest: [u8; 32],
+    length: u64,
+    memory_len: u64,
+}
+
+#[repr(C)]
+struct SnapshotApi {
+    header: Header,
+    baseline_import: unsafe extern "C" fn(
+        u64,
+        u64,
+        Bytes,
+        *mut u64,
+        *mut SnapshotInfo,
+        *mut Error,
+    ) -> ResultCode,
+    baseline_close: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
+    begin: unsafe extern "C" fn(
+        u64,
+        u64,
+        *const SnapshotBeginOptions,
+        *mut u64,
+        *mut SnapshotInfo,
+        *mut Error,
+    ) -> ResultCode,
+    read: unsafe extern "C" fn(u64, u64, u64, *mut Buffer, *mut u64, *mut Error) -> ResultCode,
+    finish: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
+    cancel: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
+    inspect: unsafe extern "C" fn(u64, Bytes, Bytes, *mut SnapshotInfo, *mut Error) -> ResultCode,
 }
 
 // The manifest in embedder.kdl is checked independently by Rust and C. A
@@ -525,6 +573,77 @@ const _: () = {
     assert!(offset_of!(OutputApi, ack) == contract::MC_HOST_LAYOUT_OUTPUT_API_ACK_OFFSET);
     assert!(offset_of!(OutputApi, release) == contract::MC_HOST_LAYOUT_OUTPUT_API_RELEASE_OFFSET);
     assert!(offset_of!(OutputApi, stats) == contract::MC_HOST_LAYOUT_OUTPUT_API_STATS_OFFSET);
+    assert!(
+        size_of::<SnapshotBeginOptions>() == contract::MC_HOST_LAYOUT_SNAPSHOT_BEGIN_OPTIONS_SIZE
+    );
+    assert!(
+        align_of::<SnapshotBeginOptions>() == contract::MC_HOST_LAYOUT_SNAPSHOT_BEGIN_OPTIONS_ALIGN
+    );
+    assert!(
+        offset_of!(SnapshotBeginOptions, header)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_BEGIN_OPTIONS_HEADER_OFFSET
+    );
+    assert!(
+        offset_of!(SnapshotBeginOptions, mode)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_BEGIN_OPTIONS_MODE_OFFSET
+    );
+    assert!(
+        offset_of!(SnapshotBeginOptions, reserved)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_BEGIN_OPTIONS_RESERVED_OFFSET
+    );
+    assert!(
+        offset_of!(SnapshotBeginOptions, baseline)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_BEGIN_OPTIONS_BASELINE_OFFSET
+    );
+
+    assert!(size_of::<SnapshotInfo>() == contract::MC_HOST_LAYOUT_SNAPSHOT_INFO_SIZE);
+    assert!(align_of::<SnapshotInfo>() == contract::MC_HOST_LAYOUT_SNAPSHOT_INFO_ALIGN);
+    assert!(
+        offset_of!(SnapshotInfo, header) == contract::MC_HOST_LAYOUT_SNAPSHOT_INFO_HEADER_OFFSET
+    );
+    assert!(offset_of!(SnapshotInfo, kind) == contract::MC_HOST_LAYOUT_SNAPSHOT_INFO_KIND_OFFSET);
+    assert!(
+        offset_of!(SnapshotInfo, mcsn_version)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_INFO_MCSN_VERSION_OFFSET
+    );
+    assert!(
+        offset_of!(SnapshotInfo, kernel_digest)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_INFO_KERNEL_DIGEST_OFFSET
+    );
+    assert!(
+        offset_of!(SnapshotInfo, baseline_id)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_INFO_BASELINE_ID_OFFSET
+    );
+    assert!(
+        offset_of!(SnapshotInfo, content_digest)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_INFO_CONTENT_DIGEST_OFFSET
+    );
+    assert!(
+        offset_of!(SnapshotInfo, length) == contract::MC_HOST_LAYOUT_SNAPSHOT_INFO_LENGTH_OFFSET
+    );
+    assert!(
+        offset_of!(SnapshotInfo, memory_len)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_INFO_MEMORY_LEN_OFFSET
+    );
+
+    assert!(size_of::<SnapshotApi>() == contract::MC_HOST_LAYOUT_SNAPSHOT_API_SIZE);
+    assert!(align_of::<SnapshotApi>() == contract::MC_HOST_LAYOUT_SNAPSHOT_API_ALIGN);
+    assert!(offset_of!(SnapshotApi, header) == contract::MC_HOST_LAYOUT_SNAPSHOT_API_HEADER_OFFSET);
+    assert!(
+        offset_of!(SnapshotApi, baseline_import)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_API_BASELINE_IMPORT_OFFSET
+    );
+    assert!(
+        offset_of!(SnapshotApi, baseline_close)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_API_BASELINE_CLOSE_OFFSET
+    );
+    assert!(offset_of!(SnapshotApi, begin) == contract::MC_HOST_LAYOUT_SNAPSHOT_API_BEGIN_OFFSET);
+    assert!(offset_of!(SnapshotApi, read) == contract::MC_HOST_LAYOUT_SNAPSHOT_API_READ_OFFSET);
+    assert!(offset_of!(SnapshotApi, finish) == contract::MC_HOST_LAYOUT_SNAPSHOT_API_FINISH_OFFSET);
+    assert!(offset_of!(SnapshotApi, cancel) == contract::MC_HOST_LAYOUT_SNAPSHOT_API_CANCEL_OFFSET);
+    assert!(
+        offset_of!(SnapshotApi, inspect) == contract::MC_HOST_LAYOUT_SNAPSHOT_API_INSPECT_OFFSET
+    );
 };
 
 struct RuntimeSlot {

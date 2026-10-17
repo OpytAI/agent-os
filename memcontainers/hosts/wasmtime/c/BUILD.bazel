@@ -19,6 +19,7 @@ rust_shared_library(
     visibility = ["//visibility:public"],
     deps = [
         "//memcontainers/contracts:embedder_rust",
+        "//memcontainers/contracts:snapshot_rust",
         "//memcontainers/hosts/wasmtime:lib",
     ],
 )

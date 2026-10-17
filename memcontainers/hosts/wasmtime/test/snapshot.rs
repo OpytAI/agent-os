@@ -1,4 +1,4 @@
-use host::{CaptureSink, KernelHostBuilder};
+use host::{inspect_snapshot_bytes, CaptureSink, KernelHostBuilder};
 use runfiles::Runfiles;
 use serde::Deserialize;
 use snapshot_rust::{parse_snapshot, SnapshotKind, SNAPSHOT_HEADER_LEN, SNAPSHOT_PAGE_SIZE};
@@ -34,6 +34,35 @@ fn mutate(mut bytes: Vec<u8>, v: &Vector) -> Vec<u8> {
         other => panic!("unknown mutation {other}"),
     }
     bytes
+}
+
+#[test]
+fn real_kernel_snapshot_metadata_matches_restore_contract() {
+    let kernel = runfile("_main/memcontainers/kernel/rust/kernel.wasm");
+    let image = runfile("_main/memcontainers/images/base.tar");
+    let (sink, _) = CaptureSink::new();
+    let mut host = KernelHostBuilder::new(kernel.clone())
+        .with_base_image(Some(image))
+        .with_stdout(Box::new(sink))
+        .deterministic()
+        .build()
+        .unwrap();
+    let full = host.snapshot().unwrap();
+    let full_info = inspect_snapshot_bytes(&full, None).unwrap();
+    assert!(!full_info.incremental);
+    assert_eq!(full_info.length, full.len());
+    assert_eq!(full_info.memory_len, parse_snapshot(&full).unwrap().memory_len);
+    assert_ne!(full_info.baseline_id, full_info.content_digest);
+
+    host.write_file("/tmp/native-snapshot-metadata", b"real kernel state").unwrap();
+    let delta = host.snapshot_incremental(&full).unwrap();
+    let delta_info = inspect_snapshot_bytes(&delta, Some(&full)).unwrap();
+    assert!(delta_info.incremental);
+    assert_eq!(delta_info.baseline_id, full_info.baseline_id);
+    let mut corrupted = delta;
+    *corrupted.last_mut().unwrap() ^= 1;
+    assert!(inspect_snapshot_bytes(&corrupted, Some(&full)).is_err());
+    assert_eq!(host.read_file("/tmp/native-snapshot-metadata").unwrap(), b"real kernel state");
 }
 
 #[test]

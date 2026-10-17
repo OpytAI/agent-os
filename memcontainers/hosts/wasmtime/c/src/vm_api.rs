@@ -13,7 +13,7 @@ const MAX_KERNEL_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_INPUT_BYTES: u64 = 16 * 1024 * 1024;
 
-unsafe fn bytes<'a>(value: Bytes, maximum: u64) -> Result<&'a [u8], ResultCode> {
+pub(super) unsafe fn bytes<'a>(value: Bytes, maximum: u64) -> Result<&'a [u8], ResultCode> {
     if value.len > maximum {
         return Err(contract::MC_HOST_RESOURCE_LIMIT);
     }
@@ -27,7 +27,7 @@ unsafe fn bytes<'a>(value: Bytes, maximum: u64) -> Result<&'a [u8], ResultCode> 
     Ok(unsafe { std::slice::from_raw_parts(value.data, length) })
 }
 
-unsafe fn input<T: Copy>(ptr: *const T) -> Result<T, ResultCode> {
+pub(super) unsafe fn input<T: Copy>(ptr: *const T) -> Result<T, ResultCode> {
     if ptr.is_null() || (ptr as usize) % align_of::<Header>() != 0 {
         return Err(contract::MC_HOST_INVALID_ARGUMENT);
     }
@@ -190,11 +190,15 @@ pub unsafe extern "C" fn vm_restore(
             return Err(contract::MC_HOST_UNSUPPORTED);
         }
         let snapshot = unsafe { bytes(options.snapshot, 512 * 1024 * 1024)? };
+        super::snapshot_api::check_snapshot_memory(snapshot)?;
         let baseline = if options.baseline.len == 0 {
             None
         } else {
             Some(unsafe { bytes(options.baseline, 512 * 1024 * 1024)? })
         };
+        if let Some(base) = baseline {
+            super::snapshot_api::check_snapshot_memory(base)?;
+        }
         let active = ActiveRuntime::acquire(runtime)?;
         let vm = active.state.restore_vm(kernel, snapshot, baseline)?;
         unsafe { *out_vm = vm };

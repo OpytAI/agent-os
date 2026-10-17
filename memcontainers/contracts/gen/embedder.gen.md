@@ -56,6 +56,8 @@ ABI **1.0**.
 | `MC_HOST_OUTPUT_GAP` | `u32` | 2 |
 | `MC_HOST_OUTPUT_ABOVE_HIGH_WATER` | `u32` | 1 |
 | `MC_HOST_OUTPUT_POISONED` | `u32` | 2 |
+| `MC_HOST_SNAPSHOT_FULL` | `u32` | 1 |
+| `MC_HOST_SNAPSHOT_INCREMENTAL` | `u32` | 2 |
 | `MC_HOST_OP_EXEC_SHELL` | `u32` | 1 |
 | `MC_HOST_OP_EXEC_DIRECT` | `u32` | 2 |
 | `MC_HOST_OP_FS_READ` | `u32` | 3 |
@@ -106,3 +108,6 @@ ABI **1.0**.
 | `OUTPUT_RECORD` | 64 | 8 |
 | `OUTPUT_STATS` | 48 | 8 |
 | `OUTPUT_API` | 48 | 8 |
+| `SNAPSHOT_BEGIN_OPTIONS` | 24 | 8 |
+| `SNAPSHOT_INFO` | 128 | 8 |
+| `SNAPSHOT_API` | 64 | 8 |

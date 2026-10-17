@@ -138,6 +138,32 @@ CHECK_FIELD(mc_host_output_api_v1, OUTPUT_API, read, READ);
 CHECK_FIELD(mc_host_output_api_v1, OUTPUT_API, ack, ACK);
 CHECK_FIELD(mc_host_output_api_v1, OUTPUT_API, release, RELEASE);
 CHECK_FIELD(mc_host_output_api_v1, OUTPUT_API, stats, STATS);
+CHECK_LAYOUT(mc_host_snapshot_begin_options_v1, SNAPSHOT_BEGIN_OPTIONS);
+CHECK_FIELD(mc_host_snapshot_begin_options_v1, SNAPSHOT_BEGIN_OPTIONS, header, HEADER);
+CHECK_FIELD(mc_host_snapshot_begin_options_v1, SNAPSHOT_BEGIN_OPTIONS, mode, MODE);
+CHECK_FIELD(mc_host_snapshot_begin_options_v1, SNAPSHOT_BEGIN_OPTIONS, reserved, RESERVED);
+CHECK_FIELD(mc_host_snapshot_begin_options_v1, SNAPSHOT_BEGIN_OPTIONS, baseline, BASELINE);
+
+CHECK_LAYOUT(mc_host_snapshot_info_v1, SNAPSHOT_INFO);
+CHECK_FIELD(mc_host_snapshot_info_v1, SNAPSHOT_INFO, header, HEADER);
+CHECK_FIELD(mc_host_snapshot_info_v1, SNAPSHOT_INFO, kind, KIND);
+CHECK_FIELD(mc_host_snapshot_info_v1, SNAPSHOT_INFO, mcsn_version, MCSN_VERSION);
+CHECK_FIELD(mc_host_snapshot_info_v1, SNAPSHOT_INFO, kernel_digest, KERNEL_DIGEST);
+CHECK_FIELD(mc_host_snapshot_info_v1, SNAPSHOT_INFO, baseline_id, BASELINE_ID);
+CHECK_FIELD(mc_host_snapshot_info_v1, SNAPSHOT_INFO, content_digest, CONTENT_DIGEST);
+CHECK_FIELD(mc_host_snapshot_info_v1, SNAPSHOT_INFO, length, LENGTH);
+CHECK_FIELD(mc_host_snapshot_info_v1, SNAPSHOT_INFO, memory_len, MEMORY_LEN);
+
+CHECK_LAYOUT(mc_host_snapshot_api_v1, SNAPSHOT_API);
+CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, header, HEADER);
+CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, baseline_import, BASELINE_IMPORT);
+CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, baseline_close, BASELINE_CLOSE);
+CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, begin, BEGIN);
+CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, read, READ);
+CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, finish, FINISH);
+CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, cancel, CANCEL);
+CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, inspect, INSPECT);
+
 
 
 

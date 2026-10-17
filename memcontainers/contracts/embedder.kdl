@@ -141,6 +141,32 @@ layout "OUTPUT_API" size=48 align=8 {
   offset "release" value=32
   offset "stats" value=40
 }
+layout "SNAPSHOT_BEGIN_OPTIONS" size=24 align=8 {
+  offset "header" value=0
+  offset "mode" value=8
+  offset "reserved" value=12
+  offset "baseline" value=16
+}
+layout "SNAPSHOT_INFO" size=128 align=8 {
+  offset "header" value=0
+  offset "kind" value=8
+  offset "mcsn_version" value=12
+  offset "kernel_digest" value=16
+  offset "baseline_id" value=48
+  offset "content_digest" value=80
+  offset "length" value=112
+  offset "memory_len" value=120
+}
+layout "SNAPSHOT_API" size=64 align=8 {
+  offset "header" value=0
+  offset "baseline_import" value=8
+  offset "baseline_close" value=16
+  offset "begin" value=24
+  offset "read" value=32
+  offset "finish" value=40
+  offset "cancel" value=48
+  offset "inspect" value=56
+}
 
 constant "MC_HOST_OK" value=0 type="u32"
 constant "MC_HOST_BUFFER_TOO_SMALL" value=1 type="u32"
@@ -196,6 +222,8 @@ constant "MC_HOST_OUTPUT_DATA" value=1 type="u32"
 constant "MC_HOST_OUTPUT_GAP" value=2 type="u32"
 constant "MC_HOST_OUTPUT_ABOVE_HIGH_WATER" value=1 type="u32"
 constant "MC_HOST_OUTPUT_POISONED" value=2 type="u32"
+constant "MC_HOST_SNAPSHOT_FULL" value=1 type="u32"
+constant "MC_HOST_SNAPSHOT_INCREMENTAL" value=2 type="u32"
 
 constant "MC_HOST_OP_EXEC_SHELL" value=1 type="u32"
 constant "MC_HOST_OP_EXEC_DIRECT" value=2 type="u32"

@@ -5,13 +5,18 @@ use std::sync::{Arc, Mutex};
 
 use embedder_rust as contract;
 use host::output_queue::{OutputQueue, OutputRecord, OutputStats, LOG, STDERR, STDOUT};
-use host::{KernelCacheLimit, KernelHost, KernelHostBuilder, KernelModuleCache, TickState};
+use host::{
+    inspect_snapshot_bytes, KernelCacheLimit, KernelHost, KernelHostBuilder, KernelModuleCache,
+    SnapshotDescription, TickState,
+};
 
 use super::{pack_kind, unpack, MAX_GENERATION, MAX_INDEX};
 
 pub const KERNEL_KIND: u8 = 2;
 pub const VM_KIND: u8 = 3;
 pub const OUTPUT_KIND: u8 = 4;
+pub const BASELINE_KIND: u8 = 5;
+pub const SNAPSHOT_KIND: u8 = 6;
 const MAX_KERNELS: usize = 64;
 const MAX_KERNEL_BYTES: usize = 256 * 1024 * 1024;
 const MAX_VMS: usize = 16;
@@ -20,6 +25,8 @@ const MAX_DRIVE_TICKS: u32 = 1_000;
 const OUTPUT_MAX_BYTES: usize = 4 * 1024 * 1024;
 const OUTPUT_HIGH_WATER: usize = 3 * 1024 * 1024;
 const OUTPUT_MAX_RECORDS: usize = 4_096;
+const SNAPSHOT_MAX_BYTES: usize = 512 * 1024 * 1024;
+const SNAPSHOT_TOTAL_BYTES: usize = 1024 * 1024 * 1024;
 
 struct Slot<T> {
     generation: u32,
@@ -121,7 +128,7 @@ impl<T> HandleTable<T> {
 struct KernelRecord {
     bytes: Arc<[u8]>,
     digest: [u8; 32],
-    vm_pins: usize,
+    pins: usize,
 }
 
 pub struct VmRecord {
@@ -132,6 +139,12 @@ pub struct VmRecord {
     // The Rust host memoizes baseline integrity by buffer address. Keep the
     // immutable full MCSN bytes at that address until this VM is closed.
     _snapshot_anchor: Option<Arc<[u8]>>,
+}
+
+pub struct SnapshotRecord {
+    pub bytes: Vec<u8>,
+    pub description: SnapshotDescription,
+    kernel_handle: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -167,6 +180,50 @@ pub struct VmConfig {
 }
 
 impl VmRecord {
+    pub fn snapshot(&self, baseline: Option<&[u8]>) -> Result<Vec<u8>, u32> {
+        let mut host = self.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
+        let host = host.as_mut().ok_or(contract::MC_HOST_INVALID_STATE)?;
+        let observed = self
+            .observed
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if observed.closing {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        if observed.poisoned {
+            return Err(contract::MC_HOST_POISONED);
+        }
+        drop(observed);
+        if host
+            .inflight_egress()
+            .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?
+            != 0
+            || host
+                .pending_commits()
+                .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?
+                != 0
+        {
+            return Err(contract::MC_HOST_NOT_QUIESCENT);
+        }
+        if host.snapshot_len() > SNAPSHOT_MAX_BYTES {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        let bytes = match baseline {
+            Some(base) => host
+                .snapshot_incremental(base)
+                .map_err(|_| contract::MC_HOST_SNAPSHOT_ERROR)?,
+            None => {
+                let mut bytes = vec![0; host.snapshot_len()];
+                host.snapshot_into(&mut bytes)
+                    .map_err(|_| contract::MC_HOST_SNAPSHOT_ERROR)?;
+                bytes
+            }
+        };
+        if bytes.len() > SNAPSHOT_MAX_BYTES {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        Ok(bytes)
+    }
     fn report(&self, host: &mut KernelHost) -> Result<VmReport, u32> {
         let observed = *self
             .observed
@@ -310,6 +367,9 @@ struct Resources {
     kernel_bytes: usize,
     vms: HandleTable<Arc<VmRecord>>,
     outputs: HandleTable<OutputLease>,
+    baselines: HandleTable<Arc<SnapshotRecord>>,
+    snapshots: HandleTable<Arc<SnapshotRecord>>,
+    snapshot_bytes: usize,
 }
 
 struct OutputLease {
@@ -333,13 +393,20 @@ impl RuntimeState {
                 kernel_bytes: 0,
                 vms: HandleTable::new(VM_KIND),
                 outputs: HandleTable::new(OUTPUT_KIND),
+                baselines: HandleTable::new(BASELINE_KIND),
+                snapshots: HandleTable::new(SNAPSHOT_KIND),
+                snapshot_bytes: 0,
             }),
         }
     }
 
     pub fn is_empty(&self) -> bool {
         self.resources.lock().is_ok_and(|resources| {
-            resources.kernels.live == 0 && resources.vms.live == 0 && resources.outputs.live == 0
+            resources.kernels.live == 0
+                && resources.vms.live == 0
+                && resources.outputs.live == 0
+                && resources.baselines.live == 0
+                && resources.snapshots.live == 0
         })
     }
 
@@ -388,7 +455,7 @@ impl RuntimeState {
         let record = KernelRecord {
             bytes: Arc::from(wasm),
             digest,
-            vm_pins: 0,
+            pins: 0,
         };
         let handle = resources.kernels.insert(self.namespace, record)?;
         resources.kernel_bytes += wasm.len();
@@ -400,7 +467,7 @@ impl RuntimeState {
             .resources
             .lock()
             .map_err(|_| contract::MC_HOST_INTERNAL)?;
-        if resources.kernels.get(self.namespace, handle)?.vm_pins != 0 {
+        if resources.kernels.get(self.namespace, handle)?.pins != 0 {
             return Err(contract::MC_HOST_BUSY);
         }
         let record = resources.kernels.remove(self.namespace, handle)?;
@@ -414,8 +481,8 @@ impl RuntimeState {
             .lock()
             .map_err(|_| contract::MC_HOST_INTERNAL)?;
         let record = resources.kernels.get_mut(self.namespace, handle)?;
-        record.vm_pins = record
-            .vm_pins
+        record.pins = record
+            .pins
             .checked_sub(1)
             .ok_or(contract::MC_HOST_INTERNAL)?;
         Ok(())
@@ -442,8 +509,8 @@ impl RuntimeState {
                 return Err(contract::MC_HOST_RESOURCE_LIMIT);
             }
             let record = resources.kernels.get_mut(self.namespace, kernel_handle)?;
-            record.vm_pins = record
-                .vm_pins
+            record.pins = record
+                .pins
                 .checked_add(1)
                 .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
             Arc::clone(&record.bytes)
@@ -535,8 +602,8 @@ impl RuntimeState {
                 return Err(contract::MC_HOST_RESOURCE_LIMIT);
             }
             let record = resources.kernels.get_mut(self.namespace, kernel_handle)?;
-            record.vm_pins = record
-                .vm_pins
+            record.pins = record
+                .pins
                 .checked_add(1)
                 .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
             Arc::clone(&record.bytes)
@@ -592,6 +659,142 @@ impl RuntimeState {
             self.unpin_kernel(kernel_handle)?;
         }
         inserted
+    }
+
+    pub fn import_baseline(
+        &self,
+        kernel_handle: u64,
+        bytes: &[u8],
+    ) -> Result<(u64, SnapshotDescription), u32> {
+        if bytes.is_empty() || bytes.len() > SNAPSHOT_MAX_BYTES {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        let description =
+            inspect_snapshot_bytes(bytes, None).map_err(|_| contract::MC_HOST_SNAPSHOT_ERROR)?;
+        if description.incremental {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if resources
+            .snapshot_bytes
+            .checked_add(bytes.len())
+            .is_none_or(|total| total > SNAPSHOT_TOTAL_BYTES)
+        {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        let kernel = resources.kernels.get_mut(self.namespace, kernel_handle)?;
+        if kernel.digest != description.kernel_digest {
+            return Err(contract::MC_HOST_SNAPSHOT_ERROR);
+        }
+        kernel.pins = kernel
+            .pins
+            .checked_add(1)
+            .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
+        let record = Arc::new(SnapshotRecord {
+            bytes: bytes.to_vec(),
+            description,
+            kernel_handle,
+        });
+        match resources.baselines.insert(self.namespace, record) {
+            Ok(handle) => {
+                resources.snapshot_bytes += bytes.len();
+                Ok((handle, description))
+            }
+            Err(error) => {
+                resources
+                    .kernels
+                    .get_mut(self.namespace, kernel_handle)?
+                    .pins -= 1;
+                Err(error)
+            }
+        }
+    }
+
+    pub fn baseline(&self, handle: u64) -> Result<Arc<SnapshotRecord>, u32> {
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        Ok(Arc::clone(resources.baselines.get(self.namespace, handle)?))
+    }
+
+    pub fn close_baseline(&self, handle: u64) -> Result<(), u32> {
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let record = resources.baselines.remove(self.namespace, handle)?;
+        resources.snapshot_bytes -= record.bytes.len();
+        resources
+            .kernels
+            .get_mut(self.namespace, record.kernel_handle)?
+            .pins -= 1;
+        Ok(())
+    }
+
+    pub fn begin_snapshot(
+        &self,
+        vm_handle: u64,
+        baseline_handle: Option<u64>,
+    ) -> Result<(u64, SnapshotDescription), u32> {
+        let vm = self.vm(vm_handle)?;
+        let baseline = match baseline_handle {
+            Some(handle) => {
+                let record = self.baseline(handle)?;
+                if record.kernel_handle != vm.kernel_handle {
+                    return Err(contract::MC_HOST_SNAPSHOT_ERROR);
+                }
+                Some(record)
+            }
+            None => None,
+        };
+        let bytes = vm.snapshot(baseline.as_ref().map(|record| record.bytes.as_slice()))?;
+        let description = inspect_snapshot_bytes(
+            &bytes,
+            baseline.as_ref().map(|record| record.bytes.as_slice()),
+        )
+        .map_err(|_| contract::MC_HOST_SNAPSHOT_ERROR)?;
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if resources
+            .snapshot_bytes
+            .checked_add(bytes.len())
+            .is_none_or(|total| total > SNAPSHOT_TOTAL_BYTES)
+        {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        let length = bytes.len();
+        let record = Arc::new(SnapshotRecord {
+            bytes,
+            description,
+            kernel_handle: vm.kernel_handle,
+        });
+        let handle = resources.snapshots.insert(self.namespace, record)?;
+        resources.snapshot_bytes += length;
+        Ok((handle, description))
+    }
+
+    pub fn snapshot_record(&self, handle: u64) -> Result<Arc<SnapshotRecord>, u32> {
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        Ok(Arc::clone(resources.snapshots.get(self.namespace, handle)?))
+    }
+
+    pub fn close_snapshot(&self, handle: u64) -> Result<(), u32> {
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let record = resources.snapshots.remove(self.namespace, handle)?;
+        resources.snapshot_bytes -= record.bytes.len();
+        Ok(())
     }
 
     pub fn vm(&self, handle: u64) -> Result<Arc<VmRecord>, u32> {
@@ -700,8 +903,8 @@ impl RuntimeState {
         let kernel = resources
             .kernels
             .get_mut(self.namespace, vm.kernel_handle)?;
-        kernel.vm_pins = kernel
-            .vm_pins
+        kernel.pins = kernel
+            .pins
             .checked_sub(1)
             .ok_or(contract::MC_HOST_INTERNAL)?;
         drop(host_guard);

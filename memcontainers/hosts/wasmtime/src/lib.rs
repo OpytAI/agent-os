@@ -993,6 +993,47 @@ fn validate_snapshot<'a>(
     })
 }
 
+/// Validated metadata for a portable MCSN value. The baseline ID is the
+/// memory-root identity used by incremental snapshots; the content digest is
+/// the SHA-256 of these exact serialized bytes.
+#[derive(Clone, Copy)]
+pub struct SnapshotDescription {
+    pub incremental: bool,
+    pub kernel_digest: [u8; 32],
+    pub baseline_id: [u8; 32],
+    pub content_digest: [u8; 32],
+    pub length: usize,
+    pub memory_len: usize,
+}
+
+pub fn inspect_snapshot_bytes(snapshot: &[u8], base: Option<&[u8]>) -> Result<SnapshotDescription> {
+    let header = parse_snapshot(snapshot).map_err(|e| anyhow!("invalid snapshot: {e}"))?;
+    let validated = validate_snapshot(snapshot, base, &header.kernel_digest)?;
+    let view = validated.view;
+    if view.kind == SnapshotKind::Full {
+        if IntegrityTree::from_memory(view.pages).root() != view.memory_root {
+            return Err(anyhow!("invalid snapshot: memory_root_mismatch"));
+        }
+    } else {
+        // The incremental root covers the reconstructed image, not its changed
+        // page payload. Reuse restore's verifier with an exact-size temporary.
+        let mut memory = vec![0; view.memory_len];
+        apply_snapshot(validated, &mut memory)?;
+    }
+    Ok(SnapshotDescription {
+        incremental: view.kind == SnapshotKind::Incremental,
+        kernel_digest: view.kernel_digest,
+        baseline_id: if view.kind == SnapshotKind::Full {
+            baseline_id(&view.kernel_digest, &view.memory_root, view.memory_len)
+        } else {
+            view.base_id
+        },
+        content_digest: sha256_digest(snapshot),
+        length: snapshot.len(),
+        memory_len: view.memory_len,
+    })
+}
+
 /// Reconstruct directly into the already-sized wasm memory. This keeps restore to one memory image
 /// instead of allocating an attacker-sized intermediate buffer next to the module's memory.
 fn apply_snapshot(validated: ValidatedSnapshot<'_>, memory: &mut [u8]) -> Result<IntegrityTree> {
