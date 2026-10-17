@@ -85,17 +85,13 @@ static int contains_bytes(const uint8_t *haystack, size_t length,
   return 0;
 }
 
-static void run_control_command(const mc_host_vm_api_v1 *vm_api,
-                                const mc_host_operation_api_v1 *op_api,
-                                const mc_host_snapshot_api_v1 *snap_api,
-                                mc_host_runtime_t runtime, mc_host_handle_t vm) {
-  const char command[] = "git --version";
+static wire shell_request(const char *command) {
   wire request = {0}, envelope = {0};
   put_u16(&request, 1);  /* control.kdl ExecRequest v2 */
   put_u8(&request, 2);
   put_u32(&request, 1);  /* EXEC_MODE_SHELL */
   put_u8(&request, 1);
-  put_bytes(&request, (const uint8_t *)command, sizeof(command) - 1);
+  put_bytes(&request, (const uint8_t *)command, strlen(command));
   put_u32(&request, 0); /* argv */
   put_u8(&request, 0);  /* cwd */
   put_u32(&request, 0); /* env */
@@ -104,6 +100,14 @@ static void run_control_command(const mc_host_vm_api_v1 *vm_api,
   put_u8(&envelope, 1);
   put_u32(&envelope, MC_HOST_OP_EXEC_SHELL);
   put_bytes(&envelope, request.bytes, request.length);
+  return envelope;
+}
+
+static void run_control_command(const mc_host_vm_api_v1 *vm_api,
+                                const mc_host_operation_api_v1 *op_api,
+                                const mc_host_snapshot_api_v1 *snap_api,
+                                mc_host_runtime_t runtime, mc_host_handle_t vm) {
+  wire envelope = shell_request("git --version");
 
   mc_host_handle_t operation = 0;
   check(op_api->start(runtime, vm,
@@ -165,6 +169,27 @@ static void run_control_command(const mc_host_vm_api_v1 *vm_api,
   check(op_api->close(runtime, operation, NULL), "close operation");
   need(op_api->poll(runtime, operation, &status, NULL) == MC_HOST_STALE_HANDLE,
        "operation handle retires");
+}
+
+static void cancel_vm_with_operation(const mc_host_vm_api_v1 *vm_api,
+                                     const mc_host_operation_api_v1 *op_api,
+                                     mc_host_runtime_t runtime, mc_host_handle_t vm) {
+  wire request = shell_request("git --version");
+  mc_host_handle_t operation = 0;
+  check(op_api->start(runtime, vm,
+                      (mc_host_bytes_v1){request.bytes, request.length},
+                      &operation, NULL), "start operation before VM cancellation");
+  need(vm_api->vm_cancel_and_close(runtime, vm, NULL) == MC_HOST_BUSY,
+       "cancelled VM waits for operation close");
+  mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
+  check(op_api->poll(runtime, operation, &status, NULL), "observe cancelled operation");
+  need(status.state == MC_HOST_OP_CANCELLED && status.error == MC_HOST_CANCELLED,
+       "operation reports cancellation");
+  mc_host_buffer_v1 result = {0};
+  need(op_api->result(runtime, operation, &result, NULL) == MC_HOST_CANCELLED,
+       "cancelled operation has no result");
+  check(op_api->close(runtime, operation, NULL), "close cancelled operation");
+  check(vm_api->vm_close(runtime, vm, NULL), "finish closing cancelled VM");
 }
 
 static void drain_output(const mc_host_output_api_v1 *output_api,
@@ -343,7 +368,7 @@ int main(int argc, char **argv) {
         "restored terminal input");
   drive_to_prompt(&vm_api, &output_api, runtime, restored, "agentos-git");
 
-  check(vm_api.vm_close(runtime, restored, NULL), "close restored VM");
+  cancel_vm_with_operation(&vm_api, &op_api, runtime, restored);
   check(vm_api.vm_close(runtime, vm, NULL), "close source VM");
   check(snap_api.baseline_close(runtime, baseline, NULL), "close baseline");
   check(vm_api.kernel_close(runtime, kernel_handle, NULL), "close kernel");
