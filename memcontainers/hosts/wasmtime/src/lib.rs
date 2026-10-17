@@ -1137,6 +1137,24 @@ pub struct ExecOptions {
     pub stdin: Option<Vec<u8>>,
 }
 
+#[derive(Clone)]
+pub enum ControlFsAction {
+    Read(String),
+    Readlink(String),
+    Readdir(String),
+    Stat(String),
+    Write { path: String, data: Vec<u8> },
+    Mkdir(String),
+    Unlink(String),
+    Chmod { path: String, mode: u32 },
+    Symlink { target: String, link: String },
+}
+
+pub enum ControlAttempt {
+    Pending,
+    Complete { status: i32, payload: Vec<u8> },
+}
+
 /// Result of a host-control resident-service call.
 #[derive(Debug, Clone)]
 pub struct ServiceCallResult {
@@ -1806,6 +1824,144 @@ impl KernelHost {
         Err(anyhow!(
             "control-channel op stuck on EAGAIN after {CTL_RETRY_TICKS} ticks (a host mount driver may be hung)"
         ))
+    }
+
+    /// Execute exactly one filesystem control attempt. Native embedders retry a
+    /// pending request after each explicit tick; this method never ticks.
+    pub fn control_fs_attempt(&mut self, action: &ControlFsAction) -> Result<ControlAttempt> {
+        let (result, carries_bytes) = match action {
+            ControlFsAction::Read(path) => {
+                let f = self.exports.require_ctl_read()?;
+                self.ctl_put(path.as_bytes())?;
+                (
+                    wt(
+                        f.call(&mut self.store, (0, path.len() as i32)),
+                        "mc_ctl_read",
+                    )?,
+                    true,
+                )
+            }
+            ControlFsAction::Readlink(path) => {
+                let f = self.exports.require_ctl_readlink()?;
+                self.ctl_put(path.as_bytes())?;
+                (
+                    wt(
+                        f.call(&mut self.store, (0, path.len() as i32)),
+                        "mc_ctl_readlink",
+                    )?,
+                    true,
+                )
+            }
+            ControlFsAction::Readdir(path) => {
+                let f = self.exports.require_ctl_readdir()?;
+                self.ctl_put(path.as_bytes())?;
+                (
+                    wt(
+                        f.call(&mut self.store, (0, path.len() as i32)),
+                        "mc_ctl_readdir",
+                    )?,
+                    true,
+                )
+            }
+            ControlFsAction::Stat(path) => {
+                let f = self.exports.require_ctl_stat()?;
+                self.ctl_put(path.as_bytes())?;
+                (
+                    wt(
+                        f.call(&mut self.store, (0, path.len() as i32)),
+                        "mc_ctl_stat",
+                    )?,
+                    true,
+                )
+            }
+            ControlFsAction::Write { path, data } => {
+                let f = self.exports.require_ctl_write()?;
+                let mut request = Vec::with_capacity(path.len() + data.len());
+                request.extend_from_slice(path.as_bytes());
+                request.extend_from_slice(data);
+                self.ctl_put(&request)?;
+                (
+                    wt(
+                        f.call(
+                            &mut self.store,
+                            (0, path.len() as i32, path.len() as i32, data.len() as i32),
+                        ),
+                        "mc_ctl_write",
+                    )?,
+                    false,
+                )
+            }
+            ControlFsAction::Mkdir(path) => {
+                let f = self.exports.require_ctl_mkdir()?;
+                self.ctl_put(path.as_bytes())?;
+                (
+                    wt(
+                        f.call(&mut self.store, (0, path.len() as i32)),
+                        "mc_ctl_mkdir",
+                    )?,
+                    false,
+                )
+            }
+            ControlFsAction::Unlink(path) => {
+                let f = self.exports.require_ctl_unlink()?;
+                self.ctl_put(path.as_bytes())?;
+                (
+                    wt(
+                        f.call(&mut self.store, (0, path.len() as i32)),
+                        "mc_ctl_unlink",
+                    )?,
+                    false,
+                )
+            }
+            ControlFsAction::Chmod { path, mode } => {
+                let f = self.exports.require_ctl_chmod()?;
+                self.ctl_put(path.as_bytes())?;
+                (
+                    wt(
+                        f.call(&mut self.store, (0, path.len() as i32, *mode as i32)),
+                        "mc_ctl_chmod",
+                    )?,
+                    false,
+                )
+            }
+            ControlFsAction::Symlink { target, link } => {
+                let f = self.exports.require_ctl_symlink()?;
+                let mut request = Vec::with_capacity(target.len() + link.len());
+                request.extend_from_slice(target.as_bytes());
+                request.extend_from_slice(link.as_bytes());
+                self.ctl_put(&request)?;
+                (
+                    wt(
+                        f.call(
+                            &mut self.store,
+                            (
+                                0,
+                                target.len() as i32,
+                                target.len() as i32,
+                                link.len() as i32,
+                            ),
+                        ),
+                        "mc_ctl_symlink",
+                    )?,
+                    false,
+                )
+            }
+        };
+        if result == -EAGAIN {
+            return Ok(ControlAttempt::Pending);
+        }
+        if result < 0 {
+            return Ok(ControlAttempt::Complete {
+                status: result,
+                payload: Vec::new(),
+            });
+        }
+        let payload = if carries_bytes {
+            self.ctl_get(result as usize)?
+        } else {
+            Vec::new()
+        };
+        Ok(ControlAttempt::Complete { status: 0, payload })
     }
 
     /// Read a file in full through the control channel.

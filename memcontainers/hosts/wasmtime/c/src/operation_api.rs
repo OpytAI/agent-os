@@ -4,7 +4,8 @@ use std::mem::{align_of, size_of};
 
 use constants_rust::{EXEC_MODE_DIRECT, EXEC_MODE_SHELL};
 use ctl_rust::ExecRequest;
-use embedder_rust::{self as contract, OperationRequest};
+use embedder_rust::{self as contract, FilesystemRequest, OperationRequest};
+use host::ControlFsAction;
 
 use super::vm_api::{bytes, copy_output, output_size};
 use super::*;
@@ -40,6 +41,49 @@ fn valid_exec_request(kind: u32, request: &ExecRequest) -> bool {
             .all(|(key, value)| !key.contains('\0') && !value.contains('\0'))
 }
 
+fn filesystem_action(kind: u32, payload: &[u8]) -> Result<ControlFsAction, ResultCode> {
+    let request =
+        FilesystemRequest::decode(payload).map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+    let FilesystemRequest {
+        path,
+        data,
+        target,
+        mode,
+    } = request;
+    if path.is_empty() || path.contains('\0') || target.as_ref().is_some_and(|s| s.contains('\0')) {
+        return Err(contract::MC_HOST_INVALID_ARGUMENT);
+    }
+    let no_extra = data.is_none() && target.is_none() && mode.is_none();
+    let action = match kind {
+        contract::MC_HOST_OP_FS_READ if no_extra => ControlFsAction::Read(path),
+        contract::MC_HOST_OP_FS_READLINK if no_extra => ControlFsAction::Readlink(path),
+        contract::MC_HOST_OP_FS_READDIR if no_extra => ControlFsAction::Readdir(path),
+        contract::MC_HOST_OP_FS_STAT if no_extra => ControlFsAction::Stat(path),
+        contract::MC_HOST_OP_FS_MKDIR if no_extra => ControlFsAction::Mkdir(path),
+        contract::MC_HOST_OP_FS_UNLINK if no_extra => ControlFsAction::Unlink(path),
+        contract::MC_HOST_OP_FS_WRITE if target.is_none() && mode.is_none() => {
+            ControlFsAction::Write {
+                path,
+                data: data.ok_or(contract::MC_HOST_INVALID_ARGUMENT)?,
+            }
+        }
+        contract::MC_HOST_OP_FS_CHMOD if data.is_none() && target.is_none() => {
+            ControlFsAction::Chmod {
+                path,
+                mode: mode.ok_or(contract::MC_HOST_INVALID_ARGUMENT)?,
+            }
+        }
+        contract::MC_HOST_OP_FS_SYMLINK if data.is_none() && mode.is_none() => {
+            let target = target
+                .filter(|value| !value.is_empty())
+                .ok_or(contract::MC_HOST_INVALID_ARGUMENT)?;
+            ControlFsAction::Symlink { target, link: path }
+        }
+        _ => return Err(contract::MC_HOST_INVALID_ARGUMENT),
+    };
+    Ok(action)
+}
+
 pub unsafe extern "C" fn start(
     runtime: u64,
     vm: u64,
@@ -62,20 +106,33 @@ pub unsafe extern "C" fn start(
         }
         let envelope =
             OperationRequest::decode(frame).map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
-        if envelope.kind != contract::MC_HOST_OP_EXEC_SHELL
-            && envelope.kind != contract::MC_HOST_OP_EXEC_DIRECT
-        {
-            return Err(contract::MC_HOST_UNSUPPORTED);
-        }
-        let request = ExecRequest::decode(&envelope.payload)
-            .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
-        if !valid_exec_request(envelope.kind, &request) {
-            return Err(contract::MC_HOST_INVALID_ARGUMENT);
-        }
-        let operation =
-            ActiveRuntime::acquire(runtime)?
-                .state
-                .start_exec(vm, envelope.kind, request)?;
+        let operation = match envelope.kind {
+            contract::MC_HOST_OP_EXEC_SHELL | contract::MC_HOST_OP_EXEC_DIRECT => {
+                let request = ExecRequest::decode(&envelope.payload)
+                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+                if !valid_exec_request(envelope.kind, &request) {
+                    return Err(contract::MC_HOST_INVALID_ARGUMENT);
+                }
+                ActiveRuntime::acquire(runtime)?
+                    .state
+                    .start_exec(vm, envelope.kind, request)?
+            }
+            contract::MC_HOST_OP_FS_READ
+            | contract::MC_HOST_OP_FS_WRITE
+            | contract::MC_HOST_OP_FS_READDIR
+            | contract::MC_HOST_OP_FS_STAT
+            | contract::MC_HOST_OP_FS_READLINK
+            | contract::MC_HOST_OP_FS_MKDIR
+            | contract::MC_HOST_OP_FS_UNLINK
+            | contract::MC_HOST_OP_FS_CHMOD
+            | contract::MC_HOST_OP_FS_SYMLINK => {
+                let action = filesystem_action(envelope.kind, &envelope.payload)?;
+                ActiveRuntime::acquire(runtime)?
+                    .state
+                    .start_fs(vm, envelope.kind, action)?
+            }
+            _ => return Err(contract::MC_HOST_UNSUPPORTED),
+        };
         unsafe { *out_operation = operation };
         Ok(())
     })

@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex, Weak};
 use embedder_rust as contract;
 use host::output_queue::{OutputQueue, OutputRecord, OutputStats, LOG, STDERR, STDOUT};
 use host::{
-    inspect_snapshot_bytes, ExecOptions, KernelCacheLimit, KernelHost, KernelHostBuilder,
-    KernelModuleCache, SnapshotDescription, TickState,
+    inspect_snapshot_bytes, ControlFsAction, ExecOptions, KernelCacheLimit, KernelHost,
+    KernelHostBuilder, KernelModuleCache, SnapshotDescription, TickState,
 };
 
 use super::operations::OperationRecord;
@@ -408,13 +408,26 @@ impl VmRecord {
                 }
             };
             ticks += 1;
-            for operation in self.live_operations()? {
+            let operations = self.live_operations()?;
+            for operation in &operations {
                 if operation.poll_exec(host).is_err() {
                     self.observed
                         .lock()
                         .map_err(|_| contract::MC_HOST_INTERNAL)?
                         .poisoned = true;
                     return Err(contract::MC_HOST_KERNEL_ERROR);
+                }
+            }
+            for operation in operations {
+                if operation.fs_waiting()? {
+                    if operation.advance_fs(host).is_err() {
+                        self.observed
+                            .lock()
+                            .map_err(|_| contract::MC_HOST_INTERNAL)?
+                            .poisoned = true;
+                        return Err(contract::MC_HOST_KERNEL_ERROR);
+                    }
+                    break;
                 }
             }
             let mut observed = self
@@ -1007,6 +1020,40 @@ impl RuntimeState {
                 Err(contract::MC_HOST_KERNEL_ERROR)
             }
         }
+    }
+
+    pub fn start_fs(&self, vm_handle: u64, kind: u32, action: ControlFsAction) -> Result<u64, u32> {
+        let vm = self.vm(vm_handle)?;
+        let host = vm.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
+        if host.is_none() {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        let observed = vm.observed.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if observed.closing || observed.exit_code.is_some() {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        if observed.poisoned {
+            return Err(contract::MC_HOST_POISONED);
+        }
+        drop(observed);
+        if vm.live_operations()?.len() >= MAX_OPERATIONS_PER_VM {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        let record = Arc::new(OperationRecord::new_fs(vm_handle, kind, action));
+        let handle = {
+            let mut resources = self
+                .resources
+                .lock()
+                .map_err(|_| contract::MC_HOST_INTERNAL)?;
+            resources
+                .operations
+                .insert(self.namespace, Arc::clone(&record))?
+        };
+        vm.operations
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .push(Arc::downgrade(&record));
+        Ok(handle)
     }
 
     fn remove_operation(&self, handle: u64) -> Result<(), u32> {

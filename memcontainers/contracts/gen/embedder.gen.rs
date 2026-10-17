@@ -35,6 +35,7 @@ pub const MC_HOST_FEATURE_VM_BASIC: u64 = 1;
 pub const MC_HOST_FEATURE_OUTPUT: u64 = 2;
 pub const MC_HOST_FEATURE_SNAPSHOT: u64 = 4;
 pub const MC_HOST_FEATURE_EXEC_OPERATION: u64 = 8;
+pub const MC_HOST_FEATURE_FS_OPERATION: u64 = 16;
 pub const MC_HOST_TICK_WAITING: u32 = 0;
 pub const MC_HOST_TICK_RUNNABLE: u32 = 1;
 pub const MC_HOST_TICK_EXITED: u32 = 2;
@@ -407,6 +408,77 @@ impl AttachmentManifest {
         if off != bytes.len() { return Err(WireError::TrailingBytes); }
         Ok(Self {
             entries,
+        })
+    }
+}
+
+/// One native filesystem control attempt. The operation kind selects and validates the required fields.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FilesystemRequest {
+    pub path: String,
+    pub data: Option<Vec<u8>>,
+    pub target: Option<String>,
+    pub mode: Option<u32>,
+}
+
+pub const FILESYSTEM_REQUEST_MSG_ID: u16 = 27;
+pub const FILESYSTEM_REQUEST_VERSION: u8 = 1;
+impl FilesystemRequest {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, FILESYSTEM_REQUEST_MSG_ID);
+        out.push(FILESYSTEM_REQUEST_VERSION);
+        ctl_put_str(&mut out, &self.path);
+        match &self.data {
+            Some(v) => {
+                out.push(1);
+        ctl_put_bytes(&mut out, v);
+            }
+            None => out.push(0),
+        }
+        match &self.target {
+            Some(v) => {
+                out.push(1);
+        ctl_put_str(&mut out, v);
+            }
+            None => out.push(0),
+        }
+        match &self.mode {
+            Some(v) => {
+                out.push(1);
+        ctl_put_u32(&mut out, *v);
+            }
+            None => out.push(0),
+        }
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != FILESYSTEM_REQUEST_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != FILESYSTEM_REQUEST_VERSION { return Err(WireError::UnsupportedVersion); }
+        let path = ctl_read_str(bytes, &mut off)?;
+        let data = match ctl_read_u8(bytes, &mut off)? {
+            0 => None,
+            1 => Some(ctl_read_bytes(bytes, &mut off)?),
+            _ => return Err(WireError::InvalidPresence),
+        };
+        let target = match ctl_read_u8(bytes, &mut off)? {
+            0 => None,
+            1 => Some(ctl_read_str(bytes, &mut off)?),
+            _ => return Err(WireError::InvalidPresence),
+        };
+        let mode = match ctl_read_u8(bytes, &mut off)? {
+            0 => None,
+            1 => Some(ctl_read_u32(bytes, &mut off)?),
+            _ => return Err(WireError::InvalidPresence),
+        };
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            path,
+            data,
+            target,
+            mode,
         })
     }
 }

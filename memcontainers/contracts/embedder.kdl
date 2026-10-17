@@ -219,6 +219,7 @@ constant "MC_HOST_FEATURE_VM_BASIC" value=1 type="u64"
 constant "MC_HOST_FEATURE_OUTPUT" value=2 type="u64"
 constant "MC_HOST_FEATURE_SNAPSHOT" value=4 type="u64"
 constant "MC_HOST_FEATURE_EXEC_OPERATION" value=8 type="u64"
+constant "MC_HOST_FEATURE_FS_OPERATION" value=16 type="u64"
 
 constant "MC_HOST_TICK_WAITING" value=0 type="u32"
 constant "MC_HOST_TICK_RUNNABLE" value=1 type="u32"
@@ -336,4 +337,12 @@ message "AttachmentManifestEntry" id=25 version=1 {
 message "AttachmentManifest" id=26 version=1 {
   field "entries" type="list<AttachmentManifestEntry>"
   doc "Canonical non-secret attachment manifest. Credentials and callback addresses are absent."
+}
+
+message "FilesystemRequest" id=27 version=1 {
+  field "path" type="str"
+  field "data" type="bytes" opt=1
+  field "target" type="str" opt=1
+  field "mode" type="u32" opt=1
+  doc "One native filesystem control attempt. The operation kind selects and validates the required fields."
 }

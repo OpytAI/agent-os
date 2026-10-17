@@ -103,6 +103,89 @@ static wire shell_request(const char *command) {
   return envelope;
 }
 
+static wire filesystem_request(uint32_t kind, const char *path,
+                               const uint8_t *data, size_t data_length) {
+  wire request = {0}, envelope = {0};
+  put_u16(&request, 27); /* embedder.kdl FilesystemRequest v1 */
+  put_u8(&request, 1);
+  put_bytes(&request, (const uint8_t *)path, strlen(path));
+  put_u8(&request, data != NULL);
+  if (data != NULL) put_bytes(&request, data, data_length);
+  put_u8(&request, 0); /* target */
+  put_u8(&request, 0); /* mode */
+  put_u16(&envelope, 21); /* OperationRequest v1 */
+  put_u8(&envelope, 1);
+  put_u32(&envelope, kind);
+  put_bytes(&envelope, request.bytes, request.length);
+  return envelope;
+}
+
+static void run_filesystem_operations(const mc_host_vm_api_v1 *vm_api,
+                                      const mc_host_operation_api_v1 *op_api,
+                                      mc_host_runtime_t runtime, mc_host_handle_t vm) {
+  const uint8_t content[] = {'c', 0, 'a', 'p', 'i', '\n'};
+  wire write_request = filesystem_request(MC_HOST_OP_FS_WRITE,
+                                          "/tmp/c-api-data", content, sizeof(content));
+  wire read_request = filesystem_request(MC_HOST_OP_FS_READ,
+                                         "/tmp/c-api-data", NULL, 0);
+  mc_host_handle_t write_op = 0, read_op = 0;
+  check(op_api->start(runtime, vm,
+                      (mc_host_bytes_v1){write_request.bytes, write_request.length},
+                      &write_op, NULL), "start filesystem write");
+  check(op_api->start(runtime, vm,
+                      (mc_host_bytes_v1){read_request.bytes, read_request.length},
+                      &read_op, NULL), "queue filesystem read");
+  mc_host_operation_status_v1 write_status = MC_HOST_INIT(mc_host_operation_status_v1);
+  mc_host_operation_status_v1 read_status = MC_HOST_INIT(mc_host_operation_status_v1);
+  check(op_api->poll(runtime, write_op, &write_status, NULL), "poll filesystem write");
+  check(op_api->poll(runtime, read_op, &read_status, NULL), "poll filesystem read");
+  need(write_status.state == MC_HOST_OP_NEW && read_status.state == MC_HOST_OP_NEW,
+       "filesystem operations wait for drive");
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    options.stop_mask = 0;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "drive filesystem operations");
+    check(op_api->poll(runtime, write_op, &write_status, NULL), "poll filesystem write");
+    check(op_api->poll(runtime, read_op, &read_status, NULL), "poll filesystem read");
+    if (write_status.state == MC_HOST_OP_READY && read_status.state == MC_HOST_OP_READY) break;
+    need((write_status.state == MC_HOST_OP_NEW || write_status.state == MC_HOST_OP_PENDING ||
+          write_status.state == MC_HOST_OP_READY) &&
+             (read_status.state == MC_HOST_OP_NEW || read_status.state == MC_HOST_OP_PENDING),
+         "filesystem operations progress without failure");
+  }
+  if (write_status.state != MC_HOST_OP_READY || read_status.state != MC_HOST_OP_READY) {
+    fprintf(stderr, "filesystem states: write=%u read=%u\n",
+            write_status.state, read_status.state);
+    need(0, "filesystem operations complete");
+  }
+  uint8_t result[256];
+  mc_host_buffer_v1 buffer = {result, sizeof(result), 0};
+  check(op_api->result(runtime, write_op, &buffer, NULL), "read filesystem write result");
+  size_t offset = 0;
+  need(read_u16(result, buffer.required, &offset) == 22 &&
+           read_u8(result, buffer.required, &offset) == 1 &&
+           read_u32(result, buffer.required, &offset) == MC_HOST_OP_FS_WRITE &&
+           read_u32(result, buffer.required, &offset) == 0 &&
+           read_u32(result, buffer.required, &offset) == 0 &&
+           offset == buffer.required,
+       "filesystem write succeeded");
+  buffer.required = 0;
+  check(op_api->result(runtime, read_op, &buffer, NULL), "read filesystem read result");
+  offset = 0;
+  need(read_u16(result, buffer.required, &offset) == 22 &&
+           read_u8(result, buffer.required, &offset) == 1 &&
+           read_u32(result, buffer.required, &offset) == MC_HOST_OP_FS_READ &&
+           read_u32(result, buffer.required, &offset) == 0 &&
+           read_u32(result, buffer.required, &offset) == sizeof(content) &&
+           buffer.required - offset == sizeof(content) &&
+           memcmp(result + offset, content, sizeof(content)) == 0,
+       "filesystem read preserves binary data");
+  check(op_api->close(runtime, read_op, NULL), "close filesystem read");
+  check(op_api->close(runtime, write_op, NULL), "close filesystem write");
+}
+
 static void run_control_command(const mc_host_vm_api_v1 *vm_api,
                                 const mc_host_operation_api_v1 *op_api,
                                 const mc_host_snapshot_api_v1 *snap_api,
@@ -319,6 +402,7 @@ int main(int argc, char **argv) {
        "kernel is not a VM");
   drive_to_prompt(&vm_api, &output_api, runtime, vm, NULL);
   run_control_command(&vm_api, &op_api, &snap_api, runtime, vm);
+  run_filesystem_operations(&vm_api, &op_api, runtime, vm);
 
   mc_host_snapshot_begin_options_v1 full_options = MC_HOST_INIT(mc_host_snapshot_begin_options_v1);
   full_options.mode = MC_HOST_SNAPSHOT_FULL;
