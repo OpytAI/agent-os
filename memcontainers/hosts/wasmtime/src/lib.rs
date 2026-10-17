@@ -1256,6 +1256,22 @@ impl KernelHost {
         Ok(())
     }
 
+    /// Notify the kernel of a terminal size change through the control contract.
+    pub fn resize_terminal(&mut self, cols: i32, rows: i32) -> Result<()> {
+        if cols <= 0 || rows <= 0 {
+            return Err(anyhow!("terminal dimensions must be positive"));
+        }
+        let resize = self
+            .exports
+            .mc_resize
+            .clone()
+            .ok_or_else(|| anyhow!("kernel lacks mc_resize"))?;
+        wt(
+            resize.call(&mut self.store, (cols, rows)),
+            "calling mc_resize",
+        )
+    }
+
     /// Run one bounded `mc_tick`, preserving the kernel-owned runnable/waiting
     /// distinction so callers pace only work that genuinely needs the host.
     pub fn tick(&mut self) -> Result<TickState> {

@@ -7,9 +7,14 @@ use std::ffi::c_void;
 use std::mem::{align_of, offset_of, size_of};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use embedder_rust as contract;
+
+mod output_api;
+mod resources;
+mod vm_api;
+use resources::RuntimeState;
 
 type ResultCode = u32;
 type RuntimeHandle = u64;
@@ -77,6 +82,154 @@ struct Api {
         unsafe extern "C" fn(RuntimeHandle, u32, u16, u32, *mut c_void, *mut Error) -> ResultCode,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Bytes {
+    data: *const u8,
+    len: u64,
+}
+
+#[repr(C)]
+struct KernelInfo {
+    header: Header,
+    digest: [u8; 32],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct VmCreateOptions {
+    header: Header,
+    layers: *const Bytes,
+    layer_count: u64,
+    contract_tier: i32,
+    contract_budget_mib: i32,
+    contract_fuel: i64,
+    requested_workers: i32,
+    flags: u32,
+    terminal_cols: u32,
+    terminal_rows: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct VmRestoreOptions {
+    header: Header,
+    snapshot: Bytes,
+    baseline: Bytes,
+    mode: u32,
+    reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DriveOptions {
+    header: Header,
+    max_ticks: u32,
+    reserved: u32,
+    stop_mask: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct VmStatus {
+    header: Header,
+    state: u32,
+    last_tick: u32,
+    flags: u32,
+    exit_code: i32,
+    output_records: u64,
+    output_bytes: u64,
+    output_dropped_bytes: u64,
+    inflight_egress: i32,
+    pending_commits: i32,
+    workers: u32,
+    reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DriveResult {
+    header: Header,
+    ticks: u32,
+    stop_reason: u32,
+    status: VmStatus,
+}
+
+#[repr(C)]
+struct VmApi {
+    header: Header,
+    kernel_load: unsafe extern "C" fn(
+        RuntimeHandle,
+        Bytes,
+        *mut u64,
+        *mut KernelInfo,
+        *mut Error,
+    ) -> ResultCode,
+    kernel_close: unsafe extern "C" fn(RuntimeHandle, u64, *mut Error) -> ResultCode,
+    vm_create: unsafe extern "C" fn(
+        RuntimeHandle,
+        u64,
+        u64,
+        *const VmCreateOptions,
+        *mut u64,
+        *mut Error,
+    ) -> ResultCode,
+    vm_restore: unsafe extern "C" fn(
+        RuntimeHandle,
+        u64,
+        u64,
+        *const VmRestoreOptions,
+        *mut u64,
+        *mut Error,
+    ) -> ResultCode,
+    vm_status: unsafe extern "C" fn(RuntimeHandle, u64, *mut VmStatus, *mut Error) -> ResultCode,
+    vm_drive: unsafe extern "C" fn(
+        RuntimeHandle,
+        u64,
+        *const DriveOptions,
+        *mut DriveResult,
+        *mut Error,
+    ) -> ResultCode,
+    vm_close: unsafe extern "C" fn(RuntimeHandle, u64, *mut Error) -> ResultCode,
+    vm_cancel_and_close: unsafe extern "C" fn(RuntimeHandle, u64, *mut Error) -> ResultCode,
+    terminal_input: unsafe extern "C" fn(RuntimeHandle, u64, Bytes, *mut Error) -> ResultCode,
+    terminal_resize: unsafe extern "C" fn(RuntimeHandle, u64, u32, u32, *mut Error) -> ResultCode,
+}
+
+#[repr(C)]
+struct OutputRecordInfo {
+    header: Header,
+    kind: u32,
+    channel: u32,
+    sequence: u64,
+    byte_offset: u64,
+    length: u64,
+    first_lost_sequence: u64,
+    last_lost_sequence: u64,
+    byte_end: u64,
+}
+
+#[repr(C)]
+struct OutputStatsInfo {
+    header: Header,
+    records: u64,
+    retained_bytes: u64,
+    dropped_bytes: u64,
+    leased_records: u64,
+    flags: u32,
+    reserved: u32,
+}
+
+#[repr(C)]
+struct OutputApi {
+    header: Header,
+    next: unsafe extern "C" fn(u64, u64, *mut u64, *mut OutputRecordInfo, *mut Error) -> ResultCode,
+    read: unsafe extern "C" fn(u64, u64, u64, *mut Buffer, *mut u64, *mut Error) -> ResultCode,
+    ack: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
+    release: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
+    stats: unsafe extern "C" fn(u64, u64, *mut OutputStatsInfo, *mut Error) -> ResultCode,
+}
+
 // The manifest in embedder.kdl is checked independently by Rust and C. A
 // field reorder or platform-specific padding change fails compilation.
 const _: () = {
@@ -142,6 +295,236 @@ const _: () = {
     assert!(offset_of!(Api, runtime_close) == contract::MC_HOST_LAYOUT_API_RUNTIME_CLOSE_OFFSET);
     assert!(offset_of!(Api, library_info) == contract::MC_HOST_LAYOUT_API_LIBRARY_INFO_OFFSET);
     assert!(offset_of!(Api, get_interface) == contract::MC_HOST_LAYOUT_API_GET_INTERFACE_OFFSET);
+    assert!(size_of::<Bytes>() == contract::MC_HOST_LAYOUT_BYTES_SIZE);
+    assert!(align_of::<Bytes>() == contract::MC_HOST_LAYOUT_BYTES_ALIGN);
+    assert!(offset_of!(Bytes, data) == contract::MC_HOST_LAYOUT_BYTES_DATA_OFFSET);
+    assert!(offset_of!(Bytes, len) == contract::MC_HOST_LAYOUT_BYTES_LEN_OFFSET);
+
+    assert!(size_of::<KernelInfo>() == contract::MC_HOST_LAYOUT_KERNEL_INFO_SIZE);
+    assert!(align_of::<KernelInfo>() == contract::MC_HOST_LAYOUT_KERNEL_INFO_ALIGN);
+    assert!(offset_of!(KernelInfo, header) == contract::MC_HOST_LAYOUT_KERNEL_INFO_HEADER_OFFSET);
+    assert!(offset_of!(KernelInfo, digest) == contract::MC_HOST_LAYOUT_KERNEL_INFO_DIGEST_OFFSET);
+
+    assert!(size_of::<VmCreateOptions>() == contract::MC_HOST_LAYOUT_VM_CREATE_OPTIONS_SIZE);
+    assert!(align_of::<VmCreateOptions>() == contract::MC_HOST_LAYOUT_VM_CREATE_OPTIONS_ALIGN);
+    assert!(
+        offset_of!(VmCreateOptions, header)
+            == contract::MC_HOST_LAYOUT_VM_CREATE_OPTIONS_HEADER_OFFSET
+    );
+    assert!(
+        offset_of!(VmCreateOptions, layers)
+            == contract::MC_HOST_LAYOUT_VM_CREATE_OPTIONS_LAYERS_OFFSET
+    );
+    assert!(
+        offset_of!(VmCreateOptions, layer_count)
+            == contract::MC_HOST_LAYOUT_VM_CREATE_OPTIONS_LAYER_COUNT_OFFSET
+    );
+    assert!(
+        offset_of!(VmCreateOptions, contract_tier)
+            == contract::MC_HOST_LAYOUT_VM_CREATE_OPTIONS_CONTRACT_TIER_OFFSET
+    );
+    assert!(
+        offset_of!(VmCreateOptions, contract_budget_mib)
+            == contract::MC_HOST_LAYOUT_VM_CREATE_OPTIONS_CONTRACT_BUDGET_MIB_OFFSET
+    );
+    assert!(
+        offset_of!(VmCreateOptions, contract_fuel)
+            == contract::MC_HOST_LAYOUT_VM_CREATE_OPTIONS_CONTRACT_FUEL_OFFSET
+    );
+    assert!(
+        offset_of!(VmCreateOptions, requested_workers)
+            == contract::MC_HOST_LAYOUT_VM_CREATE_OPTIONS_REQUESTED_WORKERS_OFFSET
+    );
+    assert!(
+        offset_of!(VmCreateOptions, flags)
+            == contract::MC_HOST_LAYOUT_VM_CREATE_OPTIONS_FLAGS_OFFSET
+    );
+    assert!(
+        offset_of!(VmCreateOptions, terminal_cols)
+            == contract::MC_HOST_LAYOUT_VM_CREATE_OPTIONS_TERMINAL_COLS_OFFSET
+    );
+    assert!(
+        offset_of!(VmCreateOptions, terminal_rows)
+            == contract::MC_HOST_LAYOUT_VM_CREATE_OPTIONS_TERMINAL_ROWS_OFFSET
+    );
+
+    assert!(size_of::<VmRestoreOptions>() == contract::MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_SIZE);
+    assert!(align_of::<VmRestoreOptions>() == contract::MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_ALIGN);
+    assert!(
+        offset_of!(VmRestoreOptions, header)
+            == contract::MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_HEADER_OFFSET
+    );
+    assert!(
+        offset_of!(VmRestoreOptions, snapshot)
+            == contract::MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_SNAPSHOT_OFFSET
+    );
+    assert!(
+        offset_of!(VmRestoreOptions, baseline)
+            == contract::MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_BASELINE_OFFSET
+    );
+    assert!(
+        offset_of!(VmRestoreOptions, mode)
+            == contract::MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_MODE_OFFSET
+    );
+    assert!(
+        offset_of!(VmRestoreOptions, reserved)
+            == contract::MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_RESERVED_OFFSET
+    );
+
+    assert!(size_of::<DriveOptions>() == contract::MC_HOST_LAYOUT_DRIVE_OPTIONS_SIZE);
+    assert!(align_of::<DriveOptions>() == contract::MC_HOST_LAYOUT_DRIVE_OPTIONS_ALIGN);
+    assert!(
+        offset_of!(DriveOptions, header) == contract::MC_HOST_LAYOUT_DRIVE_OPTIONS_HEADER_OFFSET
+    );
+    assert!(
+        offset_of!(DriveOptions, max_ticks)
+            == contract::MC_HOST_LAYOUT_DRIVE_OPTIONS_MAX_TICKS_OFFSET
+    );
+    assert!(
+        offset_of!(DriveOptions, reserved)
+            == contract::MC_HOST_LAYOUT_DRIVE_OPTIONS_RESERVED_OFFSET
+    );
+    assert!(
+        offset_of!(DriveOptions, stop_mask)
+            == contract::MC_HOST_LAYOUT_DRIVE_OPTIONS_STOP_MASK_OFFSET
+    );
+
+    assert!(size_of::<VmStatus>() == contract::MC_HOST_LAYOUT_VM_STATUS_SIZE);
+    assert!(align_of::<VmStatus>() == contract::MC_HOST_LAYOUT_VM_STATUS_ALIGN);
+    assert!(offset_of!(VmStatus, header) == contract::MC_HOST_LAYOUT_VM_STATUS_HEADER_OFFSET);
+    assert!(offset_of!(VmStatus, state) == contract::MC_HOST_LAYOUT_VM_STATUS_STATE_OFFSET);
+    assert!(offset_of!(VmStatus, last_tick) == contract::MC_HOST_LAYOUT_VM_STATUS_LAST_TICK_OFFSET);
+    assert!(offset_of!(VmStatus, flags) == contract::MC_HOST_LAYOUT_VM_STATUS_FLAGS_OFFSET);
+    assert!(offset_of!(VmStatus, exit_code) == contract::MC_HOST_LAYOUT_VM_STATUS_EXIT_CODE_OFFSET);
+    assert!(
+        offset_of!(VmStatus, output_records)
+            == contract::MC_HOST_LAYOUT_VM_STATUS_OUTPUT_RECORDS_OFFSET
+    );
+    assert!(
+        offset_of!(VmStatus, output_bytes)
+            == contract::MC_HOST_LAYOUT_VM_STATUS_OUTPUT_BYTES_OFFSET
+    );
+    assert!(
+        offset_of!(VmStatus, output_dropped_bytes)
+            == contract::MC_HOST_LAYOUT_VM_STATUS_OUTPUT_DROPPED_BYTES_OFFSET
+    );
+    assert!(
+        offset_of!(VmStatus, inflight_egress)
+            == contract::MC_HOST_LAYOUT_VM_STATUS_INFLIGHT_EGRESS_OFFSET
+    );
+    assert!(
+        offset_of!(VmStatus, pending_commits)
+            == contract::MC_HOST_LAYOUT_VM_STATUS_PENDING_COMMITS_OFFSET
+    );
+    assert!(offset_of!(VmStatus, workers) == contract::MC_HOST_LAYOUT_VM_STATUS_WORKERS_OFFSET);
+    assert!(offset_of!(VmStatus, reserved) == contract::MC_HOST_LAYOUT_VM_STATUS_RESERVED_OFFSET);
+
+    assert!(size_of::<DriveResult>() == contract::MC_HOST_LAYOUT_DRIVE_RESULT_SIZE);
+    assert!(align_of::<DriveResult>() == contract::MC_HOST_LAYOUT_DRIVE_RESULT_ALIGN);
+    assert!(offset_of!(DriveResult, header) == contract::MC_HOST_LAYOUT_DRIVE_RESULT_HEADER_OFFSET);
+    assert!(offset_of!(DriveResult, ticks) == contract::MC_HOST_LAYOUT_DRIVE_RESULT_TICKS_OFFSET);
+    assert!(
+        offset_of!(DriveResult, stop_reason)
+            == contract::MC_HOST_LAYOUT_DRIVE_RESULT_STOP_REASON_OFFSET
+    );
+    assert!(offset_of!(DriveResult, status) == contract::MC_HOST_LAYOUT_DRIVE_RESULT_STATUS_OFFSET);
+
+    assert!(size_of::<VmApi>() == contract::MC_HOST_LAYOUT_VM_API_SIZE);
+    assert!(align_of::<VmApi>() == contract::MC_HOST_LAYOUT_VM_API_ALIGN);
+    assert!(offset_of!(VmApi, header) == contract::MC_HOST_LAYOUT_VM_API_HEADER_OFFSET);
+    assert!(offset_of!(VmApi, kernel_load) == contract::MC_HOST_LAYOUT_VM_API_KERNEL_LOAD_OFFSET);
+    assert!(offset_of!(VmApi, kernel_close) == contract::MC_HOST_LAYOUT_VM_API_KERNEL_CLOSE_OFFSET);
+    assert!(offset_of!(VmApi, vm_create) == contract::MC_HOST_LAYOUT_VM_API_VM_CREATE_OFFSET);
+    assert!(offset_of!(VmApi, vm_restore) == contract::MC_HOST_LAYOUT_VM_API_VM_RESTORE_OFFSET);
+    assert!(offset_of!(VmApi, vm_status) == contract::MC_HOST_LAYOUT_VM_API_VM_STATUS_OFFSET);
+    assert!(offset_of!(VmApi, vm_drive) == contract::MC_HOST_LAYOUT_VM_API_VM_DRIVE_OFFSET);
+    assert!(offset_of!(VmApi, vm_close) == contract::MC_HOST_LAYOUT_VM_API_VM_CLOSE_OFFSET);
+    assert!(
+        offset_of!(VmApi, vm_cancel_and_close)
+            == contract::MC_HOST_LAYOUT_VM_API_VM_CANCEL_AND_CLOSE_OFFSET
+    );
+    assert!(
+        offset_of!(VmApi, terminal_input) == contract::MC_HOST_LAYOUT_VM_API_TERMINAL_INPUT_OFFSET
+    );
+    assert!(
+        offset_of!(VmApi, terminal_resize)
+            == contract::MC_HOST_LAYOUT_VM_API_TERMINAL_RESIZE_OFFSET
+    );
+    assert!(size_of::<OutputRecordInfo>() == contract::MC_HOST_LAYOUT_OUTPUT_RECORD_SIZE);
+    assert!(align_of::<OutputRecordInfo>() == contract::MC_HOST_LAYOUT_OUTPUT_RECORD_ALIGN);
+    assert!(
+        offset_of!(OutputRecordInfo, header)
+            == contract::MC_HOST_LAYOUT_OUTPUT_RECORD_HEADER_OFFSET
+    );
+    assert!(
+        offset_of!(OutputRecordInfo, kind) == contract::MC_HOST_LAYOUT_OUTPUT_RECORD_KIND_OFFSET
+    );
+    assert!(
+        offset_of!(OutputRecordInfo, channel)
+            == contract::MC_HOST_LAYOUT_OUTPUT_RECORD_CHANNEL_OFFSET
+    );
+    assert!(
+        offset_of!(OutputRecordInfo, sequence)
+            == contract::MC_HOST_LAYOUT_OUTPUT_RECORD_SEQUENCE_OFFSET
+    );
+    assert!(
+        offset_of!(OutputRecordInfo, byte_offset)
+            == contract::MC_HOST_LAYOUT_OUTPUT_RECORD_BYTE_OFFSET_OFFSET
+    );
+    assert!(
+        offset_of!(OutputRecordInfo, length)
+            == contract::MC_HOST_LAYOUT_OUTPUT_RECORD_LENGTH_OFFSET
+    );
+    assert!(
+        offset_of!(OutputRecordInfo, first_lost_sequence)
+            == contract::MC_HOST_LAYOUT_OUTPUT_RECORD_FIRST_LOST_SEQUENCE_OFFSET
+    );
+    assert!(
+        offset_of!(OutputRecordInfo, last_lost_sequence)
+            == contract::MC_HOST_LAYOUT_OUTPUT_RECORD_LAST_LOST_SEQUENCE_OFFSET
+    );
+    assert!(
+        offset_of!(OutputRecordInfo, byte_end)
+            == contract::MC_HOST_LAYOUT_OUTPUT_RECORD_BYTE_END_OFFSET
+    );
+
+    assert!(size_of::<OutputStatsInfo>() == contract::MC_HOST_LAYOUT_OUTPUT_STATS_SIZE);
+    assert!(align_of::<OutputStatsInfo>() == contract::MC_HOST_LAYOUT_OUTPUT_STATS_ALIGN);
+    assert!(
+        offset_of!(OutputStatsInfo, header) == contract::MC_HOST_LAYOUT_OUTPUT_STATS_HEADER_OFFSET
+    );
+    assert!(
+        offset_of!(OutputStatsInfo, records)
+            == contract::MC_HOST_LAYOUT_OUTPUT_STATS_RECORDS_OFFSET
+    );
+    assert!(
+        offset_of!(OutputStatsInfo, retained_bytes)
+            == contract::MC_HOST_LAYOUT_OUTPUT_STATS_RETAINED_BYTES_OFFSET
+    );
+    assert!(
+        offset_of!(OutputStatsInfo, dropped_bytes)
+            == contract::MC_HOST_LAYOUT_OUTPUT_STATS_DROPPED_BYTES_OFFSET
+    );
+    assert!(
+        offset_of!(OutputStatsInfo, leased_records)
+            == contract::MC_HOST_LAYOUT_OUTPUT_STATS_LEASED_RECORDS_OFFSET
+    );
+    assert!(
+        offset_of!(OutputStatsInfo, flags) == contract::MC_HOST_LAYOUT_OUTPUT_STATS_FLAGS_OFFSET
+    );
+    assert!(
+        offset_of!(OutputStatsInfo, reserved)
+            == contract::MC_HOST_LAYOUT_OUTPUT_STATS_RESERVED_OFFSET
+    );
+
+    assert!(size_of::<OutputApi>() == contract::MC_HOST_LAYOUT_OUTPUT_API_SIZE);
+    assert!(align_of::<OutputApi>() == contract::MC_HOST_LAYOUT_OUTPUT_API_ALIGN);
+    assert!(offset_of!(OutputApi, header) == contract::MC_HOST_LAYOUT_OUTPUT_API_HEADER_OFFSET);
+    assert!(offset_of!(OutputApi, next) == contract::MC_HOST_LAYOUT_OUTPUT_API_NEXT_OFFSET);
+    assert!(offset_of!(OutputApi, read) == contract::MC_HOST_LAYOUT_OUTPUT_API_READ_OFFSET);
+    assert!(offset_of!(OutputApi, ack) == contract::MC_HOST_LAYOUT_OUTPUT_API_ACK_OFFSET);
+    assert!(offset_of!(OutputApi, release) == contract::MC_HOST_LAYOUT_OUTPUT_API_RELEASE_OFFSET);
+    assert!(offset_of!(OutputApi, stats) == contract::MC_HOST_LAYOUT_OUTPUT_API_STATS_OFFSET);
 };
 
 struct RuntimeSlot {
@@ -150,6 +533,7 @@ struct RuntimeSlot {
     open: bool,
     active_calls: usize,
     retired: bool,
+    state: Option<std::sync::Arc<RuntimeState>>,
 }
 
 #[derive(Default)]
@@ -177,6 +561,7 @@ impl RuntimeTable {
                 open: false,
                 active_calls: 0,
                 retired: false,
+                state: None,
             });
             self.slots.len() - 1
         };
@@ -186,6 +571,7 @@ impl RuntimeTable {
         }
         slot.namespace = namespace as u16;
         slot.open = true;
+        slot.state = Some(std::sync::Arc::new(RuntimeState::new(slot.namespace)));
         self.next_namespace = namespace;
         Ok(pack(slot.namespace, slot.generation, index))
     }
@@ -209,10 +595,11 @@ impl RuntimeTable {
     fn close(&mut self, handle: RuntimeHandle) -> Result<(), ResultCode> {
         let (_, _, _, index) = unpack(handle).ok_or(contract::MC_HOST_STALE_HANDLE)?;
         let slot = self.slot_mut(handle)?;
-        if slot.active_calls != 0 {
+        if slot.active_calls != 0 || slot.state.as_ref().is_some_and(|state| !state.is_empty()) {
             return Err(contract::MC_HOST_BUSY);
         }
         slot.open = false;
+        slot.state = None;
         if slot.generation == MAX_GENERATION {
             slot.retired = true;
         } else {
@@ -223,11 +610,15 @@ impl RuntimeTable {
     }
 }
 
-fn pack(namespace: u16, generation: u32, index: usize) -> RuntimeHandle {
+fn pack_kind(namespace: u16, kind: u8, generation: u32, index: usize) -> RuntimeHandle {
     ((namespace as u64) << 48)
-        | ((RUNTIME_KIND as u64) << 40)
+        | ((kind as u64) << 40)
         | ((generation as u64) << 20)
         | (index as u64 + 1)
+}
+
+fn pack(namespace: u16, generation: u32, index: usize) -> RuntimeHandle {
+    pack_kind(namespace, RUNTIME_KIND, generation, index)
 }
 
 fn unpack(handle: RuntimeHandle) -> Option<(u16, u8, u32, usize)> {
@@ -249,7 +640,10 @@ fn runtimes() -> &'static Mutex<RuntimeTable> {
     TABLE.get_or_init(|| Mutex::new(RuntimeTable::default()))
 }
 
-struct ActiveRuntime(RuntimeHandle);
+struct ActiveRuntime {
+    handle: RuntimeHandle,
+    state: Arc<RuntimeState>,
+}
 
 impl ActiveRuntime {
     fn acquire(handle: RuntimeHandle) -> Result<Self, ResultCode> {
@@ -259,14 +653,15 @@ impl ActiveRuntime {
             .active_calls
             .checked_add(1)
             .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
-        Ok(Self(handle))
+        let state = Arc::clone(slot.state.as_ref().ok_or(contract::MC_HOST_INTERNAL)?);
+        Ok(Self { handle, state })
     }
 }
 
 impl Drop for ActiveRuntime {
     fn drop(&mut self) {
         if let Ok(mut table) = runtimes().lock() {
-            if let Ok(slot) = table.slot_mut(self.0) {
+            if let Ok(slot) = table.slot_mut(self.handle) {
                 slot.active_calls -= 1;
             }
         }

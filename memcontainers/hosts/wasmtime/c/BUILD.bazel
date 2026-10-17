@@ -6,7 +6,7 @@ load("//memcontainers/hosts/wasmtime:defs.bzl", "host_release_shared_library")
 # until a real kernel-backed interface and its C loader tests land.
 rust_shared_library(
     name = "mc_host",
-    srcs = ["src/lib.rs"],
+    srcs = glob(["src/**/*.rs"]),
     crate_root = "src/lib.rs",
     crate_name = "mc_host",
     edition = "2021",
@@ -17,7 +17,10 @@ rust_shared_library(
     ],
     tags = ["manual"],
     visibility = ["//visibility:public"],
-    deps = ["//memcontainers/contracts:embedder_rust"],
+    deps = [
+        "//memcontainers/contracts:embedder_rust",
+        "//memcontainers/hosts/wasmtime:lib",
+    ],
 )
 
 host_release_shared_library(

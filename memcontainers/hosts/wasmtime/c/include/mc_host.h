@@ -21,6 +21,7 @@ extern "C" {
 #endif
 
 typedef uint64_t mc_host_runtime_t;
+typedef uint64_t mc_host_handle_t;
 typedef uint32_t mc_host_result_t;
 
 typedef struct mc_host_header_v1 {
@@ -34,6 +35,11 @@ typedef struct mc_host_buffer_v1 {
   uint64_t capacity;
   uint64_t required;
 } mc_host_buffer_v1;
+
+typedef struct mc_host_bytes_v1 {
+  const uint8_t *data;
+  uint64_t len;
+} mc_host_bytes_v1;
 
 typedef struct mc_host_error_v1 {
   mc_host_header_v1 header;
@@ -71,6 +77,127 @@ typedef struct mc_host_api_v1 {
   mc_host_result_t (MC_HOST_CALL *get_interface)(
       mc_host_runtime_t, uint32_t, uint16_t, uint32_t, void *, mc_host_error_v1 *);
 } mc_host_api_v1;
+
+typedef struct mc_host_kernel_info_v1 {
+  mc_host_header_v1 header;
+  uint8_t digest[32];
+} mc_host_kernel_info_v1;
+
+typedef struct mc_host_vm_create_options_v1 {
+  mc_host_header_v1 header;
+  const mc_host_bytes_v1 *layers;
+  uint64_t layer_count;
+  int32_t contract_tier;
+  int32_t contract_budget_mib;
+  int64_t contract_fuel;
+  int32_t requested_workers; /* -1 uses the host default. */
+  uint32_t flags;
+  uint32_t terminal_cols;
+  uint32_t terminal_rows;
+} mc_host_vm_create_options_v1;
+
+typedef struct mc_host_vm_restore_options_v1 {
+  mc_host_header_v1 header;
+  mc_host_bytes_v1 snapshot;
+  mc_host_bytes_v1 baseline;
+  uint32_t mode;
+  uint32_t reserved;
+} mc_host_vm_restore_options_v1;
+
+typedef struct mc_host_drive_options_v1 {
+  mc_host_header_v1 header;
+  uint32_t max_ticks;
+  uint32_t reserved;
+  uint64_t stop_mask;
+} mc_host_drive_options_v1;
+
+typedef struct mc_host_vm_status_v1 {
+  mc_host_header_v1 header;
+  uint32_t state;
+  uint32_t last_tick;
+  uint32_t flags;
+  int32_t exit_code;
+  uint64_t output_records;
+  uint64_t output_bytes;
+  uint64_t output_dropped_bytes;
+  int32_t inflight_egress;
+  int32_t pending_commits;
+  uint32_t workers;
+  uint32_t reserved;
+} mc_host_vm_status_v1;
+
+typedef struct mc_host_drive_result_v1 {
+  mc_host_header_v1 header;
+  uint32_t ticks;
+  uint32_t stop_reason;
+  mc_host_vm_status_v1 status;
+} mc_host_drive_result_v1;
+
+typedef struct mc_host_vm_api_v1 {
+  mc_host_header_v1 header;
+  mc_host_result_t (MC_HOST_CALL *kernel_load)(
+      mc_host_runtime_t, mc_host_bytes_v1, mc_host_handle_t *,
+      mc_host_kernel_info_v1 *, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *kernel_close)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *vm_create)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_handle_t,
+      const mc_host_vm_create_options_v1 *, mc_host_handle_t *, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *vm_restore)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_handle_t,
+      const mc_host_vm_restore_options_v1 *, mc_host_handle_t *, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *vm_status)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_vm_status_v1 *, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *vm_drive)(
+      mc_host_runtime_t, mc_host_handle_t, const mc_host_drive_options_v1 *,
+      mc_host_drive_result_v1 *, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *vm_close)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *vm_cancel_and_close)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *terminal_input)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_bytes_v1, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *terminal_resize)(
+      mc_host_runtime_t, mc_host_handle_t, uint32_t, uint32_t, mc_host_error_v1 *);
+} mc_host_vm_api_v1;
+
+typedef struct mc_host_output_record_v1 {
+  mc_host_header_v1 header;
+  uint32_t kind;
+  uint32_t channel;
+  uint64_t sequence;
+  uint64_t byte_offset;
+  uint64_t length;
+  uint64_t first_lost_sequence;
+  uint64_t last_lost_sequence;
+  uint64_t byte_end;
+} mc_host_output_record_v1;
+
+typedef struct mc_host_output_stats_v1 {
+  mc_host_header_v1 header;
+  uint64_t records;
+  uint64_t retained_bytes;
+  uint64_t dropped_bytes;
+  uint64_t leased_records;
+  uint32_t flags;
+  uint32_t reserved;
+} mc_host_output_stats_v1;
+
+typedef struct mc_host_output_api_v1 {
+  mc_host_header_v1 header;
+  mc_host_result_t (MC_HOST_CALL *next)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_handle_t *,
+      mc_host_output_record_v1 *, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *read)(
+      mc_host_runtime_t, mc_host_handle_t, uint64_t,
+      mc_host_buffer_v1 *, uint64_t *, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *ack)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *release)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *stats)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_output_stats_v1 *, mc_host_error_v1 *);
+} mc_host_output_api_v1;
 
 #define MC_HOST_INIT(type_) { { (uint32_t)sizeof(type_), 1u, 0u } }
 

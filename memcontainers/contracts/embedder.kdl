@@ -47,6 +47,100 @@ layout "API" size=56 align=8 {
   offset "library_info" value=40
   offset "get_interface" value=48
 }
+layout "BYTES" size=16 align=8 {
+  offset "data" value=0
+  offset "len" value=8
+}
+layout "KERNEL_INFO" size=40 align=4 {
+  offset "header" value=0
+  offset "digest" value=8
+}
+layout "VM_CREATE_OPTIONS" size=56 align=8 {
+  offset "header" value=0
+  offset "layers" value=8
+  offset "layer_count" value=16
+  offset "contract_tier" value=24
+  offset "contract_budget_mib" value=28
+  offset "contract_fuel" value=32
+  offset "requested_workers" value=40
+  offset "flags" value=44
+  offset "terminal_cols" value=48
+  offset "terminal_rows" value=52
+}
+layout "VM_RESTORE_OPTIONS" size=48 align=8 {
+  offset "header" value=0
+  offset "snapshot" value=8
+  offset "baseline" value=24
+  offset "mode" value=40
+  offset "reserved" value=44
+}
+layout "DRIVE_OPTIONS" size=24 align=8 {
+  offset "header" value=0
+  offset "max_ticks" value=8
+  offset "reserved" value=12
+  offset "stop_mask" value=16
+}
+layout "VM_STATUS" size=64 align=8 {
+  offset "header" value=0
+  offset "state" value=8
+  offset "last_tick" value=12
+  offset "flags" value=16
+  offset "exit_code" value=20
+  offset "output_records" value=24
+  offset "output_bytes" value=32
+  offset "output_dropped_bytes" value=40
+  offset "inflight_egress" value=48
+  offset "pending_commits" value=52
+  offset "workers" value=56
+  offset "reserved" value=60
+}
+layout "DRIVE_RESULT" size=80 align=8 {
+  offset "header" value=0
+  offset "ticks" value=8
+  offset "stop_reason" value=12
+  offset "status" value=16
+}
+layout "VM_API" size=88 align=8 {
+  offset "header" value=0
+  offset "kernel_load" value=8
+  offset "kernel_close" value=16
+  offset "vm_create" value=24
+  offset "vm_restore" value=32
+  offset "vm_status" value=40
+  offset "vm_drive" value=48
+  offset "vm_close" value=56
+  offset "vm_cancel_and_close" value=64
+  offset "terminal_input" value=72
+  offset "terminal_resize" value=80
+}
+layout "OUTPUT_RECORD" size=64 align=8 {
+  offset "header" value=0
+  offset "kind" value=8
+  offset "channel" value=12
+  offset "sequence" value=16
+  offset "byte_offset" value=24
+  offset "length" value=32
+  offset "first_lost_sequence" value=40
+  offset "last_lost_sequence" value=48
+  offset "byte_end" value=56
+}
+layout "OUTPUT_STATS" size=48 align=8 {
+  offset "header" value=0
+  offset "records" value=8
+  offset "retained_bytes" value=16
+  offset "dropped_bytes" value=24
+  offset "leased_records" value=32
+  offset "flags" value=40
+  offset "reserved" value=44
+}
+layout "OUTPUT_API" size=48 align=8 {
+  offset "header" value=0
+  offset "next" value=8
+  offset "read" value=16
+  offset "ack" value=24
+  offset "release" value=32
+  offset "stats" value=40
+}
 
 constant "MC_HOST_OK" value=0 type="u32"
 constant "MC_HOST_BUFFER_TOO_SMALL" value=1 type="u32"
@@ -82,6 +176,26 @@ constant "MC_HOST_IFACE_ATTACHMENT_V1" value=9 type="u32"
 constant "MC_HOST_TICK_WAITING" value=0 type="u32"
 constant "MC_HOST_TICK_RUNNABLE" value=1 type="u32"
 constant "MC_HOST_TICK_EXITED" value=2 type="u32"
+constant "MC_HOST_VM_RUNNABLE" value=1 type="u32"
+constant "MC_HOST_VM_WAITING" value=2 type="u32"
+constant "MC_HOST_VM_EXITED" value=3 type="u32"
+constant "MC_HOST_VM_POISONED" value=4 type="u32"
+constant "MC_HOST_VM_CLOSING" value=5 type="u32"
+constant "MC_HOST_VM_FLAG_HAS_EXIT_CODE" value=1 type="u32"
+constant "MC_HOST_VM_FLAG_AT_PROMPT" value=2 type="u32"
+constant "MC_HOST_VM_CREATE_DETERMINISTIC" value=1 type="u32"
+constant "MC_HOST_RESTORE_STRICT" value=1 type="u32"
+constant "MC_HOST_RESTORE_DETACHED" value=2 type="u32"
+constant "MC_HOST_DRIVE_STOP_BUDGET" value=1 type="u32"
+constant "MC_HOST_DRIVE_STOP_WAITING" value=2 type="u32"
+constant "MC_HOST_DRIVE_STOP_EXITED" value=3 type="u32"
+constant "MC_HOST_DRIVE_STOP_OUTPUT" value=4 type="u32"
+constant "MC_HOST_DRIVE_STOP_EFFECT" value=5 type="u32"
+constant "MC_HOST_DRIVE_STOP_POISONED" value=6 type="u32"
+constant "MC_HOST_OUTPUT_DATA" value=1 type="u32"
+constant "MC_HOST_OUTPUT_GAP" value=2 type="u32"
+constant "MC_HOST_OUTPUT_ABOVE_HIGH_WATER" value=1 type="u32"
+constant "MC_HOST_OUTPUT_POISONED" value=2 type="u32"
 
 constant "MC_HOST_OP_EXEC_SHELL" value=1 type="u32"
 constant "MC_HOST_OP_EXEC_DIRECT" value=2 type="u32"
