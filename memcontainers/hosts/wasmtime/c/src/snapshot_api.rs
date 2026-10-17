@@ -238,6 +238,16 @@ pub unsafe extern "C" fn inspect(
         if let Some(base) = baseline {
             check_snapshot_memory(base)?;
         }
+        if ranges_overlap(
+            snapshot.as_ptr() as usize,
+            snapshot.len(),
+            out_info as usize,
+            size,
+        ) || baseline.is_some_and(|base| {
+            ranges_overlap(base.as_ptr() as usize, base.len(), out_info as usize, size)
+        }) {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
         let _active = ActiveRuntime::acquire(runtime)?;
         let description = inspect_snapshot_bytes(snapshot, baseline)
             .map_err(|_| contract::MC_HOST_SNAPSHOT_ERROR)?;

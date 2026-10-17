@@ -296,6 +296,13 @@ int main(int argc, char **argv) {
 
   mc_host_handle_t kernel_handle = 0;
   mc_host_kernel_info_v1 kernel_info = MC_HOST_INIT(mc_host_kernel_info_v1);
+  uint8_t kernel_prefix[sizeof(mc_host_handle_t)];
+  memcpy(kernel_prefix, kernel, sizeof(kernel_prefix));
+  need(vm_api.kernel_load(runtime, (mc_host_bytes_v1){kernel, kernel_len},
+                          (mc_host_handle_t *)kernel, &kernel_info, NULL) ==
+           MC_HOST_INVALID_ARGUMENT &&
+           memcmp(kernel_prefix, kernel, sizeof(kernel_prefix)) == 0,
+       "kernel load rejects output inside input bytes");
   check(vm_api.kernel_load(runtime, (mc_host_bytes_v1){kernel, kernel_len},
                            &kernel_handle, &kernel_info, NULL), "load real kernel");
   need(kernel_handle != 0, "kernel handle");

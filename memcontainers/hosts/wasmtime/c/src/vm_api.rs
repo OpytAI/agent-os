@@ -1,5 +1,4 @@
-//! VM table implementation under construction. Discovery remains disabled until
-//! restore, cancellation, terminal control, and resource checks are complete.
+//! VM lifecycle, terminal control, and bounded kernel drive.
 
 use std::mem::{align_of, size_of};
 use std::ptr;
@@ -73,8 +72,26 @@ pub unsafe extern "C" fn kernel_load(
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
         let info_size = unsafe { output_size(out_info)? };
-        unsafe { *out_kernel = 0 };
         let wasm = unsafe { bytes(wasm, MAX_KERNEL_BYTES)? };
+        if ranges_overlap(
+            out_kernel as usize,
+            size_of::<u64>(),
+            out_info as usize,
+            info_size,
+        ) || ranges_overlap(
+            wasm.as_ptr() as usize,
+            wasm.len(),
+            out_kernel as usize,
+            size_of::<u64>(),
+        ) || ranges_overlap(
+            wasm.as_ptr() as usize,
+            wasm.len(),
+            out_info as usize,
+            info_size,
+        ) {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        unsafe { *out_kernel = 0 };
         let active = ActiveRuntime::acquire(runtime)?;
         let (kernel, digest) = active.state.load_kernel(wasm)?;
         let info = KernelInfo {
@@ -111,8 +128,16 @@ pub unsafe extern "C" fn vm_create(
         if out_vm.is_null() || (out_vm as usize) % align_of::<u64>() != 0 {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
-        let options = unsafe { input(options)? };
-        unsafe { *out_vm = 0 };
+        let options_ptr = options;
+        let options = unsafe { input(options_ptr)? };
+        if ranges_overlap(
+            options_ptr as usize,
+            options.header.size as usize,
+            out_vm as usize,
+            size_of::<u64>(),
+        ) {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
         if plan != 0 || options.flags & !contract::MC_HOST_VM_CREATE_DETERMINISTIC != 0 {
             return Err(contract::MC_HOST_UNSUPPORTED);
         }
@@ -135,6 +160,14 @@ pub unsafe extern "C" fn vm_create(
         if options.layer_count != 0 && (options.layers as usize) % align_of::<Bytes>() != 0 {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
+        if ranges_overlap(
+            options.layers as usize,
+            options.layer_count as usize * size_of::<Bytes>(),
+            out_vm as usize,
+            size_of::<u64>(),
+        ) {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
         let mut layers = Vec::with_capacity(options.layer_count as usize);
         let mut total = 0u64;
         for index in 0..options.layer_count as usize {
@@ -145,7 +178,16 @@ pub unsafe extern "C" fn vm_create(
             if total > MAX_IMAGE_BYTES {
                 return Err(contract::MC_HOST_RESOURCE_LIMIT);
             }
-            layers.push(unsafe { bytes(descriptor, MAX_IMAGE_BYTES)? }.to_vec());
+            let layer = unsafe { bytes(descriptor, MAX_IMAGE_BYTES)? };
+            if ranges_overlap(
+                layer.as_ptr() as usize,
+                layer.len(),
+                out_vm as usize,
+                size_of::<u64>(),
+            ) {
+                return Err(contract::MC_HOST_INVALID_ARGUMENT);
+            }
+            layers.push(layer.to_vec());
         }
         let config = VmConfig {
             layers,
@@ -162,6 +204,7 @@ pub unsafe extern "C" fn vm_create(
             contract_fuel: options.contract_fuel,
             terminal_size,
         };
+        unsafe { *out_vm = 0 };
         let active = ActiveRuntime::acquire(runtime)?;
         let handle = active.state.create_vm(kernel, config)?;
         unsafe { *out_vm = handle };
@@ -181,8 +224,16 @@ pub unsafe extern "C" fn vm_restore(
         if out_vm.is_null() || (out_vm as usize) % align_of::<u64>() != 0 {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
-        let options = unsafe { input(options)? };
-        unsafe { *out_vm = 0 };
+        let options_ptr = options;
+        let options = unsafe { input(options_ptr)? };
+        if ranges_overlap(
+            options_ptr as usize,
+            options.header.size as usize,
+            out_vm as usize,
+            size_of::<u64>(),
+        ) {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
         if plan != 0 || options.reserved != 0 {
             return Err(contract::MC_HOST_UNSUPPORTED);
         }
@@ -199,6 +250,22 @@ pub unsafe extern "C" fn vm_restore(
         if let Some(base) = baseline {
             super::snapshot_api::check_snapshot_memory(base)?;
         }
+        if ranges_overlap(
+            snapshot.as_ptr() as usize,
+            snapshot.len(),
+            out_vm as usize,
+            size_of::<u64>(),
+        ) || baseline.is_some_and(|base| {
+            ranges_overlap(
+                base.as_ptr() as usize,
+                base.len(),
+                out_vm as usize,
+                size_of::<u64>(),
+            )
+        }) {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        unsafe { *out_vm = 0 };
         let active = ActiveRuntime::acquire(runtime)?;
         let vm = active.state.restore_vm(kernel, snapshot, baseline)?;
         unsafe { *out_vm = vm };
