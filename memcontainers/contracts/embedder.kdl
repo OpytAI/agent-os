@@ -184,6 +184,27 @@ layout "OPERATION_API" size=56 align=8 {
   offset "cancel" value=40
   offset "close" value=48
 }
+layout "ATTACHMENT_API" size=40 align=8 {
+  offset "header" value=0
+  offset "plan_create" value=8
+  offset "plan_add" value=16
+  offset "plan_seal" value=24
+  offset "plan_close" value=32
+}
+layout "EFFECT_INFO" size=24 align=8 {
+  offset "header" value=0
+  offset "kind" value=8
+  offset "reserved" value=12
+  offset "length" value=16
+}
+layout "EFFECT_API" size=48 align=8 {
+  offset "header" value=0
+  offset "next" value=8
+  offset "read" value=16
+  offset "release" value=24
+  offset "respond" value=32
+  offset "ack" value=40
+}
 
 constant "MC_HOST_OK" value=0 type="u32"
 constant "MC_HOST_BUFFER_TOO_SMALL" value=1 type="u32"
@@ -223,6 +244,9 @@ constant "MC_HOST_FEATURE_FS_OPERATION" value=16 type="u64"
 constant "MC_HOST_FEATURE_AUTOCOMPLETE_OPERATION" value=32 type="u64"
 constant "MC_HOST_FEATURE_SERVICE_OPERATION" value=64 type="u64"
 constant "MC_HOST_FEATURE_COMMIT_OPERATION" value=128 type="u64"
+constant "MC_HOST_FEATURE_ATTACHMENT_PLAN" value=256 type="u64"
+constant "MC_HOST_FEATURE_HOST_CALL_EFFECT" value=512 type="u64"
+constant "MC_HOST_FEATURE_MOUNT_OPERATION" value=1024 type="u64"
 
 constant "MC_HOST_TICK_WAITING" value=0 type="u32"
 constant "MC_HOST_TICK_RUNNABLE" value=1 type="u32"
@@ -246,9 +270,11 @@ constant "MC_HOST_DRIVE_STOP_POISONED" value=6 type="u32"
 constant "MC_HOST_DRIVE_STOP_OPERATION" value=7 type="u32"
 constant "MC_HOST_DRIVE_ON_OUTPUT" value=1 type="u64"
 constant "MC_HOST_DRIVE_ON_OPERATION" value=2 type="u64"
+constant "MC_HOST_DRIVE_ON_EFFECT" value=4 type="u64"
 constant "MC_HOST_VM_FLAG_OUTPUT_READY" value=4 type="u32"
 constant "MC_HOST_VM_FLAG_OPERATION_READY" value=8 type="u32"
 constant "MC_HOST_VM_FLAG_OPERATION_PENDING" value=16 type="u32"
+constant "MC_HOST_VM_FLAG_EFFECT_READY" value=32 type="u32"
 constant "MC_HOST_OUTPUT_DATA" value=1 type="u32"
 constant "MC_HOST_OUTPUT_GAP" value=2 type="u32"
 constant "MC_HOST_OUTPUT_ABOVE_HIGH_WATER" value=1 type="u32"
@@ -278,6 +304,8 @@ constant "MC_HOST_OP_AUTOCOMPLETE" value=14 type="u32"
 constant "MC_HOST_OP_SERVICE_CALL" value=15 type="u32"
 constant "MC_HOST_OP_COMMIT_LAYER" value=16 type="u32"
 constant "MC_HOST_OP_CATALOG_INJECT" value=17 type="u32"
+
+constant "MC_HOST_ATTACHMENT_HOST_CALL" value=1 type="u32"
 
 constant "MC_HOST_EVENT_HTTP_REQUEST" value=1 type="u32"
 constant "MC_HOST_EVENT_HTTP_CANCEL" value=2 type="u32"
@@ -354,4 +382,33 @@ message "LayerCommitResult" id=28 version=1 {
   field "digest" type="str"
   field "layer" type="bytes"
   doc "Content-addressed layer produced by mc_commit_layer."
+}
+
+message "HostCallAttachment" id=29 version=1 {
+  field "name" type="str"
+  field "identity" type="str"
+  doc "One application-provided host-call route and its non-secret stable identity."
+}
+
+message "MountRequest" id=30 version=1 {
+  field "path" type="str"
+  field "read_only" type="bool"
+  doc "Mount a plan-registered host-call driver at its own path."
+}
+
+message "HostCallEvent" id=31 version=1 {
+  field "name" type="str"
+  field "request" type="bytes"
+  doc "Binary-safe request delivered to an application host-call route."
+}
+
+message "HostCallResponse" id=32 version=1 {
+  field "failed" type="bool"
+  field "body" type="bytes"
+  doc "One whole host-call response; the kernel has no body-pending sentinel."
+}
+
+message "EffectCancel" id=33 version=1 {
+  field "original_event_id" type="i64"
+  doc "One cancellation notice for a leased effect. Acknowledgment retires the original lease."
 }

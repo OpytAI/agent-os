@@ -11,9 +11,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use embedder_rust as contract;
 
+mod attachment_api;
+mod effect_api;
 mod operation_api;
 mod operations;
 mod output_api;
+mod relay;
 mod resources;
 mod snapshot_api;
 mod vm_api;
@@ -36,7 +39,10 @@ const FEATURE_BITS: u64 = contract::MC_HOST_FEATURE_VM_BASIC
     | contract::MC_HOST_FEATURE_FS_OPERATION
     | contract::MC_HOST_FEATURE_AUTOCOMPLETE_OPERATION
     | contract::MC_HOST_FEATURE_SERVICE_OPERATION
-    | contract::MC_HOST_FEATURE_COMMIT_OPERATION;
+    | contract::MC_HOST_FEATURE_COMMIT_OPERATION
+    | contract::MC_HOST_FEATURE_ATTACHMENT_PLAN
+    | contract::MC_HOST_FEATURE_HOST_CALL_EFFECT
+    | contract::MC_HOST_FEATURE_MOUNT_OPERATION;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -307,6 +313,33 @@ struct OperationApi {
     peek: unsafe extern "C" fn(u64, u64, u32, u64, *mut Buffer, *mut u64, *mut Error) -> ResultCode,
     cancel: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
     close: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
+}
+
+#[repr(C)]
+struct AttachmentApi {
+    header: Header,
+    plan_create: unsafe extern "C" fn(u64, *mut u64, *mut Error) -> ResultCode,
+    plan_add: unsafe extern "C" fn(u64, u64, Bytes, *mut Error) -> ResultCode,
+    plan_seal: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
+    plan_close: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
+}
+
+#[repr(C)]
+struct EffectInfo {
+    header: Header,
+    kind: u32,
+    reserved: u32,
+    length: u64,
+}
+
+#[repr(C)]
+struct EffectApi {
+    header: Header,
+    next: unsafe extern "C" fn(u64, u64, u64, *mut u64, *mut EffectInfo, *mut Error) -> ResultCode,
+    read: unsafe extern "C" fn(u64, u64, *mut Buffer, *mut Error) -> ResultCode,
+    release: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
+    respond: unsafe extern "C" fn(u64, u64, Bytes, *mut Error) -> ResultCode,
+    ack: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
 }
 
 // The manifest in embedder.kdl is checked independently by Rust and C. A
@@ -716,6 +749,43 @@ const _: () = {
         offset_of!(OperationApi, cancel) == contract::MC_HOST_LAYOUT_OPERATION_API_CANCEL_OFFSET
     );
     assert!(offset_of!(OperationApi, close) == contract::MC_HOST_LAYOUT_OPERATION_API_CLOSE_OFFSET);
+    assert!(size_of::<AttachmentApi>() == contract::MC_HOST_LAYOUT_ATTACHMENT_API_SIZE);
+    assert!(align_of::<AttachmentApi>() == contract::MC_HOST_LAYOUT_ATTACHMENT_API_ALIGN);
+    assert!(
+        offset_of!(AttachmentApi, header) == contract::MC_HOST_LAYOUT_ATTACHMENT_API_HEADER_OFFSET
+    );
+    assert!(
+        offset_of!(AttachmentApi, plan_create)
+            == contract::MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_CREATE_OFFSET
+    );
+    assert!(
+        offset_of!(AttachmentApi, plan_add)
+            == contract::MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_ADD_OFFSET
+    );
+    assert!(
+        offset_of!(AttachmentApi, plan_seal)
+            == contract::MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_SEAL_OFFSET
+    );
+    assert!(
+        offset_of!(AttachmentApi, plan_close)
+            == contract::MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_CLOSE_OFFSET
+    );
+    assert!(size_of::<EffectInfo>() == contract::MC_HOST_LAYOUT_EFFECT_INFO_SIZE);
+    assert!(align_of::<EffectInfo>() == contract::MC_HOST_LAYOUT_EFFECT_INFO_ALIGN);
+    assert!(offset_of!(EffectInfo, header) == contract::MC_HOST_LAYOUT_EFFECT_INFO_HEADER_OFFSET);
+    assert!(offset_of!(EffectInfo, kind) == contract::MC_HOST_LAYOUT_EFFECT_INFO_KIND_OFFSET);
+    assert!(
+        offset_of!(EffectInfo, reserved) == contract::MC_HOST_LAYOUT_EFFECT_INFO_RESERVED_OFFSET
+    );
+    assert!(offset_of!(EffectInfo, length) == contract::MC_HOST_LAYOUT_EFFECT_INFO_LENGTH_OFFSET);
+    assert!(size_of::<EffectApi>() == contract::MC_HOST_LAYOUT_EFFECT_API_SIZE);
+    assert!(align_of::<EffectApi>() == contract::MC_HOST_LAYOUT_EFFECT_API_ALIGN);
+    assert!(offset_of!(EffectApi, header) == contract::MC_HOST_LAYOUT_EFFECT_API_HEADER_OFFSET);
+    assert!(offset_of!(EffectApi, next) == contract::MC_HOST_LAYOUT_EFFECT_API_NEXT_OFFSET);
+    assert!(offset_of!(EffectApi, read) == contract::MC_HOST_LAYOUT_EFFECT_API_READ_OFFSET);
+    assert!(offset_of!(EffectApi, release) == contract::MC_HOST_LAYOUT_EFFECT_API_RELEASE_OFFSET);
+    assert!(offset_of!(EffectApi, respond) == contract::MC_HOST_LAYOUT_EFFECT_API_RESPOND_OFFSET);
+    assert!(offset_of!(EffectApi, ack) == contract::MC_HOST_LAYOUT_EFFECT_API_ACK_OFFSET);
 };
 
 struct RuntimeSlot {
@@ -1100,6 +1170,14 @@ unsafe extern "C" fn get_interface(
             contract::MC_HOST_IFACE_OPERATION_V1 => (
                 &operation_api::OPERATION_API as *const OperationApi as *const u8,
                 size_of::<OperationApi>(),
+            ),
+            contract::MC_HOST_IFACE_ATTACHMENT_V1 => (
+                &attachment_api::ATTACHMENT_API as *const AttachmentApi as *const u8,
+                size_of::<AttachmentApi>(),
+            ),
+            contract::MC_HOST_IFACE_EFFECT_V1 => (
+                &effect_api::EFFECT_API as *const EffectApi as *const u8,
+                size_of::<EffectApi>(),
             ),
             _ => return Err(contract::MC_HOST_UNSUPPORTED),
         };

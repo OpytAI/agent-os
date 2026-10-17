@@ -138,7 +138,7 @@ pub unsafe extern "C" fn vm_create(
         ) {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
-        if plan != 0 || options.flags & !contract::MC_HOST_VM_CREATE_DETERMINISTIC != 0 {
+        if options.flags & !contract::MC_HOST_VM_CREATE_DETERMINISTIC != 0 {
             return Err(contract::MC_HOST_UNSUPPORTED);
         }
         if (options.terminal_cols == 0) != (options.terminal_rows == 0) {
@@ -206,7 +206,7 @@ pub unsafe extern "C" fn vm_create(
         };
         unsafe { *out_vm = 0 };
         let active = ActiveRuntime::acquire(runtime)?;
-        let handle = active.state.create_vm(kernel, config)?;
+        let handle = active.state.create_vm(kernel, plan, config)?;
         unsafe { *out_vm = handle };
         Ok(())
     })
@@ -299,7 +299,8 @@ fn status_value(report: VmReport, size: usize) -> VmStatus {
             | u32::from(report.at_prompt) * contract::MC_HOST_VM_FLAG_AT_PROMPT
             | u32::from(output.record_count != 0) * contract::MC_HOST_VM_FLAG_OUTPUT_READY
             | u32::from(report.operation_ready) * contract::MC_HOST_VM_FLAG_OPERATION_READY
-            | u32::from(report.operation_pending) * contract::MC_HOST_VM_FLAG_OPERATION_PENDING,
+            | u32::from(report.operation_pending) * contract::MC_HOST_VM_FLAG_OPERATION_PENDING
+            | u32::from(report.effect_ready) * contract::MC_HOST_VM_FLAG_EFFECT_READY,
         exit_code: observed.exit_code.unwrap_or(0),
         output_records: output.record_count as u64,
         output_bytes: output.retained_bytes as u64,

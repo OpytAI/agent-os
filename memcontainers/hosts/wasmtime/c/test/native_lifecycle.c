@@ -52,6 +52,10 @@ static void put_u32(wire *out, uint32_t value) {
   for (unsigned shift = 0; shift < 32; shift += 8) put_u8(out, (uint8_t)(value >> shift));
 }
 
+static void put_u64(wire *out, uint64_t value) {
+  for (unsigned shift = 0; shift < 64; shift += 8) put_u8(out, (uint8_t)(value >> shift));
+}
+
 static void put_bytes(wire *out, const uint8_t *bytes, size_t length) {
   need(length <= UINT32_MAX, "wire length");
   put_u32(out, (uint32_t)length);
@@ -63,6 +67,14 @@ static uint32_t read_u32(const uint8_t *bytes, size_t length, size_t *offset) {
   uint32_t value = 0;
   for (unsigned shift = 0; shift < 32; shift += 8)
     value |= (uint32_t)bytes[(*offset)++] << shift;
+  return value;
+}
+
+static uint64_t read_u64(const uint8_t *bytes, size_t length, size_t *offset) {
+  need(*offset <= length && length - *offset >= 8, "wire u64");
+  uint64_t value = 0;
+  for (unsigned shift = 0; shift < 64; shift += 8)
+    value |= (uint64_t)bytes[(*offset)++] << shift;
   return value;
 }
 
@@ -147,6 +159,214 @@ static wire service_request(const char *service, const char *body) {
   put_u32(&envelope, MC_HOST_OP_SERVICE_CALL);
   put_bytes(&envelope, request.bytes, request.length);
   return envelope;
+}
+
+static wire mount_request(uint32_t kind, const char *path) {
+  wire request = {0}, envelope = {0};
+  put_u16(&request, 30); /* MountRequest v1 */
+  put_u8(&request, 1);
+  put_bytes(&request, (const uint8_t *)path, strlen(path));
+  put_u8(&request, 0); /* writable mount or unmount */
+  put_u16(&envelope, 21);
+  put_u8(&envelope, 1);
+  put_u32(&envelope, kind);
+  put_bytes(&envelope, request.bytes, request.length);
+  return envelope;
+}
+
+static void run_mount_relay(const mc_host_vm_api_v1 *vm_api,
+                            const mc_host_operation_api_v1 *op_api,
+                            const mc_host_effect_api_v1 *effect_api,
+                            mc_host_runtime_t runtime, mc_host_handle_t vm) {
+  wire mount = mount_request(MC_HOST_OP_MOUNT, "/mnt/capi");
+  mc_host_handle_t mount_op = 0;
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){mount.bytes, mount.length},
+                      &mount_op, NULL), "mount registered native driver");
+  mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
+  check(op_api->poll(runtime, mount_op, &status, NULL), "poll native mount");
+  need(status.state == MC_HOST_OP_READY, "mount installed before guest sees it");
+  check(op_api->close(runtime, mount_op, NULL), "close mount operation");
+
+  wire stat = filesystem_request(MC_HOST_OP_FS_STAT, "/mnt/capi/missing", NULL, 0);
+  mc_host_handle_t stat_op = 0;
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){stat.bytes, stat.length},
+                      &stat_op, NULL), "start mount-backed stat");
+  mc_host_handle_t event = 0;
+  mc_host_effect_info_v1 info = MC_HOST_INIT(mc_host_effect_info_v1);
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    options.stop_mask = MC_HOST_DRIVE_ON_EFFECT;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "drive mount-backed stat");
+    mc_host_result_t next = effect_api->next(runtime, vm,
+                           UINT64_C(1) << MC_HOST_EVENT_HOST_CALL,
+                           &event, &info, NULL);
+    if (next == MC_HOST_OK) break;
+    need(next == MC_HOST_WOULD_BLOCK, "host-call event eventually arrives");
+  }
+  need(event != 0 && info.kind == MC_HOST_EVENT_HOST_CALL && info.length < 256,
+       "lease real mount-driver request");
+  uint8_t frame[256];
+  mc_host_buffer_v1 event_buffer = {frame, sizeof(frame), 0};
+  check(effect_api->read(runtime, event, &event_buffer, NULL), "read mount-driver request");
+  size_t offset = 0;
+  need(read_u16(frame, event_buffer.required, &offset) == 23 &&
+           read_u8(frame, event_buffer.required, &offset) == 1 &&
+           read_u32(frame, event_buffer.required, &offset) == MC_HOST_EVENT_HOST_CALL &&
+           read_u64(frame, event_buffer.required, &offset) == event &&
+           read_u64(frame, event_buffer.required, &offset) == vm &&
+           read_u8(frame, event_buffer.required, &offset) == 0 &&
+           read_u8(frame, event_buffer.required, &offset) == 0 &&
+           read_u32(frame, event_buffer.required, &offset) == 0,
+       "effect identity and kind");
+  uint32_t payload_len = read_u32(frame, event_buffer.required, &offset);
+  need(payload_len == event_buffer.required - offset &&
+           read_u16(frame, event_buffer.required, &offset) == 31 &&
+           read_u8(frame, event_buffer.required, &offset) == 1,
+       "host-call event payload");
+  uint32_t name_len = read_u32(frame, event_buffer.required, &offset);
+  need(name_len == strlen("/mnt/capi") && name_len <= event_buffer.required - offset &&
+           memcmp(frame + offset, "/mnt/capi", name_len) == 0,
+       "mount route identity");
+  offset += name_len;
+  uint32_t request_len = read_u32(frame, event_buffer.required, &offset);
+  need(request_len == event_buffer.required - offset && request_len >= 4 &&
+           read_u32(frame, event_buffer.required, &offset) == 5,
+       "mount driver received one stat request");
+
+  mc_host_handle_t first_lease = event;
+  check(effect_api->release(runtime, first_lease, NULL), "release mount-driver lease");
+  check(effect_api->next(runtime, vm, UINT64_C(1) << MC_HOST_EVENT_HOST_CALL,
+                         &event, &info, NULL), "lease released mount-driver request");
+  need(event != first_lease && info.kind == MC_HOST_EVENT_HOST_CALL,
+       "released effect has a fresh lease handle");
+  need(effect_api->read(runtime, first_lease, &event_buffer, NULL) == MC_HOST_STALE_HANDLE,
+       "released effect handle is stale");
+
+  /* Keep the kernel waiting across the 256-tick stale-inflight threshold. */
+  for (int attempt = 0; attempt < 300; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 1;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "drive pending mount driver");
+  }
+  mc_host_handle_t duplicate = 0;
+  mc_host_effect_info_v1 duplicate_info = MC_HOST_INIT(mc_host_effect_info_v1);
+  need(effect_api->next(runtime, vm, 0, &duplicate, &duplicate_info, NULL) == MC_HOST_WOULD_BLOCK,
+       "retryable control call did not duplicate the driver request");
+
+  wire reply = {0}, response = {0};
+  put_u16(&reply, 32); /* HostCallResponse v1 */
+  put_u8(&reply, 1);
+  put_u8(&reply, 0); /* not a transport failure */
+  const uint8_t enoent[] = {44, 0, 0, 0}; /* ENOENT from constants.kdl */
+  put_bytes(&reply, enoent, sizeof(enoent));
+  put_u16(&response, 24); /* EffectResponse v1 */
+  put_u8(&response, 1);
+  put_u32(&response, MC_HOST_EVENT_HOST_CALL);
+  put_u64(&response, event);
+  put_bytes(&response, reply.bytes, reply.length);
+  check(effect_api->respond(runtime, event,
+                            (mc_host_bytes_v1){response.bytes, response.length}, NULL),
+        "respond to mount-driver request");
+  need(effect_api->respond(runtime, event,
+                           (mc_host_bytes_v1){response.bytes, response.length}, NULL) ==
+           MC_HOST_STALE_HANDLE,
+       "host-call response cannot be repeated");
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    options.stop_mask = MC_HOST_DRIVE_ON_OPERATION;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "finish mount-backed stat");
+    check(op_api->poll(runtime, stat_op, &status, NULL), "poll mount-backed stat");
+    if (status.state == MC_HOST_OP_READY) break;
+    need(status.state == MC_HOST_OP_PENDING, "mount-backed stat remains pending");
+  }
+  need(status.state == MC_HOST_OP_READY && status.result_length < 64,
+       "mount-backed stat completes");
+  uint8_t result[64];
+  mc_host_buffer_v1 result_buffer = {result, sizeof(result), 0};
+  check(op_api->result(runtime, stat_op, &result_buffer, NULL), "read mount-backed stat result");
+  offset = 0;
+  need(read_u16(result, result_buffer.required, &offset) == 22 &&
+           read_u8(result, result_buffer.required, &offset) == 1 &&
+           read_u32(result, result_buffer.required, &offset) == MC_HOST_OP_FS_STAT &&
+           (int32_t)read_u32(result, result_buffer.required, &offset) == -44,
+       "driver errno reaches the control caller");
+  check(op_api->close(runtime, stat_op, NULL), "close mount-backed stat");
+
+  wire unmount = mount_request(MC_HOST_OP_UNMOUNT, "/mnt/capi");
+  mc_host_handle_t unmount_op = 0;
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){unmount.bytes, unmount.length},
+                      &unmount_op, NULL), "unmount native driver");
+  check(op_api->close(runtime, unmount_op, NULL), "close unmount operation");
+}
+
+static void cancel_mount_relay(const mc_host_vm_api_v1 *vm_api,
+                               const mc_host_operation_api_v1 *op_api,
+                               const mc_host_effect_api_v1 *effect_api,
+                               mc_host_runtime_t runtime, mc_host_handle_t vm) {
+  wire mount = mount_request(MC_HOST_OP_MOUNT, "/mnt/capi");
+  mc_host_handle_t mount_op = 0;
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){mount.bytes, mount.length},
+                      &mount_op, NULL), "remount native driver");
+  check(op_api->close(runtime, mount_op, NULL), "close remount operation");
+  wire stat = filesystem_request(MC_HOST_OP_FS_STAT, "/mnt/capi/cancelled", NULL, 0);
+  mc_host_handle_t stat_op = 0;
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){stat.bytes, stat.length},
+                      &stat_op, NULL), "start cancellable mount stat");
+  mc_host_handle_t event = 0;
+  mc_host_effect_info_v1 info = MC_HOST_INIT(mc_host_effect_info_v1);
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    options.stop_mask = MC_HOST_DRIVE_ON_EFFECT;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "drive cancellable mount stat");
+    mc_host_result_t next = effect_api->next(runtime, vm, 0, &event, &info, NULL);
+    if (next == MC_HOST_OK) break;
+    need(next == MC_HOST_WOULD_BLOCK, "cancellable driver request arrives");
+  }
+  need(event != 0 && info.kind == MC_HOST_EVENT_HOST_CALL,
+       "lease cancellable host call");
+  need(vm_api->vm_cancel_and_close(runtime, vm, NULL) == MC_HOST_BUSY,
+       "cancelled VM waits for adopted effect and operation");
+  mc_host_buffer_v1 cancelled_buffer = {0};
+  need(effect_api->read(runtime, event, &cancelled_buffer, NULL) == MC_HOST_CANCELLED,
+       "original effect becomes cancelled");
+  mc_host_handle_t notice = 0;
+  mc_host_effect_info_v1 notice_info = MC_HOST_INIT(mc_host_effect_info_v1);
+  check(effect_api->next(runtime, vm, 0, &notice, &notice_info, NULL),
+        "lease host-call cancellation notice");
+  need(notice_info.kind == MC_HOST_EVENT_HOST_CALL_CLOSE && notice != event,
+       "one cancellation notice names the adopted effect");
+  uint8_t frame[128];
+  mc_host_buffer_v1 buffer = {frame, sizeof(frame), 0};
+  check(effect_api->read(runtime, notice, &buffer, NULL), "read cancellation notice");
+  size_t offset = 0;
+  need(read_u16(frame, buffer.required, &offset) == 23 &&
+           read_u8(frame, buffer.required, &offset) == 1 &&
+           read_u32(frame, buffer.required, &offset) == MC_HOST_EVENT_HOST_CALL_CLOSE,
+       "cancellation event envelope");
+  offset += 8 + 8; /* event and VM identities */
+  need(read_u8(frame, buffer.required, &offset) == 0 &&
+           read_u8(frame, buffer.required, &offset) == 0 &&
+           read_u32(frame, buffer.required, &offset) == 0 &&
+           read_u32(frame, buffer.required, &offset) == 11 &&
+           read_u16(frame, buffer.required, &offset) == 33 &&
+           read_u8(frame, buffer.required, &offset) == 1 &&
+           read_u64(frame, buffer.required, &offset) == event,
+       "cancellation notice identifies the original lease");
+  check(effect_api->ack(runtime, notice, NULL), "acknowledge effect cancellation");
+  need(effect_api->read(runtime, event, &cancelled_buffer, NULL) == MC_HOST_STALE_HANDLE,
+       "ack retires original effect handle");
+  mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
+  check(op_api->poll(runtime, stat_op, &status, NULL), "observe cancelled filesystem call");
+  need(status.state == MC_HOST_OP_CANCELLED, "filesystem operation cancelled");
+  check(op_api->close(runtime, stat_op, NULL), "close cancelled filesystem call");
+  check(vm_api->vm_close(runtime, vm, NULL), "finish closing source VM");
 }
 
 static void run_layer_commit(const mc_host_operation_api_v1 *op_api,
@@ -532,10 +752,32 @@ int main(int argc, char **argv) {
   mc_host_output_api_v1 output_api = MC_HOST_INIT(mc_host_output_api_v1);
   mc_host_snapshot_api_v1 snap_api = MC_HOST_INIT(mc_host_snapshot_api_v1);
   mc_host_operation_api_v1 op_api = MC_HOST_INIT(mc_host_operation_api_v1);
+  mc_host_attachment_api_v1 attachment_api = MC_HOST_INIT(mc_host_attachment_api_v1);
+  mc_host_effect_api_v1 effect_api = MC_HOST_INIT(mc_host_effect_api_v1);
   check(api.get_interface(runtime, MC_HOST_IFACE_VM_V1, 1, sizeof(vm_api), &vm_api, NULL), "VM table");
   check(api.get_interface(runtime, MC_HOST_IFACE_OUTPUT_V1, 1, sizeof(output_api), &output_api, NULL), "output table");
   check(api.get_interface(runtime, MC_HOST_IFACE_SNAPSHOT_V1, 1, sizeof(snap_api), &snap_api, NULL), "snapshot table");
   check(api.get_interface(runtime, MC_HOST_IFACE_OPERATION_V1, 1, sizeof(op_api), &op_api, NULL), "operation table");
+  check(api.get_interface(runtime, MC_HOST_IFACE_ATTACHMENT_V1, 1, sizeof(attachment_api),
+                          &attachment_api, NULL), "attachment table");
+  check(api.get_interface(runtime, MC_HOST_IFACE_EFFECT_V1, 1, sizeof(effect_api),
+                          &effect_api, NULL), "effect table");
+
+  mc_host_handle_t plan = 0;
+  check(attachment_api.plan_create(runtime, &plan, NULL), "create attachment plan");
+  wire route = {0}, definition = {0};
+  put_u16(&route, 29); /* HostCallAttachment v1 */
+  put_u8(&route, 1);
+  put_bytes(&route, (const uint8_t *)"/mnt/capi", strlen("/mnt/capi"));
+  put_bytes(&route, (const uint8_t *)"native-test-driver", strlen("native-test-driver"));
+  put_u16(&definition, 20); /* AttachmentDefinition v1 */
+  put_u8(&definition, 1);
+  put_u32(&definition, MC_HOST_ATTACHMENT_HOST_CALL);
+  put_bytes(&definition, route.bytes, route.length);
+  check(attachment_api.plan_add(runtime, plan,
+                                (mc_host_bytes_v1){definition.bytes, definition.length}, NULL),
+        "register native mount driver");
+  check(attachment_api.plan_seal(runtime, plan, NULL), "seal attachment plan");
 
   mc_host_handle_t kernel_handle = 0;
   mc_host_kernel_info_v1 kernel_info = MC_HOST_INIT(mc_host_kernel_info_v1);
@@ -555,7 +797,7 @@ int main(int argc, char **argv) {
   create.layer_count = 1;
   create.requested_workers = -1;
   mc_host_handle_t vm = 0;
-  check(vm_api.vm_create(runtime, kernel_handle, 0, &create, &vm, NULL), "boot real image");
+  check(vm_api.vm_create(runtime, kernel_handle, plan, &create, &vm, NULL), "boot real image");
   need(api.runtime_close(runtime, NULL) == MC_HOST_BUSY, "runtime owns children");
   mc_host_vm_status_v1 status = MC_HOST_INIT(mc_host_vm_status_v1);
   need(vm_api.vm_status(runtime, kernel_handle, &status, NULL) == MC_HOST_WRONG_KIND,
@@ -566,6 +808,7 @@ int main(int argc, char **argv) {
   run_layer_commit(&op_api, runtime, vm);
   run_autocomplete(&vm_api, &op_api, runtime, vm);
   run_service_call(&vm_api, &op_api, runtime, vm);
+  run_mount_relay(&vm_api, &op_api, &effect_api, runtime, vm);
 
   mc_host_snapshot_begin_options_v1 full_options = MC_HOST_INIT(mc_host_snapshot_begin_options_v1);
   full_options.mode = MC_HOST_SNAPSHOT_FULL;
@@ -623,9 +866,10 @@ int main(int argc, char **argv) {
   drive_to_prompt(&vm_api, &output_api, runtime, restored, "agentos-git");
 
   cancel_vm_with_operation(&vm_api, &op_api, runtime, restored);
-  check(vm_api.vm_close(runtime, vm, NULL), "close source VM");
+  cancel_mount_relay(&vm_api, &op_api, &effect_api, runtime, vm);
   check(snap_api.baseline_close(runtime, baseline, NULL), "close baseline");
   check(vm_api.kernel_close(runtime, kernel_handle, NULL), "close kernel");
+  check(attachment_api.plan_close(runtime, plan, NULL), "close attachment plan");
   check(api.runtime_close(runtime, NULL), "close runtime");
   free(delta);
   free(full);

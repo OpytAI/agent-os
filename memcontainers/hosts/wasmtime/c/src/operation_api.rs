@@ -6,7 +6,7 @@ use constants_rust::{
     AUTOCOMPLETE_MAX_FRAME_BYTES, AUTOCOMPLETE_MAX_ITEMS, EXEC_MODE_DIRECT, EXEC_MODE_SHELL,
 };
 use ctl_rust::{AutocompleteRequest, ExecRequest, SvcRequest};
-use embedder_rust::{self as contract, FilesystemRequest, OperationRequest};
+use embedder_rust::{self as contract, FilesystemRequest, MountRequest, OperationRequest};
 use host::ControlRetryAction;
 
 use super::vm_api::{bytes, copy_output, output_size};
@@ -109,6 +109,22 @@ pub unsafe extern "C" fn start(
         let envelope =
             OperationRequest::decode(frame).map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
         let operation = match envelope.kind {
+            contract::MC_HOST_OP_MOUNT | contract::MC_HOST_OP_UNMOUNT => {
+                let request = MountRequest::decode(&envelope.payload)
+                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+                if envelope.kind == contract::MC_HOST_OP_UNMOUNT && request.read_only {
+                    return Err(contract::MC_HOST_INVALID_ARGUMENT);
+                }
+                ActiveRuntime::acquire(runtime)?.state.start_mount(
+                    vm,
+                    &request.path,
+                    if envelope.kind == contract::MC_HOST_OP_MOUNT {
+                        Some(request.read_only)
+                    } else {
+                        None
+                    },
+                )?
+            }
             contract::MC_HOST_OP_COMMIT_LAYER => {
                 if !envelope.payload.is_empty() {
                     return Err(contract::MC_HOST_INVALID_ARGUMENT);

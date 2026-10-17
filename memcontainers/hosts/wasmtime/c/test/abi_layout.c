@@ -172,6 +172,27 @@ CHECK_FIELD(mc_host_operation_status_v1, OPERATION_STATUS, reserved, RESERVED);
 CHECK_FIELD(mc_host_operation_status_v1, OPERATION_STATUS, result_length, RESULT_LENGTH);
 
 CHECK_LAYOUT(mc_host_operation_api_v1, OPERATION_API);
+
+CHECK_LAYOUT(mc_host_attachment_api_v1, ATTACHMENT_API);
+CHECK_FIELD(mc_host_attachment_api_v1, ATTACHMENT_API, header, HEADER);
+CHECK_FIELD(mc_host_attachment_api_v1, ATTACHMENT_API, plan_create, PLAN_CREATE);
+CHECK_FIELD(mc_host_attachment_api_v1, ATTACHMENT_API, plan_add, PLAN_ADD);
+CHECK_FIELD(mc_host_attachment_api_v1, ATTACHMENT_API, plan_seal, PLAN_SEAL);
+CHECK_FIELD(mc_host_attachment_api_v1, ATTACHMENT_API, plan_close, PLAN_CLOSE);
+
+CHECK_LAYOUT(mc_host_effect_info_v1, EFFECT_INFO);
+CHECK_FIELD(mc_host_effect_info_v1, EFFECT_INFO, header, HEADER);
+CHECK_FIELD(mc_host_effect_info_v1, EFFECT_INFO, kind, KIND);
+CHECK_FIELD(mc_host_effect_info_v1, EFFECT_INFO, reserved, RESERVED);
+CHECK_FIELD(mc_host_effect_info_v1, EFFECT_INFO, length, LENGTH);
+
+CHECK_LAYOUT(mc_host_effect_api_v1, EFFECT_API);
+CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, header, HEADER);
+CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, next, NEXT);
+CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, read, READ);
+CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, release, RELEASE);
+CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, respond, RESPOND);
+CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, ack, ACK);
 CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, header, HEADER);
 CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, start, START);
 CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, poll, POLL);

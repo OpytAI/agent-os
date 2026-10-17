@@ -1,9 +1,10 @@
 //! Runtime-owned kernel identities. Child resources use the same namespace,
 //! kind, generation, and slot encoding as runtime handles.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 
-use embedder_rust as contract;
+use embedder_rust::{self as contract, EffectEvent, HostCallResponse};
 use host::output_queue::{OutputQueue, OutputRecord, OutputStats, LOG, STDERR, STDOUT};
 use host::{
     inspect_snapshot_bytes, ControlRetryAction, ExecOptions, KernelCacheLimit, KernelHost,
@@ -11,6 +12,7 @@ use host::{
 };
 
 use super::operations::OperationRecord;
+use super::relay::Relay;
 use super::{pack_kind, unpack, MAX_GENERATION, MAX_INDEX};
 
 pub const KERNEL_KIND: u8 = 2;
@@ -19,6 +21,8 @@ pub const OUTPUT_KIND: u8 = 4;
 pub const BASELINE_KIND: u8 = 5;
 pub const SNAPSHOT_KIND: u8 = 6;
 pub const OPERATION_KIND: u8 = 7;
+pub const PLAN_KIND: u8 = 8;
+pub const EFFECT_KIND: u8 = 9;
 const MAX_KERNELS: usize = 64;
 const MAX_KERNEL_BYTES: usize = 256 * 1024 * 1024;
 const MAX_VMS: usize = 16;
@@ -30,6 +34,18 @@ const OUTPUT_MAX_RECORDS: usize = 4_096;
 const SNAPSHOT_MAX_BYTES: usize = 512 * 1024 * 1024;
 const SNAPSHOT_TOTAL_BYTES: usize = 1024 * 1024 * 1024;
 const MAX_OPERATIONS_PER_VM: usize = 64;
+const MAX_PLANS: usize = 64;
+
+#[derive(Default)]
+struct PlanRecord {
+    routes: BTreeMap<String, String>,
+    sealed: bool,
+}
+
+struct EffectRecord {
+    vm: u64,
+    event_id: u64,
+}
 
 struct Slot<T> {
     generation: u32,
@@ -140,6 +156,7 @@ pub struct VmRecord {
     pub output: Arc<OutputQueue>,
     observed: Mutex<VmObserved>,
     operations: Mutex<Vec<Weak<OperationRecord>>>,
+    relay: Option<Arc<Relay>>,
     // The Rust host memoizes baseline integrity by buffer address. Keep the
     // immutable full MCSN bytes at that address until this VM is closed.
     _snapshot_anchor: Option<Arc<[u8]>>,
@@ -173,6 +190,7 @@ pub struct VmReport {
     pub at_prompt: bool,
     pub operation_ready: bool,
     pub operation_pending: bool,
+    pub effect_ready: bool,
 }
 
 pub struct VmConfig {
@@ -235,6 +253,13 @@ impl VmRecord {
                 return Err(contract::MC_HOST_NOT_QUIESCENT);
             }
         }
+        if self
+            .relay
+            .as_ref()
+            .is_some_and(|relay| relay.has_live_events())
+        {
+            return Err(contract::MC_HOST_NOT_QUIESCENT);
+        }
         if host
             .inflight_egress()
             .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?
@@ -287,6 +312,7 @@ impl VmRecord {
             at_prompt: host.at_prompt(),
             operation_ready,
             operation_pending,
+            effect_ready: self.relay.as_ref().is_some_and(|relay| relay.ready()),
         })
     }
 
@@ -299,6 +325,7 @@ impl VmRecord {
                 Ok(VmReport {
                     operation_ready,
                     operation_pending,
+                    effect_ready: self.relay.as_ref().is_some_and(|relay| relay.ready()),
                     observed: *self
                         .observed
                         .lock()
@@ -353,7 +380,10 @@ impl VmRecord {
         if max_ticks == 0 || max_ticks > MAX_DRIVE_TICKS {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
-        if stop_mask & !(contract::MC_HOST_DRIVE_ON_OUTPUT | contract::MC_HOST_DRIVE_ON_OPERATION)
+        if stop_mask
+            & !(contract::MC_HOST_DRIVE_ON_OUTPUT
+                | contract::MC_HOST_DRIVE_ON_OPERATION
+                | contract::MC_HOST_DRIVE_ON_EFFECT)
             != 0
         {
             return Err(contract::MC_HOST_UNSUPPORTED);
@@ -387,6 +417,14 @@ impl VmRecord {
                 stop_reason = contract::MC_HOST_DRIVE_STOP_OUTPUT;
                 break;
             }
+            if self
+                .relay
+                .as_ref()
+                .is_some_and(|relay| relay.above_high_water())
+            {
+                stop_reason = contract::MC_HOST_DRIVE_STOP_EFFECT;
+                break;
+            }
             if stop_mask & contract::MC_HOST_DRIVE_ON_OUTPUT != 0 && output.record_count != 0 {
                 stop_reason = contract::MC_HOST_DRIVE_STOP_OUTPUT;
                 break;
@@ -395,6 +433,12 @@ impl VmRecord {
                 && self.operation_readiness()?.0
             {
                 stop_reason = contract::MC_HOST_DRIVE_STOP_OPERATION;
+                break;
+            }
+            if stop_mask & contract::MC_HOST_DRIVE_ON_EFFECT != 0
+                && self.relay.as_ref().is_some_and(|relay| relay.ready())
+            {
+                stop_reason = contract::MC_HOST_DRIVE_STOP_EFFECT;
                 break;
             }
             let tick = match host.tick() {
@@ -464,6 +508,12 @@ impl VmRecord {
                 stop_reason = contract::MC_HOST_DRIVE_STOP_OPERATION;
                 break;
             }
+            if stop_mask & contract::MC_HOST_DRIVE_ON_EFFECT != 0
+                && self.relay.as_ref().is_some_and(|relay| relay.ready())
+            {
+                stop_reason = contract::MC_HOST_DRIVE_STOP_EFFECT;
+                break;
+            }
             if tick == TickState::Waiting {
                 stop_reason = contract::MC_HOST_DRIVE_STOP_WAITING;
                 break;
@@ -485,6 +535,8 @@ struct Resources {
     baselines: HandleTable<Arc<SnapshotRecord>>,
     snapshots: HandleTable<Arc<SnapshotRecord>>,
     operations: HandleTable<Arc<OperationRecord>>,
+    plans: HandleTable<PlanRecord>,
+    effects: HandleTable<EffectRecord>,
     snapshot_bytes: usize,
 }
 
@@ -513,6 +565,8 @@ impl RuntimeState {
                 baselines: HandleTable::new(BASELINE_KIND),
                 snapshots: HandleTable::new(SNAPSHOT_KIND),
                 operations: HandleTable::new(OPERATION_KIND),
+                plans: HandleTable::new(PLAN_KIND),
+                effects: HandleTable::new(EFFECT_KIND),
                 snapshot_bytes: 0,
             }),
         }
@@ -526,7 +580,189 @@ impl RuntimeState {
                 && resources.baselines.live == 0
                 && resources.snapshots.live == 0
                 && resources.operations.live == 0
+                && resources.plans.live == 0
+                && resources.effects.live == 0
         })
+    }
+
+    pub fn create_plan(&self) -> Result<u64, u32> {
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if resources.plans.live >= MAX_PLANS {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        resources
+            .plans
+            .insert(self.namespace, PlanRecord::default())
+    }
+
+    pub fn add_host_call_route(
+        &self,
+        plan: u64,
+        name: String,
+        identity: String,
+    ) -> Result<(), u32> {
+        if name.is_empty() || name.contains('\0') || identity.is_empty() || identity.contains('\0')
+        {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let plan = resources.plans.get_mut(self.namespace, plan)?;
+        if plan.sealed {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        if plan.routes.len() >= 128 || plan.routes.contains_key(&name) {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        plan.routes.insert(name, identity);
+        Ok(())
+    }
+
+    pub fn seal_plan(&self, plan: u64) -> Result<(), u32> {
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        resources.plans.get_mut(self.namespace, plan)?.sealed = true;
+        Ok(())
+    }
+
+    pub fn close_plan(&self, plan: u64) -> Result<(), u32> {
+        self.resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .plans
+            .remove(self.namespace, plan)?;
+        Ok(())
+    }
+
+    fn plan_routes(&self, plan: u64) -> Result<Option<BTreeMap<String, String>>, u32> {
+        if plan == 0 {
+            return Ok(None);
+        }
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let plan = resources.plans.get(self.namespace, plan)?;
+        if !plan.sealed {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        Ok(Some(plan.routes.clone()))
+    }
+
+    pub fn effect_next(&self, vm_handle: u64, mask: u64) -> Result<(u64, u32, u64), u32> {
+        let vm = self.vm(vm_handle)?;
+        let relay = vm.relay.as_ref().ok_or(contract::MC_HOST_UNSUPPORTED)?;
+        let leased = relay.next(mask)?.ok_or(contract::MC_HOST_WOULD_BLOCK)?;
+        let handle = {
+            let mut resources = self
+                .resources
+                .lock()
+                .map_err(|_| contract::MC_HOST_INTERNAL)?;
+            resources.effects.insert(
+                self.namespace,
+                EffectRecord {
+                    vm: vm_handle,
+                    event_id: leased.id,
+                },
+            )
+        };
+        let handle = match handle {
+            Ok(handle) => handle,
+            Err(error) => {
+                relay.unlease(leased.id);
+                return Err(error);
+            }
+        };
+        if let Err(error) = relay.bind_handle(leased.id, handle) {
+            self.resources
+                .lock()
+                .map_err(|_| contract::MC_HOST_INTERNAL)?
+                .effects
+                .remove(self.namespace, handle)?;
+            relay.unlease(leased.id);
+            return Err(error);
+        }
+        let frame = EffectEvent {
+            kind: leased.kind,
+            event_id: handle as i64,
+            vm_id: vm_handle as i64,
+            operation_id: None,
+            socket_id: None,
+            flags: 0,
+            payload: leased.payload,
+        }
+        .encode();
+        Ok((handle, leased.kind, frame.len() as u64))
+    }
+
+    fn effect_record(&self, handle: u64) -> Result<(u64, u64, Arc<Relay>), u32> {
+        let (vm_handle, event_id) = {
+            let mut resources = self
+                .resources
+                .lock()
+                .map_err(|_| contract::MC_HOST_INTERNAL)?;
+            let record = resources.effects.get(self.namespace, handle)?;
+            (record.vm, record.event_id)
+        };
+        let vm = self.vm(vm_handle)?;
+        let relay = Arc::clone(vm.relay.as_ref().ok_or(contract::MC_HOST_INTERNAL)?);
+        Ok((vm_handle, event_id, relay))
+    }
+
+    pub fn effect_frame(&self, handle: u64) -> Result<Vec<u8>, u32> {
+        let (vm, event_id, relay) = self.effect_record(handle)?;
+        let (kind, payload) = relay.event(event_id, handle)?;
+        Ok(EffectEvent {
+            kind,
+            event_id: handle as i64,
+            vm_id: vm as i64,
+            operation_id: None,
+            socket_id: None,
+            flags: 0,
+            payload,
+        }
+        .encode())
+    }
+
+    pub fn effect_release(&self, handle: u64) -> Result<(), u32> {
+        let (_, event_id, relay) = self.effect_record(handle)?;
+        relay.release(event_id, handle)?;
+        self.resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .effects
+            .remove(self.namespace, handle)?;
+        Ok(())
+    }
+
+    pub fn effect_respond(&self, handle: u64, response: HostCallResponse) -> Result<(), u32> {
+        let (_, event_id, relay) = self.effect_record(handle)?;
+        relay.respond(event_id, handle, response)?;
+        self.resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .effects
+            .remove(self.namespace, handle)?;
+        Ok(())
+    }
+
+    pub fn effect_ack(&self, handle: u64) -> Result<(), u32> {
+        let (_, event_id, relay) = self.effect_record(handle)?;
+        let original_handle = relay.ack_cancelled(event_id, handle)?;
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        resources.effects.remove(self.namespace, handle)?;
+        resources.effects.remove(self.namespace, original_handle)?;
+        Ok(())
     }
 
     pub fn load_kernel(&self, wasm: &[u8]) -> Result<(u64, [u8; 32]), u32> {
@@ -607,7 +843,12 @@ impl RuntimeState {
         Ok(())
     }
 
-    pub fn create_vm(&self, kernel_handle: u64, config: VmConfig) -> Result<u64, u32> {
+    pub fn create_vm(
+        &self,
+        kernel_handle: u64,
+        plan_handle: u64,
+        config: VmConfig,
+    ) -> Result<u64, u32> {
         if config.layers.len() > 64
             || config
                 .layers
@@ -619,6 +860,7 @@ impl RuntimeState {
         {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
+        let routes = self.plan_routes(plan_handle)?;
         let kernel_bytes = {
             let mut resources = self
                 .resources
@@ -647,6 +889,10 @@ impl RuntimeState {
             .with_stdout(Box::new(output.sink(STDOUT)))
             .with_stderr(Box::new(output.sink(STDERR)))
             .with_log(Box::new(output.sink(LOG)));
+        let relay = routes.map(|routes| Relay::new(routes.into_keys().collect()));
+        if let Some(relay) = &relay {
+            builder = builder.with_host_call(relay.adapter());
+        }
         if config.deterministic {
             builder = builder.deterministic();
         }
@@ -682,6 +928,7 @@ impl RuntimeState {
                 closing: false,
             }),
             operations: Mutex::new(Vec::new()),
+            relay,
             _snapshot_anchor: None,
         });
         let inserted = {
@@ -778,6 +1025,7 @@ impl RuntimeState {
                 closing: false,
             }),
             operations: Mutex::new(Vec::new()),
+            relay: None,
             _snapshot_anchor: Some(baseline.unwrap_or(snapshot)),
         });
         let inserted = {
@@ -1135,6 +1383,67 @@ impl RuntimeState {
         }
     }
 
+    pub fn start_mount(
+        &self,
+        vm_handle: u64,
+        path: &str,
+        read_only: Option<bool>,
+    ) -> Result<u64, u32> {
+        if path.is_empty() || !path.starts_with('/') || path.contains('\0') {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        let vm = self.vm(vm_handle)?;
+        let mut host = vm.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
+        let host = host.as_mut().ok_or(contract::MC_HOST_INVALID_STATE)?;
+        let observed = vm.observed.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if observed.closing || observed.exit_code.is_some() {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        if observed.poisoned {
+            return Err(contract::MC_HOST_POISONED);
+        }
+        drop(observed);
+        if read_only.is_some() && !vm.relay.as_ref().is_some_and(|relay| relay.has_route(path)) {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        if vm.live_operations()?.len() >= MAX_OPERATIONS_PER_VM {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        let kind = if read_only.is_some() {
+            contract::MC_HOST_OP_MOUNT
+        } else {
+            contract::MC_HOST_OP_UNMOUNT
+        };
+        let record = Arc::new(OperationRecord::new(vm_handle, kind));
+        let handle = {
+            let mut resources = self
+                .resources
+                .lock()
+                .map_err(|_| contract::MC_HOST_INTERNAL)?;
+            resources
+                .operations
+                .insert(self.namespace, Arc::clone(&record))?
+        };
+        vm.operations
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .push(Arc::downgrade(&record));
+        let result = match read_only {
+            Some(read_only) => host.mount(path, read_only),
+            None => host.unmount(path),
+        };
+        match result {
+            Ok(()) => {
+                record.complete(0, Vec::new())?;
+                Ok(handle)
+            }
+            Err(_) => {
+                self.remove_operation(handle)?;
+                Err(contract::MC_HOST_KERNEL_ERROR)
+            }
+        }
+    }
+
     pub fn start_retry(
         &self,
         vm_handle: u64,
@@ -1346,6 +1655,32 @@ impl RuntimeState {
             }
             return Err(contract::MC_HOST_BUSY);
         }
+        if vm
+            .relay
+            .as_ref()
+            .is_some_and(|relay| relay.has_live_events())
+        {
+            if !was_closing {
+                vm.observed
+                    .lock()
+                    .map_err(|_| contract::MC_HOST_INTERNAL)?
+                    .closing = false;
+            }
+            return Err(contract::MC_HOST_BUSY);
+        }
+        if resources.effects.slots.iter().any(|slot| {
+            slot.value
+                .as_ref()
+                .is_some_and(|effect| effect.vm == handle)
+        }) {
+            if !was_closing {
+                vm.observed
+                    .lock()
+                    .map_err(|_| contract::MC_HOST_INTERNAL)?
+                    .closing = false;
+            }
+            return Err(contract::MC_HOST_BUSY);
+        }
         resources.vms.remove(self.namespace, handle)?;
         let kernel = resources
             .kernels
@@ -1372,6 +1707,9 @@ impl RuntimeState {
             observed.closing = true;
         }
         host.take();
+        if let Some(relay) = &vm.relay {
+            relay.cancel_all();
+        }
         for operation in vm.live_operations()? {
             operation.cancel_after_store_drop()?;
         }

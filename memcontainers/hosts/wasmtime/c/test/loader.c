@@ -29,7 +29,10 @@ int main(int argc, char **argv) {
                       MC_HOST_FEATURE_FS_OPERATION |
                       MC_HOST_FEATURE_AUTOCOMPLETE_OPERATION |
                       MC_HOST_FEATURE_SERVICE_OPERATION |
-                      MC_HOST_FEATURE_COMMIT_OPERATION;
+                      MC_HOST_FEATURE_COMMIT_OPERATION |
+                      MC_HOST_FEATURE_ATTACHMENT_PLAN |
+                      MC_HOST_FEATURE_HOST_CALL_EFFECT |
+                      MC_HOST_FEATURE_MOUNT_OPERATION;
   need(api.header.size == sizeof(api) && api.feature_bits == features,
        "staged feature set");
 
@@ -101,8 +104,13 @@ int main(int argc, char **argv) {
        "VM table prefix");
   need(prefix.size == sizeof(mc_host_vm_api_v1), "VM table reports full size");
   need(api.get_interface(runtime, MC_HOST_IFACE_ATTACHMENT_V1, 1, sizeof(prefix),
-                         &prefix, NULL) == MC_HOST_UNSUPPORTED,
-       "missing attachment table");
+                         &prefix, NULL) == MC_HOST_OK &&
+           prefix.size == sizeof(mc_host_attachment_api_v1),
+       "attachment table prefix");
+  need(api.get_interface(runtime, MC_HOST_IFACE_EFFECT_V1, 1, sizeof(prefix),
+                         &prefix, NULL) == MC_HOST_OK &&
+           prefix.size == sizeof(mc_host_effect_api_v1),
+       "effect table prefix");
   need(api.runtime_close(runtime, NULL) == MC_HOST_OK, "close runtime");
   need(api.runtime_close(runtime, NULL) == MC_HOST_STALE_HANDLE, "stale close");
 

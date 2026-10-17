@@ -39,6 +39,9 @@ pub const MC_HOST_FEATURE_FS_OPERATION: u64 = 16;
 pub const MC_HOST_FEATURE_AUTOCOMPLETE_OPERATION: u64 = 32;
 pub const MC_HOST_FEATURE_SERVICE_OPERATION: u64 = 64;
 pub const MC_HOST_FEATURE_COMMIT_OPERATION: u64 = 128;
+pub const MC_HOST_FEATURE_ATTACHMENT_PLAN: u64 = 256;
+pub const MC_HOST_FEATURE_HOST_CALL_EFFECT: u64 = 512;
+pub const MC_HOST_FEATURE_MOUNT_OPERATION: u64 = 1024;
 pub const MC_HOST_TICK_WAITING: u32 = 0;
 pub const MC_HOST_TICK_RUNNABLE: u32 = 1;
 pub const MC_HOST_TICK_EXITED: u32 = 2;
@@ -61,9 +64,11 @@ pub const MC_HOST_DRIVE_STOP_POISONED: u32 = 6;
 pub const MC_HOST_DRIVE_STOP_OPERATION: u32 = 7;
 pub const MC_HOST_DRIVE_ON_OUTPUT: u64 = 1;
 pub const MC_HOST_DRIVE_ON_OPERATION: u64 = 2;
+pub const MC_HOST_DRIVE_ON_EFFECT: u64 = 4;
 pub const MC_HOST_VM_FLAG_OUTPUT_READY: u32 = 4;
 pub const MC_HOST_VM_FLAG_OPERATION_READY: u32 = 8;
 pub const MC_HOST_VM_FLAG_OPERATION_PENDING: u32 = 16;
+pub const MC_HOST_VM_FLAG_EFFECT_READY: u32 = 32;
 pub const MC_HOST_OUTPUT_DATA: u32 = 1;
 pub const MC_HOST_OUTPUT_GAP: u32 = 2;
 pub const MC_HOST_OUTPUT_ABOVE_HIGH_WATER: u32 = 1;
@@ -92,6 +97,7 @@ pub const MC_HOST_OP_AUTOCOMPLETE: u32 = 14;
 pub const MC_HOST_OP_SERVICE_CALL: u32 = 15;
 pub const MC_HOST_OP_COMMIT_LAYER: u32 = 16;
 pub const MC_HOST_OP_CATALOG_INJECT: u32 = 17;
+pub const MC_HOST_ATTACHMENT_HOST_CALL: u32 = 1;
 pub const MC_HOST_EVENT_HTTP_REQUEST: u32 = 1;
 pub const MC_HOST_EVENT_HTTP_CANCEL: u32 = 2;
 pub const MC_HOST_EVENT_WS_CONNECT: u32 = 3;
@@ -519,6 +525,167 @@ impl LayerCommitResult {
     }
 }
 
+/// One application-provided host-call route and its non-secret stable identity.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HostCallAttachment {
+    pub name: String,
+    pub identity: String,
+}
+
+pub const HOST_CALL_ATTACHMENT_MSG_ID: u16 = 29;
+pub const HOST_CALL_ATTACHMENT_VERSION: u8 = 1;
+impl HostCallAttachment {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, HOST_CALL_ATTACHMENT_MSG_ID);
+        out.push(HOST_CALL_ATTACHMENT_VERSION);
+        ctl_put_str(&mut out, &self.name);
+        ctl_put_str(&mut out, &self.identity);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != HOST_CALL_ATTACHMENT_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != HOST_CALL_ATTACHMENT_VERSION { return Err(WireError::UnsupportedVersion); }
+        let name = ctl_read_str(bytes, &mut off)?;
+        let identity = ctl_read_str(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            name,
+            identity,
+        })
+    }
+}
+
+/// Mount a plan-registered host-call driver at its own path.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MountRequest {
+    pub path: String,
+    pub read_only: bool,
+}
+
+pub const MOUNT_REQUEST_MSG_ID: u16 = 30;
+pub const MOUNT_REQUEST_VERSION: u8 = 1;
+impl MountRequest {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, MOUNT_REQUEST_MSG_ID);
+        out.push(MOUNT_REQUEST_VERSION);
+        ctl_put_str(&mut out, &self.path);
+        ctl_put_bool(&mut out, self.read_only);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != MOUNT_REQUEST_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != MOUNT_REQUEST_VERSION { return Err(WireError::UnsupportedVersion); }
+        let path = ctl_read_str(bytes, &mut off)?;
+        let read_only = ctl_read_bool(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            path,
+            read_only,
+        })
+    }
+}
+
+/// Binary-safe request delivered to an application host-call route.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HostCallEvent {
+    pub name: String,
+    pub request: Vec<u8>,
+}
+
+pub const HOST_CALL_EVENT_MSG_ID: u16 = 31;
+pub const HOST_CALL_EVENT_VERSION: u8 = 1;
+impl HostCallEvent {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, HOST_CALL_EVENT_MSG_ID);
+        out.push(HOST_CALL_EVENT_VERSION);
+        ctl_put_str(&mut out, &self.name);
+        ctl_put_bytes(&mut out, &self.request);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != HOST_CALL_EVENT_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != HOST_CALL_EVENT_VERSION { return Err(WireError::UnsupportedVersion); }
+        let name = ctl_read_str(bytes, &mut off)?;
+        let request = ctl_read_bytes(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            name,
+            request,
+        })
+    }
+}
+
+/// One whole host-call response; the kernel has no body-pending sentinel.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HostCallResponse {
+    pub failed: bool,
+    pub body: Vec<u8>,
+}
+
+pub const HOST_CALL_RESPONSE_MSG_ID: u16 = 32;
+pub const HOST_CALL_RESPONSE_VERSION: u8 = 1;
+impl HostCallResponse {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, HOST_CALL_RESPONSE_MSG_ID);
+        out.push(HOST_CALL_RESPONSE_VERSION);
+        ctl_put_bool(&mut out, self.failed);
+        ctl_put_bytes(&mut out, &self.body);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != HOST_CALL_RESPONSE_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != HOST_CALL_RESPONSE_VERSION { return Err(WireError::UnsupportedVersion); }
+        let failed = ctl_read_bool(bytes, &mut off)?;
+        let body = ctl_read_bytes(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            failed,
+            body,
+        })
+    }
+}
+
+/// One cancellation notice for a leased effect. Acknowledgment retires the original lease.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EffectCancel {
+    pub original_event_id: i64,
+}
+
+pub const EFFECT_CANCEL_MSG_ID: u16 = 33;
+pub const EFFECT_CANCEL_VERSION: u8 = 1;
+impl EffectCancel {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, EFFECT_CANCEL_MSG_ID);
+        out.push(EFFECT_CANCEL_VERSION);
+        ctl_put_i64(&mut out, self.original_event_id);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != EFFECT_CANCEL_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != EFFECT_CANCEL_VERSION { return Err(WireError::UnsupportedVersion); }
+        let original_event_id = ctl_read_i64(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            original_event_id,
+        })
+    }
+}
+
 // Native embedder ABI constants.
 pub const MC_HOST_ABI_MAJOR: u16 = 1;
 pub const MC_HOST_ABI_MINOR: u16 = 0;
@@ -698,3 +865,24 @@ pub const MC_HOST_LAYOUT_OPERATION_API_RESULT_OFFSET: usize = 24;
 pub const MC_HOST_LAYOUT_OPERATION_API_PEEK_OFFSET: usize = 32;
 pub const MC_HOST_LAYOUT_OPERATION_API_CANCEL_OFFSET: usize = 40;
 pub const MC_HOST_LAYOUT_OPERATION_API_CLOSE_OFFSET: usize = 48;
+pub const MC_HOST_LAYOUT_ATTACHMENT_API_SIZE: usize = 40;
+pub const MC_HOST_LAYOUT_ATTACHMENT_API_ALIGN: usize = 8;
+pub const MC_HOST_LAYOUT_ATTACHMENT_API_HEADER_OFFSET: usize = 0;
+pub const MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_CREATE_OFFSET: usize = 8;
+pub const MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_ADD_OFFSET: usize = 16;
+pub const MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_SEAL_OFFSET: usize = 24;
+pub const MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_CLOSE_OFFSET: usize = 32;
+pub const MC_HOST_LAYOUT_EFFECT_INFO_SIZE: usize = 24;
+pub const MC_HOST_LAYOUT_EFFECT_INFO_ALIGN: usize = 8;
+pub const MC_HOST_LAYOUT_EFFECT_INFO_HEADER_OFFSET: usize = 0;
+pub const MC_HOST_LAYOUT_EFFECT_INFO_KIND_OFFSET: usize = 8;
+pub const MC_HOST_LAYOUT_EFFECT_INFO_RESERVED_OFFSET: usize = 12;
+pub const MC_HOST_LAYOUT_EFFECT_INFO_LENGTH_OFFSET: usize = 16;
+pub const MC_HOST_LAYOUT_EFFECT_API_SIZE: usize = 48;
+pub const MC_HOST_LAYOUT_EFFECT_API_ALIGN: usize = 8;
+pub const MC_HOST_LAYOUT_EFFECT_API_HEADER_OFFSET: usize = 0;
+pub const MC_HOST_LAYOUT_EFFECT_API_NEXT_OFFSET: usize = 8;
+pub const MC_HOST_LAYOUT_EFFECT_API_READ_OFFSET: usize = 16;
+pub const MC_HOST_LAYOUT_EFFECT_API_RELEASE_OFFSET: usize = 24;
+pub const MC_HOST_LAYOUT_EFFECT_API_RESPOND_OFFSET: usize = 32;
+pub const MC_HOST_LAYOUT_EFFECT_API_ACK_OFFSET: usize = 40;
