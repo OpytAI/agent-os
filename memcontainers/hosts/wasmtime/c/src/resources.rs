@@ -373,6 +373,7 @@ struct Resources {
 }
 
 struct OutputLease {
+    vm: u64,
     queue: Arc<OutputQueue>,
     record: OutputRecord,
 }
@@ -853,6 +854,7 @@ impl RuntimeState {
             return Ok(None);
         };
         let lease = OutputLease {
+            vm: vm_handle,
             queue: Arc::clone(&vm.output),
             record: record.clone(),
         };
@@ -882,12 +884,25 @@ impl RuntimeState {
             .resources
             .lock()
             .map_err(|_| contract::MC_HOST_INTERNAL)?;
-        let lease = resources.outputs.get(self.namespace, handle)?;
-        let sequence = lease.record.sequence();
+        let (vm_handle, queue, sequence) = {
+            let lease = resources.outputs.get(self.namespace, handle)?;
+            (lease.vm, Arc::clone(&lease.queue), lease.record.sequence())
+        };
+        if !ack
+            && resources
+                .vms
+                .get(self.namespace, vm_handle)?
+                .observed
+                .lock()
+                .map_err(|_| contract::MC_HOST_INTERNAL)?
+                .closing
+        {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
         let done = if ack {
-            lease.queue.ack(sequence)
+            queue.ack(sequence)
         } else {
-            lease.queue.release(sequence)
+            queue.release(sequence)
         };
         if !done {
             return Err(contract::MC_HOST_INTERNAL);
