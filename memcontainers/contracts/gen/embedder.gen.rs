@@ -38,6 +38,7 @@ pub const MC_HOST_FEATURE_EXEC_OPERATION: u64 = 8;
 pub const MC_HOST_FEATURE_FS_OPERATION: u64 = 16;
 pub const MC_HOST_FEATURE_AUTOCOMPLETE_OPERATION: u64 = 32;
 pub const MC_HOST_FEATURE_SERVICE_OPERATION: u64 = 64;
+pub const MC_HOST_FEATURE_COMMIT_OPERATION: u64 = 128;
 pub const MC_HOST_TICK_WAITING: u32 = 0;
 pub const MC_HOST_TICK_RUNNABLE: u32 = 1;
 pub const MC_HOST_TICK_EXITED: u32 = 2;
@@ -481,6 +482,39 @@ impl FilesystemRequest {
             data,
             target,
             mode,
+        })
+    }
+}
+
+/// Content-addressed layer produced by mc_commit_layer.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LayerCommitResult {
+    pub digest: String,
+    pub layer: Vec<u8>,
+}
+
+pub const LAYER_COMMIT_RESULT_MSG_ID: u16 = 28;
+pub const LAYER_COMMIT_RESULT_VERSION: u8 = 1;
+impl LayerCommitResult {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, LAYER_COMMIT_RESULT_MSG_ID);
+        out.push(LAYER_COMMIT_RESULT_VERSION);
+        ctl_put_str(&mut out, &self.digest);
+        ctl_put_bytes(&mut out, &self.layer);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != LAYER_COMMIT_RESULT_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != LAYER_COMMIT_RESULT_VERSION { return Err(WireError::UnsupportedVersion); }
+        let digest = ctl_read_str(bytes, &mut off)?;
+        let layer = ctl_read_bytes(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            digest,
+            layer,
         })
     }
 }

@@ -222,6 +222,7 @@ constant "MC_HOST_FEATURE_EXEC_OPERATION" value=8 type="u64"
 constant "MC_HOST_FEATURE_FS_OPERATION" value=16 type="u64"
 constant "MC_HOST_FEATURE_AUTOCOMPLETE_OPERATION" value=32 type="u64"
 constant "MC_HOST_FEATURE_SERVICE_OPERATION" value=64 type="u64"
+constant "MC_HOST_FEATURE_COMMIT_OPERATION" value=128 type="u64"
 
 constant "MC_HOST_TICK_WAITING" value=0 type="u32"
 constant "MC_HOST_TICK_RUNNABLE" value=1 type="u32"
@@ -347,4 +348,10 @@ message "FilesystemRequest" id=27 version=1 {
   field "target" type="str" opt=1
   field "mode" type="u32" opt=1
   doc "One native filesystem control attempt. The operation kind selects and validates the required fields."
+}
+
+message "LayerCommitResult" id=28 version=1 {
+  field "digest" type="str"
+  field "layer" type="bytes"
+  doc "Content-addressed layer produced by mc_commit_layer."
 }

@@ -68,6 +68,29 @@ impl OperationRecord {
         Ok(())
     }
 
+    pub fn complete(&self, status: i32, payload: Vec<u8>) -> Result<(), u32> {
+        let mut state = self.state.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if !matches!(*state, OperationState::New) {
+            return Err(contract::MC_HOST_INTERNAL);
+        }
+        if payload.len() > MAX_RESULT_BYTES.saturating_sub(64) {
+            *state = OperationState::Failed(contract::MC_HOST_RESOURCE_LIMIT);
+            return Ok(());
+        }
+        let frame = OperationResult {
+            kind: self.kind,
+            status,
+            payload,
+        }
+        .encode();
+        *state = if frame.len() > MAX_RESULT_BYTES {
+            OperationState::Failed(contract::MC_HOST_RESOURCE_LIMIT)
+        } else {
+            OperationState::Ready(Arc::from(frame))
+        };
+        Ok(())
+    }
+
     pub fn observed(&self) -> Result<OperationObserved, u32> {
         let state = self.state.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
         let (state_code, error, result_length) = match &*state {

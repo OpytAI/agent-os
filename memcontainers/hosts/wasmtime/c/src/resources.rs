@@ -1079,6 +1079,62 @@ impl RuntimeState {
         }
     }
 
+    pub fn start_commit(&self, vm_handle: u64) -> Result<u64, u32> {
+        let vm = self.vm(vm_handle)?;
+        let mut host = vm.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
+        let host = host.as_mut().ok_or(contract::MC_HOST_INVALID_STATE)?;
+        let observed = vm.observed.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if observed.closing || observed.exit_code.is_some() {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        if observed.poisoned {
+            return Err(contract::MC_HOST_POISONED);
+        }
+        drop(observed);
+        if vm.live_operations()?.len() >= MAX_OPERATIONS_PER_VM {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        if host
+            .inflight_egress()
+            .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?
+            != 0
+            || host
+                .pending_commits()
+                .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?
+                != 0
+        {
+            return Err(contract::MC_HOST_NOT_QUIESCENT);
+        }
+        let record = Arc::new(OperationRecord::new(
+            vm_handle,
+            contract::MC_HOST_OP_COMMIT_LAYER,
+        ));
+        let handle = {
+            let mut resources = self
+                .resources
+                .lock()
+                .map_err(|_| contract::MC_HOST_INTERNAL)?;
+            resources
+                .operations
+                .insert(self.namespace, Arc::clone(&record))?
+        };
+        vm.operations
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .push(Arc::downgrade(&record));
+        match host.commit_layer() {
+            Ok((layer, digest)) => {
+                let payload = contract::LayerCommitResult { digest, layer }.encode();
+                record.complete(0, payload)?;
+                Ok(handle)
+            }
+            Err(_) => {
+                self.remove_operation(handle)?;
+                Err(contract::MC_HOST_KERNEL_ERROR)
+            }
+        }
+    }
+
     pub fn start_retry(
         &self,
         vm_handle: u64,

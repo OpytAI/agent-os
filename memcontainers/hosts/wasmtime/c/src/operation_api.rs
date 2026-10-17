@@ -109,6 +109,12 @@ pub unsafe extern "C" fn start(
         let envelope =
             OperationRequest::decode(frame).map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
         let operation = match envelope.kind {
+            contract::MC_HOST_OP_COMMIT_LAYER => {
+                if !envelope.payload.is_empty() {
+                    return Err(contract::MC_HOST_INVALID_ARGUMENT);
+                }
+                ActiveRuntime::acquire(runtime)?.state.start_commit(vm)?
+            }
             contract::MC_HOST_OP_SERVICE_CALL => {
                 let request = SvcRequest::decode(&envelope.payload)
                     .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;

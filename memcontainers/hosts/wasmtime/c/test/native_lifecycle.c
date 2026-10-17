@@ -149,6 +149,50 @@ static wire service_request(const char *service, const char *body) {
   return envelope;
 }
 
+static void run_layer_commit(const mc_host_operation_api_v1 *op_api,
+                             mc_host_runtime_t runtime, mc_host_handle_t vm) {
+  wire request = {0};
+  put_u16(&request, 21); /* OperationRequest v1 */
+  put_u8(&request, 1);
+  put_u32(&request, MC_HOST_OP_COMMIT_LAYER);
+  put_u32(&request, 0); /* empty payload */
+  mc_host_handle_t operation = 0;
+  check(op_api->start(runtime, vm,
+                      (mc_host_bytes_v1){request.bytes, request.length},
+                      &operation, NULL), "commit real guest overlay");
+  mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
+  check(op_api->poll(runtime, operation, &status, NULL), "poll committed layer");
+  need(status.state == MC_HOST_OP_READY && status.result_length > 100 &&
+           status.result_length <= 16 * 1024 * 1024,
+       "layer commit returned a bounded result");
+  uint8_t *result = malloc((size_t)status.result_length);
+  need(result != NULL, "allocate layer result");
+  mc_host_buffer_v1 buffer = {result, status.result_length, 0};
+  check(op_api->result(runtime, operation, &buffer, NULL), "read committed layer");
+  size_t offset = 0;
+  need(read_u16(result, buffer.required, &offset) == 22 &&
+           read_u8(result, buffer.required, &offset) == 1 &&
+           read_u32(result, buffer.required, &offset) == MC_HOST_OP_COMMIT_LAYER &&
+           read_u32(result, buffer.required, &offset) == 0,
+       "commit operation envelope");
+  uint32_t payload_len = read_u32(result, buffer.required, &offset);
+  need(payload_len == buffer.required - offset &&
+           read_u16(result, buffer.required, &offset) == 28 &&
+           read_u8(result, buffer.required, &offset) == 1,
+       "layer commit result envelope");
+  uint32_t digest_len = read_u32(result, buffer.required, &offset);
+  need(digest_len == 71 && digest_len <= buffer.required - offset &&
+           memcmp(result + offset, "sha256:", 7) == 0,
+       "content address of committed layer");
+  offset += digest_len;
+  uint32_t layer_len = read_u32(result, buffer.required, &offset);
+  need(layer_len == buffer.required - offset && layer_len > 512 &&
+           contains_bytes(result + offset, layer_len, "c-api-data", 10),
+       "committed layer contains guest filesystem write");
+  free(result);
+  check(op_api->close(runtime, operation, NULL), "close layer commit");
+}
+
 static void run_service_call(const mc_host_vm_api_v1 *vm_api,
                              const mc_host_operation_api_v1 *op_api,
                              mc_host_runtime_t runtime, mc_host_handle_t vm) {
@@ -241,9 +285,9 @@ static void run_filesystem_operations(const mc_host_vm_api_v1 *vm_api,
                                       mc_host_runtime_t runtime, mc_host_handle_t vm) {
   const uint8_t content[] = {'c', 0, 'a', 'p', 'i', '\n'};
   wire write_request = filesystem_request(MC_HOST_OP_FS_WRITE,
-                                          "/tmp/c-api-data", content, sizeof(content));
+                                          "/etc/c-api-data", content, sizeof(content));
   wire read_request = filesystem_request(MC_HOST_OP_FS_READ,
-                                         "/tmp/c-api-data", NULL, 0);
+                                         "/etc/c-api-data", NULL, 0);
   mc_host_handle_t write_op = 0, read_op = 0;
   check(op_api->start(runtime, vm,
                       (mc_host_bytes_v1){write_request.bytes, write_request.length},
@@ -519,6 +563,7 @@ int main(int argc, char **argv) {
   drive_to_prompt(&vm_api, &output_api, runtime, vm, NULL);
   run_control_command(&vm_api, &op_api, &snap_api, runtime, vm);
   run_filesystem_operations(&vm_api, &op_api, runtime, vm);
+  run_layer_commit(&op_api, runtime, vm);
   run_autocomplete(&vm_api, &op_api, runtime, vm);
   run_service_call(&vm_api, &op_api, runtime, vm);
 

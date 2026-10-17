@@ -28,7 +28,8 @@ int main(int argc, char **argv) {
                       MC_HOST_FEATURE_SNAPSHOT | MC_HOST_FEATURE_EXEC_OPERATION |
                       MC_HOST_FEATURE_FS_OPERATION |
                       MC_HOST_FEATURE_AUTOCOMPLETE_OPERATION |
-                      MC_HOST_FEATURE_SERVICE_OPERATION;
+                      MC_HOST_FEATURE_SERVICE_OPERATION |
+                      MC_HOST_FEATURE_COMMIT_OPERATION;
   need(api.header.size == sizeof(api) && api.feature_bits == features,
        "staged feature set");
 
