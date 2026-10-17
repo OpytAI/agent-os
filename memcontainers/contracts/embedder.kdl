@@ -167,6 +167,23 @@ layout "SNAPSHOT_API" size=64 align=8 {
   offset "cancel" value=48
   offset "inspect" value=56
 }
+layout "OPERATION_STATUS" size=32 align=8 {
+  offset "header" value=0
+  offset "kind" value=8
+  offset "state" value=12
+  offset "error" value=16
+  offset "reserved" value=20
+  offset "result_length" value=24
+}
+layout "OPERATION_API" size=56 align=8 {
+  offset "header" value=0
+  offset "start" value=8
+  offset "poll" value=16
+  offset "result" value=24
+  offset "peek" value=32
+  offset "cancel" value=40
+  offset "close" value=48
+}
 
 constant "MC_HOST_OK" value=0 type="u32"
 constant "MC_HOST_BUFFER_TOO_SMALL" value=1 type="u32"
@@ -198,6 +215,10 @@ constant "MC_HOST_IFACE_CATALOG_V1" value=6 type="u32"
 constant "MC_HOST_IFACE_PERF_V1" value=7 type="u32"
 constant "MC_HOST_IFACE_OUTPUT_V1" value=8 type="u32"
 constant "MC_HOST_IFACE_ATTACHMENT_V1" value=9 type="u32"
+constant "MC_HOST_FEATURE_VM_BASIC" value=1 type="u64"
+constant "MC_HOST_FEATURE_OUTPUT" value=2 type="u64"
+constant "MC_HOST_FEATURE_SNAPSHOT" value=4 type="u64"
+constant "MC_HOST_FEATURE_EXEC_OPERATION" value=8 type="u64"
 
 constant "MC_HOST_TICK_WAITING" value=0 type="u32"
 constant "MC_HOST_TICK_RUNNABLE" value=1 type="u32"
@@ -218,12 +239,23 @@ constant "MC_HOST_DRIVE_STOP_EXITED" value=3 type="u32"
 constant "MC_HOST_DRIVE_STOP_OUTPUT" value=4 type="u32"
 constant "MC_HOST_DRIVE_STOP_EFFECT" value=5 type="u32"
 constant "MC_HOST_DRIVE_STOP_POISONED" value=6 type="u32"
+constant "MC_HOST_DRIVE_STOP_OPERATION" value=7 type="u32"
+constant "MC_HOST_DRIVE_ON_OUTPUT" value=1 type="u64"
+constant "MC_HOST_DRIVE_ON_OPERATION" value=2 type="u64"
+constant "MC_HOST_VM_FLAG_OUTPUT_READY" value=4 type="u32"
+constant "MC_HOST_VM_FLAG_OPERATION_READY" value=8 type="u32"
+constant "MC_HOST_VM_FLAG_OPERATION_PENDING" value=16 type="u32"
 constant "MC_HOST_OUTPUT_DATA" value=1 type="u32"
 constant "MC_HOST_OUTPUT_GAP" value=2 type="u32"
 constant "MC_HOST_OUTPUT_ABOVE_HIGH_WATER" value=1 type="u32"
 constant "MC_HOST_OUTPUT_POISONED" value=2 type="u32"
 constant "MC_HOST_SNAPSHOT_FULL" value=1 type="u32"
 constant "MC_HOST_SNAPSHOT_INCREMENTAL" value=2 type="u32"
+constant "MC_HOST_OP_NEW" value=0 type="u32"
+constant "MC_HOST_OP_PENDING" value=1 type="u32"
+constant "MC_HOST_OP_READY" value=2 type="u32"
+constant "MC_HOST_OP_FAILED" value=3 type="u32"
+constant "MC_HOST_OP_CANCELLED" value=4 type="u32"
 
 constant "MC_HOST_OP_EXEC_SHELL" value=1 type="u32"
 constant "MC_HOST_OP_EXEC_DIRECT" value=2 type="u32"

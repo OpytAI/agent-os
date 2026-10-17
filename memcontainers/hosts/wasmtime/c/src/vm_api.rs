@@ -229,7 +229,10 @@ fn status_value(report: VmReport, size: usize) -> VmStatus {
         state,
         last_tick: observed.last_tick,
         flags: u32::from(observed.exit_code.is_some()) * contract::MC_HOST_VM_FLAG_HAS_EXIT_CODE
-            | u32::from(report.at_prompt) * contract::MC_HOST_VM_FLAG_AT_PROMPT,
+            | u32::from(report.at_prompt) * contract::MC_HOST_VM_FLAG_AT_PROMPT
+            | u32::from(output.record_count != 0) * contract::MC_HOST_VM_FLAG_OUTPUT_READY
+            | u32::from(report.operation_ready) * contract::MC_HOST_VM_FLAG_OPERATION_READY
+            | u32::from(report.operation_pending) * contract::MC_HOST_VM_FLAG_OPERATION_PENDING,
         exit_code: observed.exit_code.unwrap_or(0),
         output_records: output.record_count as u64,
         output_bytes: output.retained_bytes as u64,
@@ -267,20 +270,14 @@ pub unsafe extern "C" fn vm_drive(
     guard(error, || {
         let options = unsafe { input(options)? };
         let size = unsafe { output_size(out)? };
-        if options.reserved != 0 || options.stop_mask != 0 {
+        if options.reserved != 0 {
             return Err(contract::MC_HOST_UNSUPPORTED);
         }
         let active = ActiveRuntime::acquire(runtime)?;
-        let driven = active.state.vm(vm)?.drive(options.max_ticks)?;
-        let stop_reason = if driven.report.output.above_high_water {
-            contract::MC_HOST_DRIVE_STOP_OUTPUT
-        } else if driven.report.observed.exit_code.is_some() {
-            contract::MC_HOST_DRIVE_STOP_EXITED
-        } else if driven.report.observed.last_tick == contract::MC_HOST_TICK_WAITING {
-            contract::MC_HOST_DRIVE_STOP_WAITING
-        } else {
-            contract::MC_HOST_DRIVE_STOP_BUDGET
-        };
+        let driven = active
+            .state
+            .vm(vm)?
+            .drive(options.max_ticks, options.stop_mask)?;
         let value = DriveResult {
             header: Header {
                 size: size as u32,
@@ -288,7 +285,7 @@ pub unsafe extern "C" fn vm_drive(
                 flags: 0,
             },
             ticks: driven.ticks,
-            stop_reason,
+            stop_reason: driven.stop_reason,
             status: status_value(driven.report, size_of::<VmStatus>()),
         };
         unsafe { copy_output(out, &value, size) };

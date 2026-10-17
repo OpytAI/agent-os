@@ -163,6 +163,23 @@ CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, read, READ);
 CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, finish, FINISH);
 CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, cancel, CANCEL);
 CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, inspect, INSPECT);
+CHECK_LAYOUT(mc_host_operation_status_v1, OPERATION_STATUS);
+CHECK_FIELD(mc_host_operation_status_v1, OPERATION_STATUS, header, HEADER);
+CHECK_FIELD(mc_host_operation_status_v1, OPERATION_STATUS, kind, KIND);
+CHECK_FIELD(mc_host_operation_status_v1, OPERATION_STATUS, state, STATE);
+CHECK_FIELD(mc_host_operation_status_v1, OPERATION_STATUS, error, ERROR);
+CHECK_FIELD(mc_host_operation_status_v1, OPERATION_STATUS, reserved, RESERVED);
+CHECK_FIELD(mc_host_operation_status_v1, OPERATION_STATUS, result_length, RESULT_LENGTH);
+
+CHECK_LAYOUT(mc_host_operation_api_v1, OPERATION_API);
+CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, header, HEADER);
+CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, start, START);
+CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, poll, POLL);
+CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, result, RESULT);
+CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, peek, PEEK);
+CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, cancel, CANCEL);
+CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, close, CLOSE);
+
 
 
 

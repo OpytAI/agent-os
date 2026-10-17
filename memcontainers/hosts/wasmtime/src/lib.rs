@@ -2228,6 +2228,10 @@ impl KernelHost {
         Ok(data[base..end].to_vec())
     }
 
+    pub fn supports_exec_stdout_peek(&self) -> bool {
+        self.exports.mc_ctl_exec_peek.is_some()
+    }
+
     /// Abandon a running job, freeing it without reading its result.
     pub fn exec_cancel(&mut self, job: i32) -> Result<()> {
         let close = self.exports.require_ctl_exec_close()?;

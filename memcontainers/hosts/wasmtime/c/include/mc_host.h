@@ -240,6 +240,35 @@ typedef struct mc_host_snapshot_api_v1 {
       mc_host_snapshot_info_v1 *, mc_host_error_v1 *);
 } mc_host_snapshot_api_v1;
 
+typedef struct mc_host_operation_status_v1 {
+  mc_host_header_v1 header;
+  uint32_t kind;
+  uint32_t state;
+  uint32_t error;
+  uint32_t reserved;
+  uint64_t result_length;
+} mc_host_operation_status_v1;
+
+typedef struct mc_host_operation_api_v1 {
+  mc_host_header_v1 header;
+  mc_host_result_t (MC_HOST_CALL *start)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_bytes_v1,
+      mc_host_handle_t *, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *poll)(
+      mc_host_runtime_t, mc_host_handle_t,
+      mc_host_operation_status_v1 *, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *result)(
+      mc_host_runtime_t, mc_host_handle_t,
+      mc_host_buffer_v1 *, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *peek)(
+      mc_host_runtime_t, mc_host_handle_t, uint32_t, uint64_t,
+      mc_host_buffer_v1 *, uint64_t *, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *cancel)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *close)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_error_v1 *);
+} mc_host_operation_api_v1;
+
 #define MC_HOST_INIT(type_) { { (uint32_t)sizeof(type_), 1u, 0u } }
 
 typedef mc_host_result_t (MC_HOST_CALL *mc_host_get_api_fn)(

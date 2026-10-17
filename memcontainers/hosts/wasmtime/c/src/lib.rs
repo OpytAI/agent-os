@@ -1,4 +1,4 @@
-//! Native ABI admission and runtime identity. No VM interface is advertised yet.
+//! Native ABI admission, runtime identity, and staged product interfaces.
 //!
 //! Runtime IDs live in a process table, not at caller-held addresses. Closing a
 //! runtime cannot free memory that a concurrent call has already borrowed.
@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use embedder_rust as contract;
 
+mod operation_api;
+mod operations;
 mod output_api;
 mod resources;
 mod snapshot_api;
@@ -27,6 +29,10 @@ const MAX_GENERATION: u32 = (1 << 20) - 1;
 const INDEX_MASK: u64 = (1 << 20) - 1;
 const GENERATION_MASK: u64 = (1 << 20) - 1;
 const MAX_INPUT_STRUCT_SIZE: usize = 4096;
+const FEATURE_BITS: u64 = contract::MC_HOST_FEATURE_VM_BASIC
+    | contract::MC_HOST_FEATURE_OUTPUT
+    | contract::MC_HOST_FEATURE_SNAPSHOT
+    | contract::MC_HOST_FEATURE_EXEC_OPERATION;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -276,6 +282,27 @@ struct SnapshotApi {
     finish: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
     cancel: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
     inspect: unsafe extern "C" fn(u64, Bytes, Bytes, *mut SnapshotInfo, *mut Error) -> ResultCode,
+}
+
+#[repr(C)]
+struct OperationStatus {
+    header: Header,
+    kind: u32,
+    state: u32,
+    error: u32,
+    reserved: u32,
+    result_length: u64,
+}
+
+#[repr(C)]
+struct OperationApi {
+    header: Header,
+    start: unsafe extern "C" fn(u64, u64, Bytes, *mut u64, *mut Error) -> ResultCode,
+    poll: unsafe extern "C" fn(u64, u64, *mut OperationStatus, *mut Error) -> ResultCode,
+    result: unsafe extern "C" fn(u64, u64, *mut Buffer, *mut Error) -> ResultCode,
+    peek: unsafe extern "C" fn(u64, u64, u32, u64, *mut Buffer, *mut u64, *mut Error) -> ResultCode,
+    cancel: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
+    close: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
 }
 
 // The manifest in embedder.kdl is checked independently by Rust and C. A
@@ -644,6 +671,47 @@ const _: () = {
     assert!(
         offset_of!(SnapshotApi, inspect) == contract::MC_HOST_LAYOUT_SNAPSHOT_API_INSPECT_OFFSET
     );
+    assert!(size_of::<OperationStatus>() == contract::MC_HOST_LAYOUT_OPERATION_STATUS_SIZE);
+    assert!(align_of::<OperationStatus>() == contract::MC_HOST_LAYOUT_OPERATION_STATUS_ALIGN);
+    assert!(
+        offset_of!(OperationStatus, header)
+            == contract::MC_HOST_LAYOUT_OPERATION_STATUS_HEADER_OFFSET
+    );
+    assert!(
+        offset_of!(OperationStatus, kind) == contract::MC_HOST_LAYOUT_OPERATION_STATUS_KIND_OFFSET
+    );
+    assert!(
+        offset_of!(OperationStatus, state)
+            == contract::MC_HOST_LAYOUT_OPERATION_STATUS_STATE_OFFSET
+    );
+    assert!(
+        offset_of!(OperationStatus, error)
+            == contract::MC_HOST_LAYOUT_OPERATION_STATUS_ERROR_OFFSET
+    );
+    assert!(
+        offset_of!(OperationStatus, reserved)
+            == contract::MC_HOST_LAYOUT_OPERATION_STATUS_RESERVED_OFFSET
+    );
+    assert!(
+        offset_of!(OperationStatus, result_length)
+            == contract::MC_HOST_LAYOUT_OPERATION_STATUS_RESULT_LENGTH_OFFSET
+    );
+
+    assert!(size_of::<OperationApi>() == contract::MC_HOST_LAYOUT_OPERATION_API_SIZE);
+    assert!(align_of::<OperationApi>() == contract::MC_HOST_LAYOUT_OPERATION_API_ALIGN);
+    assert!(
+        offset_of!(OperationApi, header) == contract::MC_HOST_LAYOUT_OPERATION_API_HEADER_OFFSET
+    );
+    assert!(offset_of!(OperationApi, start) == contract::MC_HOST_LAYOUT_OPERATION_API_START_OFFSET);
+    assert!(offset_of!(OperationApi, poll) == contract::MC_HOST_LAYOUT_OPERATION_API_POLL_OFFSET);
+    assert!(
+        offset_of!(OperationApi, result) == contract::MC_HOST_LAYOUT_OPERATION_API_RESULT_OFFSET
+    );
+    assert!(offset_of!(OperationApi, peek) == contract::MC_HOST_LAYOUT_OPERATION_API_PEEK_OFFSET);
+    assert!(
+        offset_of!(OperationApi, cancel) == contract::MC_HOST_LAYOUT_OPERATION_API_CANCEL_OFFSET
+    );
+    assert!(offset_of!(OperationApi, close) == contract::MC_HOST_LAYOUT_OPERATION_API_CLOSE_OFFSET);
 };
 
 struct RuntimeSlot {
@@ -969,7 +1037,7 @@ unsafe extern "C" fn library_info(out: *mut LibraryInfo, error: *mut Error) -> R
             abi_major: contract::MC_HOST_ABI_MAJOR,
             abi_minor: contract::MC_HOST_ABI_MINOR,
             implementation_table_size: size_of::<Api>() as u32,
-            feature_bits: 0,
+            feature_bits: FEATURE_BITS,
         };
         unsafe {
             ptr::copy_nonoverlapping(
@@ -984,18 +1052,61 @@ unsafe extern "C" fn library_info(out: *mut LibraryInfo, error: *mut Error) -> R
 
 unsafe extern "C" fn get_interface(
     handle: RuntimeHandle,
-    _id: u32,
-    _version: u16,
+    id: u32,
+    version: u16,
     size: u32,
     out: *mut c_void,
     error: *mut Error,
 ) -> ResultCode {
+    if !error.is_null()
+        && !out.is_null()
+        && ranges_overlap(
+            error as usize,
+            size_of::<Error>(),
+            out as usize,
+            size as usize,
+        )
+    {
+        return contract::MC_HOST_INVALID_ARGUMENT;
+    }
     guard(error, || {
         let _active = ActiveRuntime::acquire(handle)?;
-        if out.is_null() || size < size_of::<Header>() as u32 {
+        if out.is_null()
+            || (out as usize) % align_of::<Header>() != 0
+            || size < size_of::<Header>() as u32
+        {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
-        Err(contract::MC_HOST_UNSUPPORTED)
+        if version != 1 {
+            return Err(contract::MC_HOST_UNSUPPORTED_ABI);
+        }
+        let (table, implementation_size) = match id {
+            contract::MC_HOST_IFACE_VM_V1 => (
+                &vm_api::VM_API as *const VmApi as *const u8,
+                size_of::<VmApi>(),
+            ),
+            contract::MC_HOST_IFACE_OUTPUT_V1 => (
+                &output_api::OUTPUT_API as *const OutputApi as *const u8,
+                size_of::<OutputApi>(),
+            ),
+            contract::MC_HOST_IFACE_SNAPSHOT_V1 => (
+                &snapshot_api::SNAPSHOT_API as *const SnapshotApi as *const u8,
+                size_of::<SnapshotApi>(),
+            ),
+            contract::MC_HOST_IFACE_OPERATION_V1 => (
+                &operation_api::OPERATION_API as *const OperationApi as *const u8,
+                size_of::<OperationApi>(),
+            ),
+            _ => return Err(contract::MC_HOST_UNSUPPORTED),
+        };
+        unsafe {
+            ptr::copy_nonoverlapping(
+                table,
+                out.cast::<u8>(),
+                (size as usize).min(implementation_size),
+            )
+        };
+        Ok(())
     })
 }
 
@@ -1008,7 +1119,7 @@ static API: Api = Api {
     abi_major: contract::MC_HOST_ABI_MAJOR,
     abi_minor: contract::MC_HOST_ABI_MINOR,
     implementation_table_size: size_of::<Api>() as u32,
-    feature_bits: 0,
+    feature_bits: FEATURE_BITS,
     runtime_create,
     runtime_close,
     library_info,

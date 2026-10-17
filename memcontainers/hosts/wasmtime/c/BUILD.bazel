@@ -2,8 +2,8 @@ load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 load("@rules_rust//rust:defs.bzl", "rust_shared_library")
 load("//memcontainers/hosts/wasmtime:defs.bzl", "host_release_shared_library")
 
-# The shared library starts with the ABI/lifetime core. Feature bits remain zero
-# until a real kernel-backed interface and its C loader tests land.
+# Table discovery reports the staged capabilities explicitly. The C loader
+# exercises the release artifact with the real kernel and base image.
 rust_shared_library(
     name = "mc_host",
     srcs = glob(["src/**/*.rs"]),
@@ -19,6 +19,8 @@ rust_shared_library(
     visibility = ["//visibility:public"],
     deps = [
         "//memcontainers/contracts:embedder_rust",
+        "//memcontainers/contracts:ctl_rust",
+        "//memcontainers/contracts:constants_rust",
         "//memcontainers/contracts:snapshot_rust",
         "//memcontainers/hosts/wasmtime:lib",
     ],
@@ -56,6 +58,23 @@ cc_test(
     srcs = ["test/loader.c"],
     args = ["$(location :mc_host_release)"],
     data = [":mc_host_release"],
+    linkopts = ["-ldl"],
+    deps = [":headers"],
+)
+
+cc_test(
+    name = "native_lifecycle_test",
+    srcs = ["test/native_lifecycle.c"],
+    args = [
+        "$(location :mc_host_release)",
+        "$(location //memcontainers/kernel/rust:kernel)",
+        "$(location //memcontainers/images:base)",
+    ],
+    data = [
+        ":mc_host_release",
+        "//memcontainers/kernel/rust:kernel",
+        "//memcontainers/images:base",
+    ],
     linkopts = ["-ldl"],
     deps = [":headers"],
 )

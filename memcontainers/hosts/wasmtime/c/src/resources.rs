@@ -1,15 +1,16 @@
 //! Runtime-owned kernel identities. Child resources use the same namespace,
 //! kind, generation, and slot encoding as runtime handles.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use embedder_rust as contract;
 use host::output_queue::{OutputQueue, OutputRecord, OutputStats, LOG, STDERR, STDOUT};
 use host::{
-    inspect_snapshot_bytes, KernelCacheLimit, KernelHost, KernelHostBuilder, KernelModuleCache,
-    SnapshotDescription, TickState,
+    inspect_snapshot_bytes, ExecOptions, KernelCacheLimit, KernelHost, KernelHostBuilder,
+    KernelModuleCache, SnapshotDescription, TickState,
 };
 
+use super::operations::OperationRecord;
 use super::{pack_kind, unpack, MAX_GENERATION, MAX_INDEX};
 
 pub const KERNEL_KIND: u8 = 2;
@@ -17,6 +18,7 @@ pub const VM_KIND: u8 = 3;
 pub const OUTPUT_KIND: u8 = 4;
 pub const BASELINE_KIND: u8 = 5;
 pub const SNAPSHOT_KIND: u8 = 6;
+pub const OPERATION_KIND: u8 = 7;
 const MAX_KERNELS: usize = 64;
 const MAX_KERNEL_BYTES: usize = 256 * 1024 * 1024;
 const MAX_VMS: usize = 16;
@@ -27,6 +29,7 @@ const OUTPUT_HIGH_WATER: usize = 3 * 1024 * 1024;
 const OUTPUT_MAX_RECORDS: usize = 4_096;
 const SNAPSHOT_MAX_BYTES: usize = 512 * 1024 * 1024;
 const SNAPSHOT_TOTAL_BYTES: usize = 1024 * 1024 * 1024;
+const MAX_OPERATIONS_PER_VM: usize = 64;
 
 struct Slot<T> {
     generation: u32,
@@ -136,6 +139,7 @@ pub struct VmRecord {
     host: Mutex<Option<KernelHost>>,
     pub output: Arc<OutputQueue>,
     observed: Mutex<VmObserved>,
+    operations: Mutex<Vec<Weak<OperationRecord>>>,
     // The Rust host memoizes baseline integrity by buffer address. Keep the
     // immutable full MCSN bytes at that address until this VM is closed.
     _snapshot_anchor: Option<Arc<[u8]>>,
@@ -143,7 +147,6 @@ pub struct VmRecord {
 
 pub struct SnapshotRecord {
     pub bytes: Vec<u8>,
-    pub description: SnapshotDescription,
     kernel_handle: u64,
 }
 
@@ -157,6 +160,7 @@ pub struct VmObserved {
 
 pub struct VmDriveResult {
     pub ticks: u32,
+    pub stop_reason: u32,
     pub report: VmReport,
 }
 
@@ -167,6 +171,8 @@ pub struct VmReport {
     pub pending_commits: i32,
     pub workers: u32,
     pub at_prompt: bool,
+    pub operation_ready: bool,
+    pub operation_pending: bool,
 }
 
 pub struct VmConfig {
@@ -180,6 +186,36 @@ pub struct VmConfig {
 }
 
 impl VmRecord {
+    fn operation_readiness(&self) -> Result<(bool, bool), u32> {
+        let mut ready = false;
+        let mut pending = false;
+        for operation in self.live_operations()? {
+            let state = operation.observed()?.state;
+            ready |= state == contract::MC_HOST_OP_READY
+                || state == contract::MC_HOST_OP_FAILED
+                || state == contract::MC_HOST_OP_CANCELLED;
+            pending |= state == contract::MC_HOST_OP_NEW || state == contract::MC_HOST_OP_PENDING;
+        }
+        Ok((ready, pending))
+    }
+
+    fn live_operations(&self) -> Result<Vec<Arc<OperationRecord>>, u32> {
+        let mut records = self
+            .operations
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let mut live = Vec::with_capacity(records.len());
+        records.retain(|record| {
+            if let Some(record) = record.upgrade() {
+                live.push(record);
+                true
+            } else {
+                false
+            }
+        });
+        Ok(live)
+    }
+
     pub fn snapshot(&self, baseline: Option<&[u8]>) -> Result<Vec<u8>, u32> {
         let mut host = self.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
         let host = host.as_mut().ok_or(contract::MC_HOST_INVALID_STATE)?;
@@ -194,6 +230,11 @@ impl VmRecord {
             return Err(contract::MC_HOST_POISONED);
         }
         drop(observed);
+        for record in self.live_operations()? {
+            if record.pending()? {
+                return Err(contract::MC_HOST_NOT_QUIESCENT);
+            }
+        }
         if host
             .inflight_egress()
             .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?
@@ -225,6 +266,7 @@ impl VmRecord {
         Ok(bytes)
     }
     fn report(&self, host: &mut KernelHost) -> Result<VmReport, u32> {
+        let (operation_ready, operation_pending) = self.operation_readiness()?;
         let observed = *self
             .observed
             .lock()
@@ -243,6 +285,8 @@ impl VmRecord {
                 .try_into()
                 .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?,
             at_prompt: host.at_prompt(),
+            operation_ready,
+            operation_pending,
         })
     }
 
@@ -250,17 +294,22 @@ impl VmRecord {
         let mut host = self.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
         match host.as_mut() {
             Some(host) => self.report(host),
-            None => Ok(VmReport {
-                observed: *self
-                    .observed
-                    .lock()
-                    .map_err(|_| contract::MC_HOST_INTERNAL)?,
-                output: self.output.stats(),
-                inflight_egress: 0,
-                pending_commits: 0,
-                workers: 0,
-                at_prompt: false,
-            }),
+            None => {
+                let (operation_ready, operation_pending) = self.operation_readiness()?;
+                Ok(VmReport {
+                    operation_ready,
+                    operation_pending,
+                    observed: *self
+                        .observed
+                        .lock()
+                        .map_err(|_| contract::MC_HOST_INTERNAL)?,
+                    output: self.output.stats(),
+                    inflight_egress: 0,
+                    pending_commits: 0,
+                    workers: 0,
+                    at_prompt: false,
+                })
+            }
         }
     }
 
@@ -300,9 +349,14 @@ impl VmRecord {
             .map_err(|_| contract::MC_HOST_KERNEL_ERROR)
     }
 
-    pub fn drive(&self, max_ticks: u32) -> Result<VmDriveResult, u32> {
+    pub fn drive(&self, max_ticks: u32, stop_mask: u64) -> Result<VmDriveResult, u32> {
         if max_ticks == 0 || max_ticks > MAX_DRIVE_TICKS {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        if stop_mask & !(contract::MC_HOST_DRIVE_ON_OUTPUT | contract::MC_HOST_DRIVE_ON_OPERATION)
+            != 0
+        {
+            return Err(contract::MC_HOST_UNSUPPORTED);
         }
         let mut host = self.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
         let host = host.as_mut().ok_or(contract::MC_HOST_INVALID_STATE)?;
@@ -319,8 +373,10 @@ impl VmRecord {
             }
         }
         let mut ticks = 0;
+        let mut stop_reason = contract::MC_HOST_DRIVE_STOP_BUDGET;
         for _ in 0..max_ticks {
             if host.exit_code().is_some() {
+                stop_reason = contract::MC_HOST_DRIVE_STOP_EXITED;
                 break;
             }
             let output = self.output.stats();
@@ -328,6 +384,17 @@ impl VmRecord {
                 return Err(contract::MC_HOST_OUTPUT_LOST);
             }
             if output.above_high_water {
+                stop_reason = contract::MC_HOST_DRIVE_STOP_OUTPUT;
+                break;
+            }
+            if stop_mask & contract::MC_HOST_DRIVE_ON_OUTPUT != 0 && output.record_count != 0 {
+                stop_reason = contract::MC_HOST_DRIVE_STOP_OUTPUT;
+                break;
+            }
+            if stop_mask & contract::MC_HOST_DRIVE_ON_OPERATION != 0
+                && self.operation_readiness()?.0
+            {
+                stop_reason = contract::MC_HOST_DRIVE_STOP_OPERATION;
                 break;
             }
             let tick = match host.tick() {
@@ -341,6 +408,15 @@ impl VmRecord {
                 }
             };
             ticks += 1;
+            for operation in self.live_operations()? {
+                if operation.poll_exec(host).is_err() {
+                    self.observed
+                        .lock()
+                        .map_err(|_| contract::MC_HOST_INTERNAL)?
+                        .poisoned = true;
+                    return Err(contract::MC_HOST_KERNEL_ERROR);
+                }
+            }
             let mut observed = self
                 .observed
                 .lock()
@@ -351,12 +427,31 @@ impl VmRecord {
                 TickState::Exited => contract::MC_HOST_TICK_EXITED,
             };
             observed.exit_code = host.exit_code();
-            if tick != TickState::Runnable {
+            drop(observed);
+            if tick == TickState::Exited {
+                stop_reason = contract::MC_HOST_DRIVE_STOP_EXITED;
+                break;
+            }
+            if stop_mask & contract::MC_HOST_DRIVE_ON_OUTPUT != 0
+                && self.output.stats().record_count != 0
+            {
+                stop_reason = contract::MC_HOST_DRIVE_STOP_OUTPUT;
+                break;
+            }
+            if stop_mask & contract::MC_HOST_DRIVE_ON_OPERATION != 0
+                && self.operation_readiness()?.0
+            {
+                stop_reason = contract::MC_HOST_DRIVE_STOP_OPERATION;
+                break;
+            }
+            if tick == TickState::Waiting {
+                stop_reason = contract::MC_HOST_DRIVE_STOP_WAITING;
                 break;
             }
         }
         Ok(VmDriveResult {
             ticks,
+            stop_reason,
             report: self.report(host)?,
         })
     }
@@ -369,6 +464,7 @@ struct Resources {
     outputs: HandleTable<OutputLease>,
     baselines: HandleTable<Arc<SnapshotRecord>>,
     snapshots: HandleTable<Arc<SnapshotRecord>>,
+    operations: HandleTable<Arc<OperationRecord>>,
     snapshot_bytes: usize,
 }
 
@@ -396,6 +492,7 @@ impl RuntimeState {
                 outputs: HandleTable::new(OUTPUT_KIND),
                 baselines: HandleTable::new(BASELINE_KIND),
                 snapshots: HandleTable::new(SNAPSHOT_KIND),
+                operations: HandleTable::new(OPERATION_KIND),
                 snapshot_bytes: 0,
             }),
         }
@@ -408,6 +505,7 @@ impl RuntimeState {
                 && resources.outputs.live == 0
                 && resources.baselines.live == 0
                 && resources.snapshots.live == 0
+                && resources.operations.live == 0
         })
     }
 
@@ -563,6 +661,7 @@ impl RuntimeState {
                 poisoned: false,
                 closing: false,
             }),
+            operations: Mutex::new(Vec::new()),
             _snapshot_anchor: None,
         });
         let inserted = {
@@ -658,6 +757,7 @@ impl RuntimeState {
                 poisoned: false,
                 closing: false,
             }),
+            operations: Mutex::new(Vec::new()),
             _snapshot_anchor: Some(baseline.unwrap_or(snapshot)),
         });
         let inserted = {
@@ -726,7 +826,6 @@ impl RuntimeState {
             .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
         let record = Arc::new(SnapshotRecord {
             bytes: bytes.to_vec(),
-            description,
             kernel_handle,
         });
         match resources.baselines.insert(self.namespace, record) {
@@ -802,7 +901,6 @@ impl RuntimeState {
         let length = bytes.len();
         let record = Arc::new(SnapshotRecord {
             bytes,
-            description,
             kernel_handle: vm.kernel_handle,
         });
         let handle = resources.snapshots.insert(self.namespace, record)?;
@@ -834,6 +932,136 @@ impl RuntimeState {
             .lock()
             .map_err(|_| contract::MC_HOST_INTERNAL)?;
         Ok(Arc::clone(resources.vms.get(self.namespace, handle)?))
+    }
+
+    pub fn start_exec(
+        &self,
+        vm_handle: u64,
+        kind: u32,
+        request: ctl_rust::ExecRequest,
+    ) -> Result<u64, u32> {
+        if (kind == contract::MC_HOST_OP_EXEC_SHELL && request.command.is_none())
+            || (kind == contract::MC_HOST_OP_EXEC_DIRECT && request.argv.is_empty())
+            || (kind != contract::MC_HOST_OP_EXEC_SHELL && kind != contract::MC_HOST_OP_EXEC_DIRECT)
+        {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        let vm = self.vm(vm_handle)?;
+        let mut host = vm.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
+        let host = host.as_mut().ok_or(contract::MC_HOST_INVALID_STATE)?;
+        let observed = vm.observed.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if observed.closing || observed.exit_code.is_some() {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        if observed.poisoned {
+            return Err(contract::MC_HOST_POISONED);
+        }
+        drop(observed);
+        if vm.live_operations()?.len() >= MAX_OPERATIONS_PER_VM {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+
+        let record = Arc::new(OperationRecord::new(vm_handle, kind));
+        let handle = {
+            let mut resources = self
+                .resources
+                .lock()
+                .map_err(|_| contract::MC_HOST_INTERNAL)?;
+            resources
+                .operations
+                .insert(self.namespace, Arc::clone(&record))?
+        };
+        vm.operations
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .push(Arc::downgrade(&record));
+        let options = ExecOptions {
+            cwd: request.cwd,
+            env: request.env,
+            stdin: request.stdin,
+        };
+        let started = if kind == contract::MC_HOST_OP_EXEC_SHELL {
+            host.exec_start(
+                request
+                    .command
+                    .as_deref()
+                    .ok_or(contract::MC_HOST_INVALID_ARGUMENT)?,
+                options,
+            )
+        } else {
+            let mut args = request.argv.into_iter().map(|arg| arg.value);
+            let program = args.next().ok_or(contract::MC_HOST_INVALID_ARGUMENT)?;
+            host.run_start(&program, &args.collect::<Vec<_>>(), options)
+        };
+        match started {
+            Ok(job) => {
+                if let Err(error) = record.set_exec_job(job) {
+                    let _ = host.exec_cancel(job);
+                    self.remove_operation(handle)?;
+                    return Err(error);
+                }
+                Ok(handle)
+            }
+            Err(_) => {
+                self.remove_operation(handle)?;
+                Err(contract::MC_HOST_KERNEL_ERROR)
+            }
+        }
+    }
+
+    fn remove_operation(&self, handle: u64) -> Result<(), u32> {
+        let record = {
+            let mut resources = self
+                .resources
+                .lock()
+                .map_err(|_| contract::MC_HOST_INTERNAL)?;
+            resources.operations.remove(self.namespace, handle)?
+        };
+        let vm = self.vm(record.vm)?;
+        vm.operations
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .retain(|weak| {
+                weak.upgrade()
+                    .is_some_and(|active| !Arc::ptr_eq(&active, &record))
+            });
+        Ok(())
+    }
+
+    pub fn operation(&self, handle: u64) -> Result<Arc<OperationRecord>, u32> {
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        Ok(Arc::clone(
+            resources.operations.get(self.namespace, handle)?,
+        ))
+    }
+
+    pub fn operation_peek(&self, handle: u64) -> Result<Vec<u8>, u32> {
+        let record = self.operation(handle)?;
+        let vm = self.vm(record.vm)?;
+        let mut host = vm.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
+        let host = host.as_mut().ok_or(contract::MC_HOST_INVALID_STATE)?;
+        record.peek_stdout(host)
+    }
+
+    pub fn operation_cancel(&self, handle: u64) -> Result<(), u32> {
+        let record = self.operation(handle)?;
+        let vm = self.vm(record.vm)?;
+        let mut host = vm.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
+        match host.as_mut() {
+            Some(host) => record.cancel(host),
+            None => record.cancel_after_store_drop(),
+        }
+    }
+
+    pub fn operation_close(&self, handle: u64) -> Result<(), u32> {
+        let record = self.operation(handle)?;
+        if record.pending()? {
+            return Err(contract::MC_HOST_BUSY);
+        }
+        self.remove_operation(handle)
     }
 
     pub fn output_next(&self, vm_handle: u64) -> Result<Option<(u64, OutputRecord)>, u32> {
@@ -944,6 +1172,15 @@ impl RuntimeState {
             }
             return Err(contract::MC_HOST_BUSY);
         }
+        if !vm.live_operations()?.is_empty() {
+            if !was_closing {
+                vm.observed
+                    .lock()
+                    .map_err(|_| contract::MC_HOST_INTERNAL)?
+                    .closing = false;
+            }
+            return Err(contract::MC_HOST_BUSY);
+        }
         resources.vms.remove(self.namespace, handle)?;
         let kernel = resources
             .kernels
@@ -970,6 +1207,9 @@ impl RuntimeState {
             observed.closing = true;
         }
         host.take();
+        for operation in vm.live_operations()? {
+            operation.cancel_after_store_drop()?;
+        }
         drop(host);
         self.close_vm(handle)
     }

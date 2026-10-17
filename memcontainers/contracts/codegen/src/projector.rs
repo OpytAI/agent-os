@@ -2817,9 +2817,18 @@ fn emit_vocabulary_constants(lang: &str, nodes: &[Node]) -> String {
         } else {
             node.props.get("id").map(Val::as_int).unwrap_or(0)
         };
+        let numeric_type = if node.name == "constant" {
+            node.prop_str("type").unwrap_or("u32")
+        } else {
+            "u32"
+        };
+        assert!(matches!(
+            numeric_type,
+            "u8" | "u16" | "u32" | "u64" | "i32" | "i64"
+        ));
         match lang {
-            "rust" => out.push_str(&format!("pub const {prefix}: u32 = {value};\n")),
-            "zig" => out.push_str(&format!("pub const {prefix}: u32 = {value};\n")),
+            "rust" => out.push_str(&format!("pub const {prefix}: {numeric_type} = {value};\n")),
+            "zig" => out.push_str(&format!("pub const {prefix}: {numeric_type} = {value};\n")),
             "ts" => out.push_str(&format!("export const {prefix} = {value} as const;\n")),
             "elixir" => {
                 let fun = prefix.to_ascii_lowercase();

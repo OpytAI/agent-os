@@ -24,12 +24,14 @@ int main(int argc, char **argv) {
   need(get_api(1, 1, sizeof(api), &api) == MC_HOST_UNSUPPORTED_ABI,
        "reject new minor");
   need(get_api(1, 0, sizeof(api), &api) == MC_HOST_OK, "get API");
-  need(api.header.size == sizeof(api) && api.feature_bits == 0,
-       "no unimplemented features advertised");
+  uint64_t features = MC_HOST_FEATURE_VM_BASIC | MC_HOST_FEATURE_OUTPUT |
+                      MC_HOST_FEATURE_SNAPSHOT | MC_HOST_FEATURE_EXEC_OPERATION;
+  need(api.header.size == sizeof(api) && api.feature_bits == features,
+       "staged feature set");
 
   mc_host_library_info_v1 info = MC_HOST_INIT(mc_host_library_info_v1);
   need(api.library_info(&info, NULL) == MC_HOST_OK, "library info");
-  need(info.abi_major == 1 && info.feature_bits == 0, "library metadata");
+  need(info.abi_major == 1 && info.feature_bits == features, "library metadata");
 
   struct {
     mc_host_header_v1 header;
@@ -89,10 +91,14 @@ int main(int argc, char **argv) {
 
   need(api.get_interface(runtime, MC_HOST_IFACE_VM_V1, 1, 0, NULL, NULL) ==
            MC_HOST_INVALID_ARGUMENT, "reject malformed interface request");
-  mc_host_header_v1 absent = {sizeof(absent), 1, 0};
-  need(api.get_interface(runtime, MC_HOST_IFACE_VM_V1, 1, sizeof(absent),
-                         &absent, NULL) == MC_HOST_UNSUPPORTED,
-       "unimplemented VM interface");
+  mc_host_header_v1 prefix = {sizeof(prefix), 1, 0};
+  need(api.get_interface(runtime, MC_HOST_IFACE_VM_V1, 1, sizeof(prefix),
+                         &prefix, NULL) == MC_HOST_OK,
+       "VM table prefix");
+  need(prefix.size == sizeof(mc_host_vm_api_v1), "VM table reports full size");
+  need(api.get_interface(runtime, MC_HOST_IFACE_ATTACHMENT_V1, 1, sizeof(prefix),
+                         &prefix, NULL) == MC_HOST_UNSUPPORTED,
+       "missing attachment table");
   need(api.runtime_close(runtime, NULL) == MC_HOST_OK, "close runtime");
   need(api.runtime_close(runtime, NULL) == MC_HOST_STALE_HANDLE, "stale close");
 
