@@ -2302,6 +2302,47 @@ impl KernelHost {
         ))
     }
 
+    /// Start a resident-service job without advancing the kernel scheduler.
+    pub fn service_start(&mut self, service: &str, request: &[u8]) -> Result<i32> {
+        let start = self.exports.require_ctl_svc_call_start()?;
+        let frame = WireSvcRequest {
+            service: service.to_string(),
+            request: request.to_vec(),
+        }
+        .encode();
+        self.ctl_put(&frame)?;
+        let job = wt(
+            start.call(&mut self.store, frame.len() as i32),
+            "mc_ctl_svc_call_start",
+        )?;
+        if job < 0 {
+            return Err(ctl_err("service_start", service, job));
+        }
+        Ok(job)
+    }
+
+    /// Poll once. A completed result is copied before another control call can reuse the buffer.
+    pub fn service_poll(&mut self, job: i32) -> Result<Option<ServiceCallResult>> {
+        let poll = self.exports.require_ctl_svc_call_poll()?;
+        let len = wt(poll.call(&mut self.store, job), "mc_ctl_svc_call_poll")?;
+        if len == 0 {
+            return Ok(None);
+        }
+        if len < 0 {
+            return Err(ctl_err("service_poll", "job", len));
+        }
+        self.read_service_call_result(len as usize).map(Some)
+    }
+
+    pub fn service_cancel(&mut self, job: i32) -> Result<()> {
+        let close = self.exports.require_ctl_svc_call_close()?;
+        let status = wt(close.call(&mut self.store, job), "mc_ctl_svc_call_close")?;
+        if status < 0 {
+            return Err(ctl_err("service_cancel", "job", status));
+        }
+        Ok(())
+    }
+
     fn read_service_call_result(&mut self, len: usize) -> Result<ServiceCallResult> {
         let raw = self.ctl_get(len)?;
         let response = WireSvcResponse::decode(&raw)

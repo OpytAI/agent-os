@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use ctl_rust::ExecOutcome;
+use ctl_rust::{ExecOutcome, SvcResponse};
 use embedder_rust::{self as contract, OperationResult};
 use host::{ControlAttempt, ControlRetryAction, KernelHost};
 
@@ -17,6 +17,7 @@ pub struct OperationRecord {
 enum OperationState {
     New,
     PendingExec(i32),
+    PendingService(i32),
     NewRetry(ControlRetryAction),
     PendingRetry(ControlRetryAction),
     Ready(Arc<[u8]>),
@@ -58,12 +59,22 @@ impl OperationRecord {
         Ok(())
     }
 
+    pub fn set_service_job(&self, job: i32) -> Result<(), u32> {
+        let mut state = self.state.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if !matches!(*state, OperationState::New) {
+            return Err(contract::MC_HOST_INTERNAL);
+        }
+        *state = OperationState::PendingService(job);
+        Ok(())
+    }
+
     pub fn observed(&self) -> Result<OperationObserved, u32> {
         let state = self.state.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
         let (state_code, error, result_length) = match &*state {
             OperationState::New => (contract::MC_HOST_OP_NEW, 0, 0),
             OperationState::NewRetry(_) => (contract::MC_HOST_OP_NEW, 0, 0),
             OperationState::PendingExec(_) => (contract::MC_HOST_OP_PENDING, 0, 0),
+            OperationState::PendingService(_) => (contract::MC_HOST_OP_PENDING, 0, 0),
             OperationState::PendingRetry(_) => (contract::MC_HOST_OP_PENDING, 0, 0),
             OperationState::Ready(bytes) => (contract::MC_HOST_OP_READY, 0, bytes.len() as u64),
             OperationState::Failed(error) => (contract::MC_HOST_OP_FAILED, *error, 0),
@@ -87,6 +98,7 @@ impl OperationRecord {
             *state,
             OperationState::New
                 | OperationState::PendingExec(_)
+                | OperationState::PendingService(_)
                 | OperationState::NewRetry(_)
                 | OperationState::PendingRetry(_)
         ))
@@ -194,6 +206,45 @@ impl OperationRecord {
         Ok(())
     }
 
+    pub fn poll_service(&self, host: &mut KernelHost) -> Result<(), u32> {
+        let mut state = self.state.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let OperationState::PendingService(job) = *state else {
+            return Ok(());
+        };
+        let result = match host.service_poll(job) {
+            Ok(Some(result)) => result,
+            Ok(None) => return Ok(()),
+            Err(_) => {
+                if host.service_cancel(job).is_err() {
+                    return Err(contract::MC_HOST_KERNEL_ERROR);
+                }
+                *state = OperationState::Failed(contract::MC_HOST_KERNEL_ERROR);
+                return Ok(());
+            }
+        };
+        let payload = SvcResponse {
+            status: result.status,
+            body: result.body,
+        }
+        .encode();
+        if payload.len() > MAX_RESULT_BYTES.saturating_sub(64) {
+            *state = OperationState::Failed(contract::MC_HOST_RESOURCE_LIMIT);
+            return Ok(());
+        }
+        let frame = OperationResult {
+            kind: self.kind,
+            status: result.status,
+            payload,
+        }
+        .encode();
+        if frame.len() > MAX_RESULT_BYTES {
+            *state = OperationState::Failed(contract::MC_HOST_RESOURCE_LIMIT);
+        } else {
+            *state = OperationState::Ready(Arc::from(frame));
+        }
+        Ok(())
+    }
+
     pub fn peek_stdout(&self, host: &mut KernelHost) -> Result<Vec<u8>, u32> {
         if self.kind != contract::MC_HOST_OP_EXEC_SHELL
             && self.kind != contract::MC_HOST_OP_EXEC_DIRECT
@@ -221,6 +272,11 @@ impl OperationRecord {
         match *state {
             OperationState::PendingExec(job) => {
                 host.exec_cancel(job)
+                    .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?;
+                *state = OperationState::Cancelled;
+            }
+            OperationState::PendingService(job) => {
+                host.service_cancel(job)
                     .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?;
                 *state = OperationState::Cancelled;
             }

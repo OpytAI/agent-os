@@ -417,6 +417,13 @@ impl VmRecord {
                         .poisoned = true;
                     return Err(contract::MC_HOST_KERNEL_ERROR);
                 }
+                if operation.poll_service(host).is_err() {
+                    self.observed
+                        .lock()
+                        .map_err(|_| contract::MC_HOST_INTERNAL)?
+                        .poisoned = true;
+                    return Err(contract::MC_HOST_KERNEL_ERROR);
+                }
             }
             for operation in operations {
                 if operation.retry_waiting()? {
@@ -1010,6 +1017,56 @@ impl RuntimeState {
             Ok(job) => {
                 if let Err(error) = record.set_exec_job(job) {
                     let _ = host.exec_cancel(job);
+                    self.remove_operation(handle)?;
+                    return Err(error);
+                }
+                Ok(handle)
+            }
+            Err(_) => {
+                self.remove_operation(handle)?;
+                Err(contract::MC_HOST_KERNEL_ERROR)
+            }
+        }
+    }
+
+    pub fn start_service(
+        &self,
+        vm_handle: u64,
+        kind: u32,
+        request: ctl_rust::SvcRequest,
+    ) -> Result<u64, u32> {
+        let vm = self.vm(vm_handle)?;
+        let mut host = vm.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
+        let host = host.as_mut().ok_or(contract::MC_HOST_INVALID_STATE)?;
+        let observed = vm.observed.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if observed.closing || observed.exit_code.is_some() {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        if observed.poisoned {
+            return Err(contract::MC_HOST_POISONED);
+        }
+        drop(observed);
+        if vm.live_operations()?.len() >= MAX_OPERATIONS_PER_VM {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        let record = Arc::new(OperationRecord::new(vm_handle, kind));
+        let handle = {
+            let mut resources = self
+                .resources
+                .lock()
+                .map_err(|_| contract::MC_HOST_INTERNAL)?;
+            resources
+                .operations
+                .insert(self.namespace, Arc::clone(&record))?
+        };
+        vm.operations
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .push(Arc::downgrade(&record));
+        match host.service_start(&request.service, &request.request) {
+            Ok(job) => {
+                if let Err(error) = record.set_service_job(job) {
+                    let _ = host.service_cancel(job);
                     self.remove_operation(handle)?;
                     return Err(error);
                 }

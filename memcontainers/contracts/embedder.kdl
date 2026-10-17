@@ -221,6 +221,7 @@ constant "MC_HOST_FEATURE_SNAPSHOT" value=4 type="u64"
 constant "MC_HOST_FEATURE_EXEC_OPERATION" value=8 type="u64"
 constant "MC_HOST_FEATURE_FS_OPERATION" value=16 type="u64"
 constant "MC_HOST_FEATURE_AUTOCOMPLETE_OPERATION" value=32 type="u64"
+constant "MC_HOST_FEATURE_SERVICE_OPERATION" value=64 type="u64"
 
 constant "MC_HOST_TICK_WAITING" value=0 type="u32"
 constant "MC_HOST_TICK_RUNNABLE" value=1 type="u32"

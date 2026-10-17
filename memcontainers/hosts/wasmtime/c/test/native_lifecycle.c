@@ -136,6 +136,64 @@ static wire autocomplete_request(const char *source) {
   return envelope;
 }
 
+static wire service_request(const char *service, const char *body) {
+  wire request = {0}, envelope = {0};
+  put_u16(&request, 6); /* control.kdl SvcRequest v1 */
+  put_u8(&request, 1);
+  put_bytes(&request, (const uint8_t *)service, strlen(service));
+  put_bytes(&request, (const uint8_t *)body, strlen(body));
+  put_u16(&envelope, 21);
+  put_u8(&envelope, 1);
+  put_u32(&envelope, MC_HOST_OP_SERVICE_CALL);
+  put_bytes(&envelope, request.bytes, request.length);
+  return envelope;
+}
+
+static void run_service_call(const mc_host_vm_api_v1 *vm_api,
+                             const mc_host_operation_api_v1 *op_api,
+                             mc_host_runtime_t runtime, mc_host_handle_t vm) {
+  wire request = service_request("tools", "{\"op\":\"list\"}");
+  mc_host_handle_t operation = 0;
+  check(op_api->start(runtime, vm,
+                      (mc_host_bytes_v1){request.bytes, request.length},
+                      &operation, NULL), "start tools service call");
+  mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
+  check(op_api->poll(runtime, operation, &status, NULL), "poll tools call before drive");
+  need(status.state == MC_HOST_OP_PENDING, "service call does not drive during start");
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    options.stop_mask = MC_HOST_DRIVE_ON_OPERATION;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "drive tools service call");
+    check(op_api->poll(runtime, operation, &status, NULL), "poll tools service call");
+    if (status.state == MC_HOST_OP_READY) break;
+    need(status.state == MC_HOST_OP_PENDING, "service call stays pending");
+  }
+  need(status.state == MC_HOST_OP_READY && status.result_length < 4096,
+       "tools service call completes");
+  uint8_t result[4096];
+  mc_host_buffer_v1 buffer = {result, sizeof(result), 0};
+  check(op_api->result(runtime, operation, &buffer, NULL), "read tools service result");
+  size_t offset = 0;
+  need(read_u16(result, buffer.required, &offset) == 22 &&
+           read_u8(result, buffer.required, &offset) == 1 &&
+           read_u32(result, buffer.required, &offset) == MC_HOST_OP_SERVICE_CALL &&
+           read_u32(result, buffer.required, &offset) == 0,
+       "service operation result envelope");
+  uint32_t payload_len = read_u32(result, buffer.required, &offset);
+  need(payload_len == buffer.required - offset &&
+           read_u16(result, buffer.required, &offset) == 7 &&
+           read_u8(result, buffer.required, &offset) == 1 &&
+           read_u32(result, buffer.required, &offset) == 0,
+       "service response envelope");
+  uint32_t body_len = read_u32(result, buffer.required, &offset);
+  need(body_len == buffer.required - offset &&
+           contains_bytes(result + offset, body_len, "\"tools\"", 7),
+       "real tools broker responded");
+  check(op_api->close(runtime, operation, NULL), "close tools service call");
+}
+
 static void run_autocomplete(const mc_host_vm_api_v1 *vm_api,
                              const mc_host_operation_api_v1 *op_api,
                              mc_host_runtime_t runtime, mc_host_handle_t vm) {
@@ -462,6 +520,7 @@ int main(int argc, char **argv) {
   run_control_command(&vm_api, &op_api, &snap_api, runtime, vm);
   run_filesystem_operations(&vm_api, &op_api, runtime, vm);
   run_autocomplete(&vm_api, &op_api, runtime, vm);
+  run_service_call(&vm_api, &op_api, runtime, vm);
 
   mc_host_snapshot_begin_options_v1 full_options = MC_HOST_INIT(mc_host_snapshot_begin_options_v1);
   full_options.mode = MC_HOST_SNAPSHOT_FULL;

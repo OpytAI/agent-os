@@ -5,7 +5,7 @@ use std::mem::{align_of, size_of};
 use constants_rust::{
     AUTOCOMPLETE_MAX_FRAME_BYTES, AUTOCOMPLETE_MAX_ITEMS, EXEC_MODE_DIRECT, EXEC_MODE_SHELL,
 };
-use ctl_rust::{AutocompleteRequest, ExecRequest};
+use ctl_rust::{AutocompleteRequest, ExecRequest, SvcRequest};
 use embedder_rust::{self as contract, FilesystemRequest, OperationRequest};
 use host::ControlRetryAction;
 
@@ -109,6 +109,16 @@ pub unsafe extern "C" fn start(
         let envelope =
             OperationRequest::decode(frame).map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
         let operation = match envelope.kind {
+            contract::MC_HOST_OP_SERVICE_CALL => {
+                let request = SvcRequest::decode(&envelope.payload)
+                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+                if request.service.is_empty() || request.service.contains('\0') {
+                    return Err(contract::MC_HOST_INVALID_ARGUMENT);
+                }
+                ActiveRuntime::acquire(runtime)?
+                    .state
+                    .start_service(vm, envelope.kind, request)?
+            }
             contract::MC_HOST_OP_AUTOCOMPLETE => {
                 let request = AutocompleteRequest::decode(&envelope.payload)
                     .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
