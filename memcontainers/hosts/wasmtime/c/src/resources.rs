@@ -593,6 +593,11 @@ impl RuntimeState {
         {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
+        let transient_bytes = snapshot
+            .len()
+            .checked_add(baseline.map_or(0, |bytes| bytes.len()))
+            .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
+        let retained_bytes = baseline.map_or(snapshot.len(), |bytes| bytes.len());
         let kernel_bytes = {
             let mut resources = self
                 .resources
@@ -601,12 +606,21 @@ impl RuntimeState {
             if resources.vms.live >= MAX_VMS {
                 return Err(contract::MC_HOST_RESOURCE_LIMIT);
             }
+            if resources
+                .snapshot_bytes
+                .checked_add(transient_bytes)
+                .is_none_or(|total| total > SNAPSHOT_TOTAL_BYTES)
+            {
+                return Err(contract::MC_HOST_RESOURCE_LIMIT);
+            }
             let record = resources.kernels.get_mut(self.namespace, kernel_handle)?;
             record.pins = record
                 .pins
                 .checked_add(1)
                 .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
-            Arc::clone(&record.bytes)
+            let bytes = Arc::clone(&record.bytes);
+            resources.snapshot_bytes += transient_bytes;
+            bytes
         };
         let snapshot: Arc<[u8]> = Arc::from(snapshot);
         let baseline: Option<Arc<[u8]>> = baseline.map(Arc::from);
@@ -624,6 +638,7 @@ impl RuntimeState {
             Ok(host) => host,
             Err(_) => {
                 self.unpin_kernel(kernel_handle)?;
+                self.release_snapshot_charge(transient_bytes)?;
                 return Err(contract::MC_HOST_SNAPSHOT_ERROR);
             }
         };
@@ -657,8 +672,23 @@ impl RuntimeState {
         };
         if inserted.is_err() {
             self.unpin_kernel(kernel_handle)?;
+            self.release_snapshot_charge(transient_bytes)?;
+        } else {
+            self.release_snapshot_charge(transient_bytes - retained_bytes)?;
         }
         inserted
+    }
+
+    fn release_snapshot_charge(&self, amount: usize) -> Result<(), u32> {
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        resources.snapshot_bytes = resources
+            .snapshot_bytes
+            .checked_sub(amount)
+            .ok_or(contract::MC_HOST_INTERNAL)?;
+        Ok(())
     }
 
     pub fn import_baseline(
@@ -907,6 +937,12 @@ impl RuntimeState {
             .pins
             .checked_sub(1)
             .ok_or(contract::MC_HOST_INTERNAL)?;
+        if let Some(anchor) = &vm._snapshot_anchor {
+            resources.snapshot_bytes = resources
+                .snapshot_bytes
+                .checked_sub(anchor.len())
+                .ok_or(contract::MC_HOST_INTERNAL)?;
+        }
         drop(host_guard);
         Ok(())
     }
