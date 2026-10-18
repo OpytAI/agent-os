@@ -414,6 +414,25 @@ static void cancel_mount_relay(const mc_host_vm_api_v1 *vm_api,
   }
   need(event != 0 && info.kind == MC_HOST_EVENT_HOST_CALL,
        "lease cancellable host call");
+  mc_host_wire_host_call_response pending_reply = {0};
+  wire reply_frame = {0}, response_frame = {0};
+  need(mc_host_wire_encode_host_call_response(&pending_reply, reply_frame.bytes,
+               sizeof(reply_frame.bytes), &reply_frame.length) == MC_HOST_WIRE_OK,
+       "encode pending host-call response");
+  mc_host_wire_effect_response pending_response = {
+      .kind = MC_HOST_EVENT_HOST_CALL,
+      .event_id = (int64_t)event,
+      .payload = {reply_frame.bytes, reply_frame.length}};
+  need(mc_host_wire_encode_effect_response(&pending_response, response_frame.bytes,
+               sizeof(response_frame.bytes), &response_frame.length) == MC_HOST_WIRE_OK,
+       "encode pending effect response");
+  check(effect_api->response_begin(runtime, event,
+          (mc_host_bytes_v1){response_frame.bytes, response_frame.length}, 4, NULL),
+        "begin host-call response before VM cancellation");
+  const uint8_t partial_errno[] = {44, 0};
+  check(effect_api->response_write(runtime, event,
+          (mc_host_bytes_v1){partial_errno, sizeof(partial_errno)}, NULL),
+        "write partial host-call response");
   need(vm_api->vm_cancel_and_close(runtime, vm, NULL) == MC_HOST_BUSY,
        "cancelled VM waits for adopted effect and operation");
   mc_host_buffer_v1 cancelled_buffer = {0};
@@ -686,7 +705,7 @@ static void run_http_relay(const mc_host_vm_api_v1 *vm_api,
       mc_host_wire_http_effect_response http_response = {
           .failed = 0,
           .head = {(const uint8_t *)head, sizeof(head) - 1},
-          .body = {response + separator + 4, body_length}};
+          .body = {NULL, 0}};
       need(mc_host_wire_encode_http_effect_response(&http_response, payload.bytes,
                   sizeof(payload.bytes), &payload.length) == MC_HOST_WIRE_OK,
            "encode HTTP response");
@@ -697,8 +716,36 @@ static void run_http_relay(const mc_host_vm_api_v1 *vm_api,
       need(mc_host_wire_encode_effect_response(&effect_response, answer.bytes,
                   sizeof(answer.bytes), &answer.length) == MC_HOST_WIRE_OK,
            "encode native effect response");
-      check(effect_api->respond(runtime, event,
-          (mc_host_bytes_v1){answer.bytes, answer.length}, NULL), "answer guest HTTP request");
+      check(effect_api->response_begin(runtime, event,
+          (mc_host_bytes_v1){answer.bytes, answer.length}, body_length, NULL),
+          "begin streamed HTTP response");
+      check(effect_api->response_write(runtime, event,
+          (mc_host_bytes_v1){response + separator + 4, 2}, NULL),
+          "write first HTTP response chunk");
+      check(effect_api->response_abort(runtime, event, NULL),
+            "abort incomplete HTTP response");
+      check(effect_api->response_begin(runtime, event,
+          (mc_host_bytes_v1){answer.bytes, answer.length}, body_length, NULL),
+          "retry streamed HTTP response");
+      check(effect_api->response_write(runtime, event,
+          (mc_host_bytes_v1){response + separator + 4, 2}, NULL),
+          "write retried HTTP response chunk");
+      need(effect_api->response_finish(runtime, event, NULL) == MC_HOST_INVALID_STATE,
+           "incomplete response cannot become visible to guest");
+      mc_host_drive_options_v1 pending_options = MC_HOST_INIT(mc_host_drive_options_v1);
+      pending_options.max_ticks = 16;
+      mc_host_drive_result_v1 pending_drive = MC_HOST_INIT(mc_host_drive_result_v1);
+      check(vm_api->vm_drive(runtime, vm, &pending_options, &pending_drive, NULL),
+            "drive while HTTP response is incomplete");
+      check(op_api->poll(runtime, operation, &status, NULL),
+            "poll guest waiting for complete HTTP response");
+      need(status.state == MC_HOST_OP_PENDING,
+           "partial application response stays hidden from guest");
+      check(effect_api->response_write(runtime, event,
+          (mc_host_bytes_v1){response + separator + 6, body_length - 2}, NULL),
+          "write final HTTP response chunk");
+      check(effect_api->response_finish(runtime, event, NULL),
+            "finish streamed HTTP response");
       handled = 1;
     } else {
       need(next == MC_HOST_WOULD_BLOCK, "HTTP event queue");

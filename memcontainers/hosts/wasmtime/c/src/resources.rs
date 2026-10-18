@@ -793,6 +793,38 @@ impl RuntimeState {
         Ok(())
     }
 
+    pub fn effect_response_begin(
+        &self,
+        handle: u64,
+        kind: u32,
+        response: EffectBody,
+        declared_body_len: usize,
+    ) -> Result<(), u32> {
+        let (_, event_id, relay) = self.effect_record(handle)?;
+        relay.response_begin(event_id, handle, kind, response, declared_body_len)
+    }
+
+    pub fn effect_response_write(&self, handle: u64, chunk: &[u8]) -> Result<(), u32> {
+        let (_, event_id, relay) = self.effect_record(handle)?;
+        relay.response_write(event_id, handle, chunk)
+    }
+
+    pub fn effect_response_finish(&self, handle: u64) -> Result<(), u32> {
+        let (_, event_id, relay) = self.effect_record(handle)?;
+        relay.response_finish(event_id, handle)?;
+        self.resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .effects
+            .remove(self.namespace, handle)?;
+        Ok(())
+    }
+
+    pub fn effect_response_abort(&self, handle: u64) -> Result<(), u32> {
+        let (_, event_id, relay) = self.effect_record(handle)?;
+        relay.response_abort(event_id, handle)
+    }
+
     pub fn effect_ack(&self, handle: u64) -> Result<(), u32> {
         let (_, event_id, relay) = self.effect_record(handle)?;
         let original_handle = relay.ack_cancelled(event_id, handle)?;

@@ -197,13 +197,17 @@ layout "EFFECT_INFO" size=24 align=8 {
   offset "reserved" value=12
   offset "length" value=16
 }
-layout "EFFECT_API" size=48 align=8 {
+layout "EFFECT_API" size=80 align=8 {
   offset "header" value=0
   offset "next" value=8
   offset "read" value=16
   offset "release" value=24
   offset "respond" value=32
   offset "ack" value=40
+  offset "response_begin" value=48
+  offset "response_write" value=56
+  offset "response_finish" value=64
+  offset "response_abort" value=72
 }
 
 constant "MC_HOST_OK" value=0 type="u32"

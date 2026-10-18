@@ -342,6 +342,10 @@ struct EffectApi {
     release: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
     respond: unsafe extern "C" fn(u64, u64, Bytes, *mut Error) -> ResultCode,
     ack: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
+    response_begin: unsafe extern "C" fn(u64, u64, Bytes, u64, *mut Error) -> ResultCode,
+    response_write: unsafe extern "C" fn(u64, u64, Bytes, *mut Error) -> ResultCode,
+    response_finish: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
+    response_abort: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
 }
 
 // The manifest in embedder.kdl is checked independently by Rust and C. A
@@ -788,6 +792,22 @@ const _: () = {
     assert!(offset_of!(EffectApi, release) == contract::MC_HOST_LAYOUT_EFFECT_API_RELEASE_OFFSET);
     assert!(offset_of!(EffectApi, respond) == contract::MC_HOST_LAYOUT_EFFECT_API_RESPOND_OFFSET);
     assert!(offset_of!(EffectApi, ack) == contract::MC_HOST_LAYOUT_EFFECT_API_ACK_OFFSET);
+    assert!(
+        offset_of!(EffectApi, response_begin)
+            == contract::MC_HOST_LAYOUT_EFFECT_API_RESPONSE_BEGIN_OFFSET
+    );
+    assert!(
+        offset_of!(EffectApi, response_write)
+            == contract::MC_HOST_LAYOUT_EFFECT_API_RESPONSE_WRITE_OFFSET
+    );
+    assert!(
+        offset_of!(EffectApi, response_finish)
+            == contract::MC_HOST_LAYOUT_EFFECT_API_RESPONSE_FINISH_OFFSET
+    );
+    assert!(
+        offset_of!(EffectApi, response_abort)
+            == contract::MC_HOST_LAYOUT_EFFECT_API_RESPONSE_ABORT_OFFSET
+    );
 };
 
 struct RuntimeSlot {

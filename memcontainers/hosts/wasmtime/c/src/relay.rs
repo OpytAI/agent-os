@@ -20,7 +20,14 @@ const MAX_TOTAL_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 enum EventPhase {
     Queued,
     Leased,
+    Responding,
     Cancelled,
+}
+
+struct ResponseStream {
+    response: EffectBody,
+    declared_body_len: usize,
+    reserved_bytes: usize,
 }
 
 struct Event {
@@ -29,6 +36,7 @@ struct Event {
     phase: EventPhase,
     native_handle: Option<u64>,
     original_handle: Option<u64>,
+    stream: Option<ResponseStream>,
 }
 
 struct Slot {
@@ -72,7 +80,7 @@ impl Inner {
                     self.queued_bytes -= event.payload.len();
                 }
             }
-            Some(EventPhase::Leased) => self.cancel_leased(slot.event_id),
+            Some(EventPhase::Leased | EventPhase::Responding) => self.cancel_leased(slot.event_id),
             _ => {}
         }
     }
@@ -84,7 +92,7 @@ impl Inner {
                 .checked_add(payload.len())
                 .is_none_or(|total| total > MAX_EVENT_BYTES)
             || self.next_bridge_handle == i32::MAX
-            || self.next_event_id == u64::MAX
+            || self.next_event_id > u64::MAX - MAX_EVENTS as u64
         {
             return None;
         }
@@ -101,6 +109,7 @@ impl Inner {
                 phase: EventPhase::Queued,
                 native_handle: None,
                 original_handle: None,
+                stream: None,
             },
         );
         self.queue.push_back(id);
@@ -120,8 +129,11 @@ impl Inner {
         let Some(event) = self.events.get_mut(&id) else {
             return;
         };
-        if event.phase != EventPhase::Leased {
+        if event.phase != EventPhase::Leased && event.phase != EventPhase::Responding {
             return;
+        }
+        if let Some(stream) = event.stream.take() {
+            self.response_bytes -= stream.reserved_bytes;
         }
         let Some(original_handle) = event.native_handle else {
             if let Some(event) = self.events.remove(&id) {
@@ -130,9 +142,6 @@ impl Inner {
             return;
         };
         event.phase = EventPhase::Cancelled;
-        if self.next_event_id == u64::MAX {
-            return;
-        }
         let notice_id = self.next_event_id;
         self.next_event_id += 1;
         let notice_kind = match event.kind {
@@ -153,6 +162,7 @@ impl Inner {
                 phase: EventPhase::Queued,
                 native_handle: None,
                 original_handle: Some(original_handle),
+                stream: None,
             },
         );
         self.queue.push_back(notice_id);
@@ -374,6 +384,139 @@ impl Relay {
         Ok(())
     }
 
+    pub fn response_begin(
+        &self,
+        id: u64,
+        handle: u64,
+        kind: u32,
+        response: EffectBody,
+        declared_body_len: usize,
+    ) -> Result<(), u32> {
+        if !response.body.is_empty()
+            || (response.failed && declared_body_len != 0)
+            || (kind == contract::MC_HOST_EVENT_HTTP_REQUEST && response.head.len() > 16 * 1024)
+        {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        let reserved_bytes = response
+            .head
+            .len()
+            .checked_add(declared_body_len)
+            .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
+        if reserved_bytes > MAX_RESPONSE_BYTES {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        let mut inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let event = inner
+            .events
+            .get(&id)
+            .ok_or(contract::MC_HOST_STALE_HANDLE)?;
+        if event.native_handle != Some(handle)
+            || event.phase != EventPhase::Leased
+            || event.kind != kind
+        {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        if !inner
+            .slots
+            .values()
+            .any(|slot| slot.event_id == id && slot.kind == kind)
+        {
+            return Err(contract::MC_HOST_CANCELLED);
+        }
+        let total = inner
+            .response_bytes
+            .checked_add(reserved_bytes)
+            .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
+        if total > MAX_TOTAL_RESPONSE_BYTES {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        let event = inner
+            .events
+            .get_mut(&id)
+            .ok_or(contract::MC_HOST_INTERNAL)?;
+        event.phase = EventPhase::Responding;
+        event.stream = Some(ResponseStream {
+            response,
+            declared_body_len,
+            reserved_bytes,
+        });
+        inner.response_bytes = total;
+        Ok(())
+    }
+
+    pub fn response_write(&self, id: u64, handle: u64, chunk: &[u8]) -> Result<(), u32> {
+        let mut inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let event = inner
+            .events
+            .get_mut(&id)
+            .ok_or(contract::MC_HOST_STALE_HANDLE)?;
+        if event.native_handle != Some(handle) || event.phase != EventPhase::Responding {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        let stream = event.stream.as_mut().ok_or(contract::MC_HOST_INTERNAL)?;
+        let remaining = stream.declared_body_len - stream.response.body.len();
+        if chunk.len() > remaining {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        stream.response.body.extend_from_slice(chunk);
+        Ok(())
+    }
+
+    pub fn response_finish(&self, id: u64, handle: u64) -> Result<(), u32> {
+        let mut inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let event = inner
+            .events
+            .get(&id)
+            .ok_or(contract::MC_HOST_STALE_HANDLE)?;
+        if event.native_handle != Some(handle) || event.phase != EventPhase::Responding {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        let stream = event.stream.as_ref().ok_or(contract::MC_HOST_INTERNAL)?;
+        if stream.response.body.len() != stream.declared_body_len {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        let kind = event.kind;
+        if !inner
+            .slots
+            .values()
+            .any(|slot| slot.event_id == id && slot.kind == kind)
+        {
+            return Err(contract::MC_HOST_CANCELLED);
+        }
+        let stream = inner
+            .events
+            .get_mut(&id)
+            .ok_or(contract::MC_HOST_INTERNAL)?
+            .stream
+            .take()
+            .ok_or(contract::MC_HOST_INTERNAL)?;
+        let slot = inner
+            .slots
+            .values_mut()
+            .find(|slot| slot.event_id == id && slot.kind == kind)
+            .ok_or(contract::MC_HOST_CANCELLED)?;
+        slot.result = Some(stream.response);
+        let event = inner.events.remove(&id).ok_or(contract::MC_HOST_INTERNAL)?;
+        inner.queued_bytes -= event.payload.len();
+        Ok(())
+    }
+
+    pub fn response_abort(&self, id: u64, handle: u64) -> Result<(), u32> {
+        let mut inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let event = inner
+            .events
+            .get_mut(&id)
+            .ok_or(contract::MC_HOST_STALE_HANDLE)?;
+        if event.native_handle != Some(handle) || event.phase != EventPhase::Responding {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        let stream = event.stream.take().ok_or(contract::MC_HOST_INTERNAL)?;
+        event.phase = EventPhase::Leased;
+        inner.response_bytes -= stream.reserved_bytes;
+        Ok(())
+    }
+
     pub fn event(&self, id: u64, handle: u64) -> Result<(u32, Vec<u8>), u32> {
         let inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
         let event = inner
@@ -386,23 +529,27 @@ impl Relay {
         if event.phase == EventPhase::Cancelled {
             return Err(contract::MC_HOST_CANCELLED);
         }
+        if event.phase == EventPhase::Responding {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
         Ok((event.kind, event.payload.clone()))
     }
 
     pub fn cancel_all(&self) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.slots.clear();
-            inner.response_bytes = 0;
             let leased = inner
                 .events
                 .iter()
                 .filter_map(|(id, event)| {
-                    (event.phase == EventPhase::Leased && event.original_handle.is_none())
-                        .then_some(*id)
+                    ((event.phase == EventPhase::Leased || event.phase == EventPhase::Responding)
+                        && event.original_handle.is_none())
+                    .then_some(*id)
                 })
                 .collect::<Vec<_>>();
             inner.events.retain(|_, event| {
-                (event.phase == EventPhase::Leased && event.native_handle.is_some())
+                ((event.phase == EventPhase::Leased || event.phase == EventPhase::Responding)
+                    && event.native_handle.is_some())
                     || event.phase == EventPhase::Cancelled
                     || (event.phase == EventPhase::Queued
                         && (event.kind == contract::MC_HOST_EVENT_HOST_CALL_CLOSE
@@ -418,6 +565,7 @@ impl Relay {
             for id in leased {
                 inner.cancel_leased(id);
             }
+            inner.response_bytes = 0;
             inner.queued_bytes = inner.events.values().map(|event| event.payload.len()).sum();
         }
     }

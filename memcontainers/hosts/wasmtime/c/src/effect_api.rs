@@ -96,6 +96,50 @@ unsafe extern "C" fn release(runtime: u64, event: u64, error: *mut Error) -> Res
     })
 }
 
+fn decode_response(event: u64, frame: &[u8]) -> Result<(u32, EffectBody), u32> {
+    let response = EffectResponse::decode(frame).map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+    if response.event_id as u64 != event {
+        return Err(contract::MC_HOST_INVALID_ARGUMENT);
+    }
+    let payload = match response.kind {
+        contract::MC_HOST_EVENT_HOST_CALL => {
+            let body = HostCallResponse::decode(&response.payload)
+                .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+            EffectBody {
+                failed: body.failed,
+                head: Vec::new(),
+                body: body.body,
+            }
+        }
+        contract::MC_HOST_EVENT_PERSIST_GET
+        | contract::MC_HOST_EVENT_PERSIST_PUT
+        | contract::MC_HOST_EVENT_PERSIST_DELETE
+        | contract::MC_HOST_EVENT_PERSIST_LIST => {
+            let body = PersistEffectResponse::decode(&response.payload)
+                .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+            EffectBody {
+                failed: body.failed,
+                head: Vec::new(),
+                body: body.body,
+            }
+        }
+        contract::MC_HOST_EVENT_HTTP_REQUEST => {
+            let body = HttpEffectResponse::decode(&response.payload)
+                .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+            if !body.failed && body.head.is_empty() {
+                return Err(contract::MC_HOST_INVALID_ARGUMENT);
+            }
+            EffectBody {
+                failed: body.failed,
+                head: body.head,
+                body: body.body,
+            }
+        }
+        _ => return Err(contract::MC_HOST_UNSUPPORTED),
+    };
+    Ok((response.kind, payload))
+}
+
 unsafe extern "C" fn respond(
     runtime: u64,
     event: u64,
@@ -104,50 +148,58 @@ unsafe extern "C" fn respond(
 ) -> ResultCode {
     guard(error, || {
         let frame = unsafe { bytes(frame, 16 * 1024 * 1024 + 128)? };
-        let response =
-            EffectResponse::decode(frame).map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
-        if response.event_id as u64 != event {
-            return Err(contract::MC_HOST_INVALID_ARGUMENT);
-        }
-        let payload = match response.kind {
-            contract::MC_HOST_EVENT_HOST_CALL => {
-                let body = HostCallResponse::decode(&response.payload)
-                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
-                EffectBody {
-                    failed: body.failed,
-                    head: Vec::new(),
-                    body: body.body,
-                }
-            }
-            contract::MC_HOST_EVENT_PERSIST_GET
-            | contract::MC_HOST_EVENT_PERSIST_PUT
-            | contract::MC_HOST_EVENT_PERSIST_DELETE
-            | contract::MC_HOST_EVENT_PERSIST_LIST => {
-                let body = PersistEffectResponse::decode(&response.payload)
-                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
-                EffectBody {
-                    failed: body.failed,
-                    head: Vec::new(),
-                    body: body.body,
-                }
-            }
-            contract::MC_HOST_EVENT_HTTP_REQUEST => {
-                let body = HttpEffectResponse::decode(&response.payload)
-                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
-                if !body.failed && body.head.is_empty() {
-                    return Err(contract::MC_HOST_INVALID_ARGUMENT);
-                }
-                EffectBody {
-                    failed: body.failed,
-                    head: body.head,
-                    body: body.body,
-                }
-            }
-            _ => return Err(contract::MC_HOST_UNSUPPORTED),
-        };
+        let (kind, payload) = decode_response(event, frame)?;
         ActiveRuntime::acquire(runtime)?
             .state
-            .effect_respond(event, response.kind, payload)
+            .effect_respond(event, kind, payload)
+    })
+}
+
+unsafe extern "C" fn response_begin(
+    runtime: u64,
+    event: u64,
+    metadata: Bytes,
+    declared_body_len: u64,
+    error: *mut Error,
+) -> ResultCode {
+    guard(error, || {
+        let frame = unsafe { bytes(metadata, 16 * 1024 + 256)? };
+        let (kind, payload) = decode_response(event, frame)?;
+        let declared =
+            usize::try_from(declared_body_len).map_err(|_| contract::MC_HOST_RESOURCE_LIMIT)?;
+        ActiveRuntime::acquire(runtime)?
+            .state
+            .effect_response_begin(event, kind, payload, declared)
+    })
+}
+
+unsafe extern "C" fn response_write(
+    runtime: u64,
+    event: u64,
+    chunk: Bytes,
+    error: *mut Error,
+) -> ResultCode {
+    guard(error, || {
+        let chunk = unsafe { bytes(chunk, 16 * 1024 * 1024)? };
+        ActiveRuntime::acquire(runtime)?
+            .state
+            .effect_response_write(event, chunk)
+    })
+}
+
+unsafe extern "C" fn response_finish(runtime: u64, event: u64, error: *mut Error) -> ResultCode {
+    guard(error, || {
+        ActiveRuntime::acquire(runtime)?
+            .state
+            .effect_response_finish(event)
+    })
+}
+
+unsafe extern "C" fn response_abort(runtime: u64, event: u64, error: *mut Error) -> ResultCode {
+    guard(error, || {
+        ActiveRuntime::acquire(runtime)?
+            .state
+            .effect_response_abort(event)
     })
 }
 
@@ -168,4 +220,8 @@ pub(super) static EFFECT_API: EffectApi = EffectApi {
     release,
     respond,
     ack,
+    response_begin,
+    response_write,
+    response_finish,
+    response_abort,
 };

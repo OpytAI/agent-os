@@ -302,6 +302,15 @@ typedef struct mc_host_effect_api_v1 {
       mc_host_runtime_t, mc_host_handle_t, mc_host_bytes_v1, mc_host_error_v1 *);
   mc_host_result_t (MC_HOST_CALL *ack)(
       mc_host_runtime_t, mc_host_handle_t, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *response_begin)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_bytes_v1,
+      uint64_t, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *response_write)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_bytes_v1, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *response_finish)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *response_abort)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_error_v1 *);
 } mc_host_effect_api_v1;
 
 #define MC_HOST_INIT(type_) { { (uint32_t)sizeof(type_), 1u, 0u } }

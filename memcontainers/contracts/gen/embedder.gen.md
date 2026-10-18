@@ -144,4 +144,4 @@ ABI **1.0**.
 | `OPERATION_API` | 56 | 8 |
 | `ATTACHMENT_API` | 40 | 8 |
 | `EFFECT_INFO` | 24 | 8 |
-| `EFFECT_API` | 48 | 8 |
+| `EFFECT_API` | 80 | 8 |
