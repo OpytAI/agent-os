@@ -1362,8 +1362,130 @@ static uint8_t *snapshot_bytes(const mc_host_snapshot_api_v1 *snap_api,
   return bytes;
 }
 
+static void verify_rust_host_snapshot(const mc_host_vm_api_v1 *vm_api,
+                                      const mc_host_operation_api_v1 *op_api,
+                                      const mc_host_snapshot_api_v1 *snap_api,
+                                      mc_host_runtime_t runtime, mc_host_handle_t kernel,
+                                      const uint8_t *snapshot, size_t snapshot_length,
+                                      const uint8_t *baseline, size_t baseline_length) {
+  mc_host_snapshot_info_v1 info = MC_HOST_INIT(mc_host_snapshot_info_v1);
+  check(snap_api->inspect(runtime,
+        (mc_host_bytes_v1){snapshot, snapshot_length},
+        (mc_host_bytes_v1){baseline, baseline_length}, &info, NULL),
+        "inspect Rust-host snapshot under C API");
+  need(info.kind == (baseline_length ? MC_HOST_SNAPSHOT_INCREMENTAL : MC_HOST_SNAPSHOT_FULL) &&
+       info.length == snapshot_length, "cross-host snapshot metadata");
+
+  mc_host_vm_restore_options_v1 options = MC_HOST_INIT(mc_host_vm_restore_options_v1);
+  options.snapshot = (mc_host_bytes_v1){snapshot, snapshot_length};
+  options.baseline = (mc_host_bytes_v1){baseline, baseline_length};
+  options.mode = MC_HOST_RESTORE_DETACHED;
+  mc_host_handle_t vm = 0;
+  check(vm_api->vm_restore(runtime, kernel, 0, &options, &vm, NULL),
+        "restore Rust-host snapshot in C API");
+
+  wire read = filesystem_request(MC_HOST_OP_FS_READ, "/tmp/xhost", NULL, 0);
+  mc_host_handle_t operation = 0;
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){read.bytes, read.length},
+                      &operation, NULL), "read Rust-host guest marker");
+  mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
+  for (int attempt = 0; attempt < 2048; ++attempt) {
+    check(op_api->poll(runtime, operation, &status, NULL),
+          "poll cross-host filesystem read");
+    if (status.state == MC_HOST_OP_READY) break;
+    mc_host_drive_options_v1 drive = MC_HOST_INIT(mc_host_drive_options_v1);
+    drive.max_ticks = 128;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &drive, &driven, NULL),
+          "drive restored Rust-host guest");
+  }
+  need(status.state == MC_HOST_OP_READY && status.result_length < 256,
+       "cross-host filesystem read completes");
+  uint8_t result[256];
+  mc_host_buffer_v1 buffer = {result, sizeof(result), 0};
+  check(op_api->result(runtime, operation, &buffer, NULL),
+        "read cross-host filesystem result");
+  mc_host_wire_operation_result decoded;
+  const char marker[] = "rust-host snapshot -> js-host restore";
+  need(mc_host_wire_decode_operation_result(result, buffer.required, &decoded) ==
+           MC_HOST_WIRE_OK && decoded.kind == MC_HOST_OP_FS_READ &&
+           decoded.status == 0 && decoded.payload.len == sizeof(marker) - 1 &&
+           memcmp(decoded.payload.data, marker, sizeof(marker) - 1) == 0,
+       "Rust-host guest file survives C restore");
+  check(op_api->close(runtime, operation, NULL), "close cross-host read");
+  check(vm_api->vm_close(runtime, vm, NULL), "close cross-host restored VM");
+}
+
+static void verify_identical_capture(const mc_host_vm_api_v1 *vm_api,
+                                     const mc_host_operation_api_v1 *op_api,
+                                     const mc_host_snapshot_api_v1 *snap_api,
+                                     mc_host_runtime_t runtime, mc_host_handle_t kernel,
+                                     const uint8_t *base_image, size_t base_image_length,
+                                     const uint8_t *rust_snapshot, size_t rust_snapshot_length) {
+  mc_host_bytes_v1 layer = {base_image, base_image_length};
+  mc_host_vm_create_options_v1 create = MC_HOST_INIT(mc_host_vm_create_options_v1);
+  create.layers = &layer;
+  create.layer_count = 1;
+  create.requested_workers = -1;
+  create.flags = MC_HOST_VM_CREATE_DETERMINISTIC;
+  mc_host_handle_t vm = 0;
+  check(vm_api->vm_create(runtime, kernel, 0, &create, &vm, NULL),
+        "boot deterministic base image under C API");
+  mc_host_vm_status_v1 status = MC_HOST_INIT(mc_host_vm_status_v1);
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    check(vm_api->vm_status(runtime, vm, &status, NULL),
+          "observe deterministic guest prompt");
+    if (status.flags & MC_HOST_VM_FLAG_AT_PROMPT) break;
+    mc_host_drive_options_v1 drive = MC_HOST_INIT(mc_host_drive_options_v1);
+    drive.max_ticks = 1;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &drive, &driven, NULL),
+          "drive deterministic base image one tick");
+  }
+  need(status.flags & MC_HOST_VM_FLAG_AT_PROMPT,
+       "deterministic base image reaches the same prompt");
+  const char marker[] = "rust-host snapshot -> js-host restore";
+  wire write = filesystem_request(MC_HOST_OP_FS_WRITE, "/tmp/xhost",
+                                  (const uint8_t *)marker, sizeof(marker) - 1);
+  mc_host_handle_t operation = 0;
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){write.bytes, write.length},
+                      &operation, NULL), "write deterministic cross-host marker");
+  mc_host_operation_status_v1 write_status = MC_HOST_INIT(mc_host_operation_status_v1);
+  for (int attempt = 0; attempt < 32; ++attempt) {
+    check(op_api->poll(runtime, operation, &write_status, NULL),
+          "poll deterministic marker write");
+    if (write_status.state == MC_HOST_OP_READY) break;
+    mc_host_drive_options_v1 drive = MC_HOST_INIT(mc_host_drive_options_v1);
+    drive.max_ticks = 1;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &drive, &driven, NULL),
+          "advance deterministic marker write");
+  }
+  need(write_status.state == MC_HOST_OP_READY,
+       "local deterministic write completes");
+  check(op_api->close(runtime, operation, NULL),
+        "close deterministic marker write");
+
+  mc_host_snapshot_begin_options_v1 capture = MC_HOST_INIT(mc_host_snapshot_begin_options_v1);
+  capture.mode = MC_HOST_SNAPSHOT_FULL;
+  mc_host_handle_t snapshot = 0;
+  mc_host_snapshot_info_v1 info = MC_HOST_INIT(mc_host_snapshot_info_v1);
+  check(snap_api->begin(runtime, vm, &capture, &snapshot, &info, NULL),
+        "capture deterministic C snapshot");
+  need(info.length == rust_snapshot_length,
+       "C and Rust snapshots have the same length");
+  uint8_t *c_snapshot = snapshot_bytes(snap_api, runtime, snapshot, info.length);
+  need(memcmp(c_snapshot, rust_snapshot, rust_snapshot_length) == 0,
+       "C and Rust snapshot bytes are identical");
+  free(c_snapshot);
+  check(snap_api->finish(runtime, snapshot, NULL),
+        "finish deterministic C capture");
+  check(vm_api->vm_close(runtime, vm, NULL),
+        "close deterministic C VM");
+}
+
 int main(int argc, char **argv) {
-  need(argc == 4, "release library, kernel, and image paths");
+  need(argc == 7, "release library, kernel, images, and snapshot fixtures");
   size_t kernel_len = 0, image_len = 0;
   uint8_t *kernel = read_artifact(argv[2], &kernel_len);
   uint8_t *image = read_artifact(argv[3], &image_len);
@@ -1537,6 +1659,48 @@ int main(int argc, char **argv) {
 
   cancel_vm_with_operation(&vm_api, &op_api, runtime, restored);
   cancel_mount_relay(&vm_api, &op_api, &effect_api, runtime, vm);
+  size_t rust_full_length = 0, rust_bundle_length = 0;
+  uint8_t *rust_full = read_artifact(argv[5], &rust_full_length);
+  uint8_t *rust_bundle = read_artifact(argv[6], &rust_bundle_length);
+  need(rust_bundle_length > 4, "Rust-host incremental bundle");
+  uint32_t rust_base_length = (uint32_t)rust_bundle[0] |
+      (uint32_t)rust_bundle[1] << 8 | (uint32_t)rust_bundle[2] << 16 |
+      (uint32_t)rust_bundle[3] << 24;
+  need(rust_base_length > 128 && rust_base_length < rust_bundle_length - 4,
+       "bounded Rust-host baseline in incremental bundle");
+  verify_rust_host_snapshot(&vm_api, &op_api, &snap_api, runtime, kernel_handle,
+                            rust_full, rust_full_length, NULL, 0);
+  size_t base_image_length = 0;
+  uint8_t *base_image = read_artifact(argv[4], &base_image_length);
+  verify_identical_capture(&vm_api, &op_api, &snap_api, runtime, kernel_handle,
+                           base_image, base_image_length, rust_full, rust_full_length);
+  free(base_image);
+  verify_rust_host_snapshot(&vm_api, &op_api, &snap_api, runtime, kernel_handle,
+                            rust_bundle + 4 + rust_base_length,
+                            rust_bundle_length - 4 - rust_base_length,
+                            rust_bundle + 4, rust_base_length);
+  mc_host_vm_restore_options_v1 missing_base = MC_HOST_INIT(mc_host_vm_restore_options_v1);
+  missing_base.snapshot = (mc_host_bytes_v1){rust_bundle + 4 + rust_base_length,
+      rust_bundle_length - 4 - rust_base_length};
+  missing_base.mode = MC_HOST_RESTORE_DETACHED;
+  mc_host_handle_t rejected_vm = 0;
+  need(vm_api.vm_restore(runtime, kernel_handle, 0, &missing_base,
+                         &rejected_vm, NULL) == MC_HOST_SNAPSHOT_ERROR && rejected_vm == 0,
+       "incremental restore requires its full baseline");
+  rust_bundle[4 + rust_base_length - 1] ^= 1;
+  missing_base.baseline = (mc_host_bytes_v1){rust_bundle + 4, rust_base_length};
+  need(vm_api.vm_restore(runtime, kernel_handle, 0, &missing_base,
+                         &rejected_vm, NULL) == MC_HOST_SNAPSHOT_ERROR && rejected_vm == 0,
+       "corrupt incremental baseline cannot publish a VM");
+  rust_full[32] ^= 1; /* MCSN kernel digest offset from snapshot.kdl. */
+  mc_host_vm_restore_options_v1 wrong_kernel = MC_HOST_INIT(mc_host_vm_restore_options_v1);
+  wrong_kernel.snapshot = (mc_host_bytes_v1){rust_full, rust_full_length};
+  wrong_kernel.mode = MC_HOST_RESTORE_DETACHED;
+  need(vm_api.vm_restore(runtime, kernel_handle, 0, &wrong_kernel,
+                         &rejected_vm, NULL) == MC_HOST_SNAPSHOT_ERROR && rejected_vm == 0,
+       "kernel digest mismatch cannot publish a VM");
+  free(rust_bundle);
+  free(rust_full);
   check(snap_api.baseline_close(runtime, baseline, NULL), "close baseline");
   check(vm_api.kernel_close(runtime, kernel_handle, NULL), "close kernel");
   check(attachment_api.plan_close(runtime, plan, NULL), "close attachment plan");
