@@ -43,6 +43,7 @@ pub const MC_HOST_FEATURE_ATTACHMENT_PLAN: u64 = 256;
 pub const MC_HOST_FEATURE_HOST_CALL_EFFECT: u64 = 512;
 pub const MC_HOST_FEATURE_MOUNT_OPERATION: u64 = 1024;
 pub const MC_HOST_FEATURE_PERSIST_EFFECT: u64 = 2048;
+pub const MC_HOST_FEATURE_HTTP_EFFECT: u64 = 4096;
 pub const MC_HOST_TICK_WAITING: u32 = 0;
 pub const MC_HOST_TICK_RUNNABLE: u32 = 1;
 pub const MC_HOST_TICK_EXITED: u32 = 2;
@@ -100,6 +101,7 @@ pub const MC_HOST_OP_COMMIT_LAYER: u32 = 16;
 pub const MC_HOST_OP_CATALOG_INJECT: u32 = 17;
 pub const MC_HOST_ATTACHMENT_HOST_CALL: u32 = 1;
 pub const MC_HOST_ATTACHMENT_PERSIST: u32 = 2;
+pub const MC_HOST_ATTACHMENT_HTTP_APPLICATION: u32 = 3;
 pub const MC_HOST_EVENT_HTTP_REQUEST: u32 = 1;
 pub const MC_HOST_EVENT_HTTP_CANCEL: u32 = 2;
 pub const MC_HOST_EVENT_WS_CONNECT: u32 = 3;
@@ -788,6 +790,101 @@ impl PersistEffectResponse {
         if off != bytes.len() { return Err(WireError::TrailingBytes); }
         Ok(Self {
             failed,
+            body,
+        })
+    }
+}
+
+/// Non-secret identity of the application HTTP transport. Connection markers are refused.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HttpApplicationAttachment {
+    pub identity: String,
+}
+
+pub const HTTP_APPLICATION_ATTACHMENT_MSG_ID: u16 = 37;
+pub const HTTP_APPLICATION_ATTACHMENT_VERSION: u8 = 1;
+impl HttpApplicationAttachment {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, HTTP_APPLICATION_ATTACHMENT_MSG_ID);
+        out.push(HTTP_APPLICATION_ATTACHMENT_VERSION);
+        ctl_put_str(&mut out, &self.identity);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != HTTP_APPLICATION_ATTACHMENT_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != HTTP_APPLICATION_ATTACHMENT_VERSION { return Err(WireError::UnsupportedVersion); }
+        let identity = ctl_read_str(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            identity,
+        })
+    }
+}
+
+/// Unmarked kernel HTTP request blob. No credential is injected by this transport.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HttpEffectRequest {
+    pub request: Vec<u8>,
+}
+
+pub const HTTP_EFFECT_REQUEST_MSG_ID: u16 = 38;
+pub const HTTP_EFFECT_REQUEST_VERSION: u8 = 1;
+impl HttpEffectRequest {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, HTTP_EFFECT_REQUEST_MSG_ID);
+        out.push(HTTP_EFFECT_REQUEST_VERSION);
+        ctl_put_bytes(&mut out, &self.request);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != HTTP_EFFECT_REQUEST_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != HTTP_EFFECT_REQUEST_VERSION { return Err(WireError::UnsupportedVersion); }
+        let request = ctl_read_bytes(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            request,
+        })
+    }
+}
+
+/// Complete HTTP response. The head is at most the kernel HEAD_BUF size.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HttpEffectResponse {
+    pub failed: bool,
+    pub head: Vec<u8>,
+    pub body: Vec<u8>,
+}
+
+pub const HTTP_EFFECT_RESPONSE_MSG_ID: u16 = 39;
+pub const HTTP_EFFECT_RESPONSE_VERSION: u8 = 1;
+impl HttpEffectResponse {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, HTTP_EFFECT_RESPONSE_MSG_ID);
+        out.push(HTTP_EFFECT_RESPONSE_VERSION);
+        ctl_put_bool(&mut out, self.failed);
+        ctl_put_bytes(&mut out, &self.head);
+        ctl_put_bytes(&mut out, &self.body);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != HTTP_EFFECT_RESPONSE_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != HTTP_EFFECT_RESPONSE_VERSION { return Err(WireError::UnsupportedVersion); }
+        let failed = ctl_read_bool(bytes, &mut off)?;
+        let head = ctl_read_bytes(bytes, &mut off)?;
+        let body = ctl_read_bytes(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            failed,
+            head,
             body,
         })
     }

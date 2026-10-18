@@ -5,8 +5,10 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use constants_rust::{PERSIST_OP_DELETE, PERSIST_OP_GET, PERSIST_OP_LIST, PERSIST_OP_PUT};
-use embedder_rust::{self as contract, EffectCancel, HostCallEvent, PersistEffectRequest};
-use host::{HostCallCapability, PersistCapability};
+use embedder_rust::{
+    self as contract, EffectCancel, HostCallEvent, HttpEffectRequest, PersistEffectRequest,
+};
+use host::{HostCallCapability, NetCapability, PersistCapability};
 
 const MAX_EVENTS: usize = 256;
 const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
@@ -38,12 +40,14 @@ struct Slot {
 
 pub struct EffectBody {
     pub failed: bool,
+    pub head: Vec<u8>,
     pub body: Vec<u8>,
 }
 
 struct Inner {
     routes: BTreeSet<String>,
     persist_enabled: bool,
+    http_enabled: bool,
     next_bridge_handle: i32,
     next_event_id: u64,
     events: HashMap<u64, Event>,
@@ -59,7 +63,7 @@ impl Inner {
             return;
         };
         if let Some(result) = slot.result {
-            self.response_bytes -= result.body.len();
+            self.response_bytes -= result.head.len() + result.body.len();
         }
         match self.events.get(&slot.event_id).map(|event| event.phase) {
             Some(EventPhase::Queued) => {
@@ -131,10 +135,10 @@ impl Inner {
         }
         let notice_id = self.next_event_id;
         self.next_event_id += 1;
-        let notice_kind = if event.kind == contract::MC_HOST_EVENT_HOST_CALL {
-            contract::MC_HOST_EVENT_HOST_CALL_CLOSE
-        } else {
-            contract::MC_HOST_EVENT_OPERATION_CANCEL
+        let notice_kind = match event.kind {
+            contract::MC_HOST_EVENT_HOST_CALL => contract::MC_HOST_EVENT_HOST_CALL_CLOSE,
+            contract::MC_HOST_EVENT_HTTP_REQUEST => contract::MC_HOST_EVENT_HTTP_CANCEL,
+            _ => contract::MC_HOST_EVENT_OPERATION_CANCEL,
         };
         let payload = EffectCancel {
             original_event_id: original_handle as i64,
@@ -166,11 +170,12 @@ pub struct LeasedEvent {
 }
 
 impl Relay {
-    pub fn new(routes: BTreeSet<String>, persist_enabled: bool) -> Arc<Self> {
+    pub fn new(routes: BTreeSet<String>, persist_enabled: bool, http_enabled: bool) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(Inner {
                 routes,
                 persist_enabled,
+                http_enabled,
                 next_bridge_handle: 1,
                 next_event_id: 1,
                 events: HashMap::new(),
@@ -192,6 +197,14 @@ impl Relay {
 
     pub fn persist_adapter(self: &Arc<Self>) -> Box<dyn PersistCapability> {
         Box::new(RelayPersist(Arc::clone(self)))
+    }
+
+    pub fn http_enabled(&self) -> bool {
+        self.inner.lock().is_ok_and(|inner| inner.http_enabled)
+    }
+
+    pub fn net_adapter(self: &Arc<Self>) -> Box<dyn NetCapability> {
+        Box::new(RelayNet(Arc::clone(self)))
     }
 
     pub fn has_route(&self, name: &str) -> bool {
@@ -286,7 +299,8 @@ impl Relay {
             .events
             .get(&id)
             .ok_or(contract::MC_HOST_STALE_HANDLE)?;
-        if event.kind != contract::MC_HOST_EVENT_HOST_CALL_CLOSE
+        if event.kind != contract::MC_HOST_EVENT_HTTP_CANCEL
+            && event.kind != contract::MC_HOST_EVENT_HOST_CALL_CLOSE
             && event.kind != contract::MC_HOST_EVENT_OPERATION_CANCEL
         {
             return Err(contract::MC_HOST_INVALID_STATE);
@@ -317,7 +331,15 @@ impl Relay {
         kind: u32,
         response: EffectBody,
     ) -> Result<(), u32> {
-        if response.body.len() > MAX_RESPONSE_BYTES {
+        if kind == contract::MC_HOST_EVENT_HTTP_REQUEST && response.head.len() > 16 * 1024 {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        let response_len = response
+            .head
+            .len()
+            .checked_add(response.body.len())
+            .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
+        if response_len > MAX_RESPONSE_BYTES {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
         let mut inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
@@ -333,12 +355,11 @@ impl Relay {
         }
         if inner
             .response_bytes
-            .checked_add(response.body.len())
+            .checked_add(response_len)
             .is_none_or(|total| total > MAX_TOTAL_RESPONSE_BYTES)
         {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
-        let response_len = response.body.len();
         let Some(slot) = inner
             .slots
             .values_mut()
@@ -385,7 +406,8 @@ impl Relay {
                     || event.phase == EventPhase::Cancelled
                     || (event.phase == EventPhase::Queued
                         && (event.kind == contract::MC_HOST_EVENT_HOST_CALL_CLOSE
-                            || event.kind == contract::MC_HOST_EVENT_OPERATION_CANCEL))
+                            || event.kind == contract::MC_HOST_EVENT_OPERATION_CANCEL
+                            || event.kind == contract::MC_HOST_EVENT_HTTP_CANCEL))
             });
             let live_ids = inner
                 .events
@@ -574,4 +596,117 @@ fn is_persist_kind(kind: u32) -> bool {
             | contract::MC_HOST_EVENT_PERSIST_DELETE
             | contract::MC_HOST_EVENT_PERSIST_LIST
     )
+}
+
+struct RelayNet(Arc<Relay>);
+
+impl NetCapability for RelayNet {
+    fn http_request(&mut self, req: &[u8]) -> i32 {
+        let Some(end) = req.windows(2).position(|window| window == b"\n\n") else {
+            return -1;
+        };
+        let Ok(head) = std::str::from_utf8(&req[..end]) else {
+            return -1;
+        };
+        let mut lines = head.lines();
+        if !lines.next().is_some_and(|first| {
+            first
+                .split_once(' ')
+                .is_some_and(|(method, url)| !method.is_empty() && !url.trim().is_empty())
+        }) {
+            return -1;
+        }
+        for line in lines {
+            let Some((name, _)) = line.split_once(':') else {
+                return -1;
+            };
+            if name.trim().eq_ignore_ascii_case("X-MC-Connection") {
+                return -1;
+            }
+        }
+        let payload = HttpEffectRequest {
+            request: req.to_vec(),
+        }
+        .encode();
+        let Ok(mut inner) = self.0.inner.lock() else {
+            return -1;
+        };
+        if !inner.http_enabled {
+            return -1;
+        }
+        inner
+            .enqueue(contract::MC_HOST_EVENT_HTTP_REQUEST, payload)
+            .unwrap_or(-1)
+    }
+
+    fn http_poll(&mut self, handle: i32, buf: &mut [u8]) -> i32 {
+        let Ok(inner) = self.0.inner.lock() else {
+            return -1;
+        };
+        let Some(slot) = inner
+            .slots
+            .get(&handle)
+            .filter(|slot| slot.kind == contract::MC_HOST_EVENT_HTTP_REQUEST)
+        else {
+            return -1;
+        };
+        let Some(result) = &slot.result else {
+            return 0;
+        };
+        if result.failed {
+            return -1;
+        }
+        let count = result.head.len().min(buf.len());
+        buf[..count].copy_from_slice(&result.head[..count]);
+        count as i32
+    }
+
+    fn http_body(&mut self, handle: i32, buf: &mut [u8]) -> i32 {
+        let Ok(mut inner) = self.0.inner.lock() else {
+            return -1;
+        };
+        let Some(slot) = inner
+            .slots
+            .get_mut(&handle)
+            .filter(|slot| slot.kind == contract::MC_HOST_EVENT_HTTP_REQUEST)
+        else {
+            return -1;
+        };
+        let Some(result) = &slot.result else {
+            return 0;
+        };
+        if result.failed {
+            return -1;
+        }
+        let count = (result.body.len() - slot.offset).min(buf.len());
+        buf[..count].copy_from_slice(&result.body[slot.offset..slot.offset + count]);
+        slot.offset += count;
+        count as i32
+    }
+
+    fn http_close(&mut self, handle: i32) {
+        if let Ok(mut inner) = self.0.inner.lock() {
+            if inner
+                .slots
+                .get(&handle)
+                .is_some_and(|slot| slot.kind == contract::MC_HOST_EVENT_HTTP_REQUEST)
+            {
+                inner.close_slot(handle);
+            }
+        }
+    }
+
+    fn ws_connect(&mut self, _url: &str) -> i32 {
+        -1
+    }
+    fn ws_send(&mut self, _handle: i32, _data: &[u8]) -> i32 {
+        -1
+    }
+    fn ws_ready(&mut self, _handle: i32) -> i32 {
+        1
+    }
+    fn ws_recv(&mut self, _handle: i32, _buf: &mut [u8]) -> i32 {
+        -1
+    }
+    fn ws_close(&mut self, _handle: i32) {}
 }

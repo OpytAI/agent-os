@@ -3,7 +3,8 @@
 use std::mem::{align_of, size_of};
 
 use embedder_rust::{
-    self as contract, AttachmentDefinition, HostCallAttachment, PersistAttachment,
+    self as contract, AttachmentDefinition, HostCallAttachment, HttpApplicationAttachment,
+    PersistAttachment,
 };
 
 use super::vm_api::bytes;
@@ -47,6 +48,13 @@ unsafe extern "C" fn plan_add(
                 ActiveRuntime::acquire(runtime)?
                     .state
                     .add_persist_provider(plan, provider.identity)
+            }
+            contract::MC_HOST_ATTACHMENT_HTTP_APPLICATION => {
+                let transport = HttpApplicationAttachment::decode(&definition.payload)
+                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+                ActiveRuntime::acquire(runtime)?
+                    .state
+                    .add_http_application(plan, transport.identity)
             }
             _ => Err(contract::MC_HOST_UNSUPPORTED),
         }

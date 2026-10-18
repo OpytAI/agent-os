@@ -43,7 +43,8 @@ const FEATURE_BITS: u64 = contract::MC_HOST_FEATURE_VM_BASIC
     | contract::MC_HOST_FEATURE_ATTACHMENT_PLAN
     | contract::MC_HOST_FEATURE_HOST_CALL_EFFECT
     | contract::MC_HOST_FEATURE_MOUNT_OPERATION
-    | contract::MC_HOST_FEATURE_PERSIST_EFFECT;
+    | contract::MC_HOST_FEATURE_PERSIST_EFFECT
+    | contract::MC_HOST_FEATURE_HTTP_EFFECT;
 
 #[repr(C)]
 #[derive(Clone, Copy)]

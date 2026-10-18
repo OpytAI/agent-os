@@ -3,11 +3,15 @@
 #include <dlfcn.h>
 #include <dirent.h>
 #include <errno.h>
+#include <netinet/in.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 static void need(int condition, const char *step) {
   if (condition) return;
@@ -48,8 +52,23 @@ static void test_dir(const char *name, char *out, size_t capacity) {
   need(mkdir(out, 0700) == 0 || errno == EEXIST, "create host test directory");
 }
 
+static void *serve_http_once(void *argument) {
+  int listener = *(int *)argument;
+  int peer = accept(listener, NULL, NULL);
+  need(peer >= 0, "accept local HTTP request");
+  char request[512];
+  ssize_t count = recv(peer, request, sizeof(request), 0);
+  need(count >= 11 && memcmp(request, "GET /native", 11) == 0,
+       "receive real HTTP request");
+  const char response[] = "HTTP/1.0 200 OK\r\nContent-Length: 6\r\n\r\nC-HTTP";
+  need(send(peer, response, sizeof(response) - 1, 0) == sizeof(response) - 1,
+       "send real HTTP response");
+  need(close(peer) == 0 && close(listener) == 0, "close HTTP sockets");
+  return NULL;
+}
+
 typedef struct wire {
-  uint8_t bytes[256];
+  uint8_t bytes[1024];
   size_t length;
 } wire;
 
@@ -524,6 +543,149 @@ static void run_persist_relay(const mc_host_vm_api_v1 *vm_api,
   check(op_api->close(runtime, operation, NULL), "close persistence read");
 }
 
+static void run_http_relay(const mc_host_vm_api_v1 *vm_api,
+                           const mc_host_operation_api_v1 *op_api,
+                           const mc_host_effect_api_v1 *effect_api,
+                           mc_host_runtime_t runtime, mc_host_handle_t vm) {
+  int listener = socket(AF_INET, SOCK_STREAM, 0);
+  need(listener >= 0, "create HTTP listener");
+  struct sockaddr_in address = {0};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  need(bind(listener, (struct sockaddr *)&address, sizeof(address)) == 0,
+       "bind loopback HTTP listener");
+  need(listen(listener, 1) == 0, "listen for HTTP request");
+  socklen_t address_length = sizeof(address);
+  need(getsockname(listener, (struct sockaddr *)&address, &address_length) == 0,
+       "read loopback port");
+  pthread_t server;
+  need(pthread_create(&server, NULL, serve_http_once, &listener) == 0,
+       "start real HTTP server");
+
+  char script[512];
+  int script_length = snprintf(script, sizeof(script),
+      "local sys=require('sys'); local r=assert(sys.net.fetch('http://127.0.0.1:%u/native')); "
+      "assert(r.status==200,tostring(r.status)); "
+      "local denied=sys.net.fetch('http://127.0.0.1:%u/native',{headers={['X-MC-Connection']='test.owner.secret'}}); "
+      "assert(denied==nil); print('native-http-ok')",
+      (unsigned)ntohs(address.sin_port),
+      (unsigned)ntohs(address.sin_port));
+  need(script_length > 0 && (size_t)script_length < sizeof(script), "guest HTTP script");
+  wire write = filesystem_request(MC_HOST_OP_FS_WRITE, "/tmp/native-http.luau",
+                                  (const uint8_t *)script, (size_t)script_length);
+  mc_host_handle_t operation = 0;
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){write.bytes, write.length},
+                      &operation, NULL), "write guest HTTP script");
+  mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
+  for (int attempt = 0; attempt < 2048; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "drive script write");
+    check(op_api->poll(runtime, operation, &status, NULL), "poll script write");
+    if (status.state == MC_HOST_OP_READY) break;
+  }
+  need(status.state == MC_HOST_OP_READY, "guest HTTP script written");
+  check(op_api->close(runtime, operation, NULL), "close script write");
+
+  wire exec = shell_request("luau /tmp/native-http.luau");
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){exec.bytes, exec.length},
+                      &operation, NULL), "start guest HTTP fetch");
+  int handled = 0;
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "drive guest HTTP fetch");
+    mc_host_handle_t event = 0;
+    mc_host_effect_info_v1 info = MC_HOST_INIT(mc_host_effect_info_v1);
+    mc_host_result_t next = effect_api->next(runtime, vm,
+        UINT64_C(1) << MC_HOST_EVENT_HTTP_REQUEST, &event, &info, NULL);
+    if (next == MC_HOST_OK) {
+      need(!handled && info.kind == MC_HOST_EVENT_HTTP_REQUEST, "one guest HTTP request");
+      uint8_t frame[2048];
+      mc_host_buffer_v1 buffer = {frame, sizeof(frame), 0};
+      check(effect_api->read(runtime, event, &buffer, NULL), "read HTTP event");
+      size_t offset = 0;
+      need(read_u16(frame, buffer.required, &offset) == 23 &&
+           read_u8(frame, buffer.required, &offset) == 1 &&
+           read_u32(frame, buffer.required, &offset) == MC_HOST_EVENT_HTTP_REQUEST,
+           "HTTP event envelope");
+      read_u64(frame, buffer.required, &offset); /* event */
+      read_u64(frame, buffer.required, &offset); /* VM */
+      need(read_u8(frame, buffer.required, &offset) == 0 &&
+           read_u8(frame, buffer.required, &offset) == 0,
+           "HTTP event has no operation or socket");
+      read_u32(frame, buffer.required, &offset); /* flags */
+      uint32_t payload_length = read_u32(frame, buffer.required, &offset);
+      need(payload_length == buffer.required - offset &&
+           read_u16(frame, buffer.required, &offset) == 38 &&
+           read_u8(frame, buffer.required, &offset) == 1,
+           "HTTP request payload");
+      uint32_t request_length = read_u32(frame, buffer.required, &offset);
+      need(request_length == buffer.required - offset &&
+           contains_bytes(frame + offset, request_length, "GET http://127.0.0.1:", 21) &&
+           !contains_bytes(frame + offset, request_length, "X-MC-Connection", 15),
+           "raw unmarked guest HTTP request");
+
+      int client = socket(AF_INET, SOCK_STREAM, 0);
+      need(client >= 0 && connect(client, (struct sockaddr *)&address,
+                                  sizeof(address)) == 0, "connect application transport");
+      const char request[] = "GET /native HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n";
+      need(send(client, request, sizeof(request) - 1, 0) == sizeof(request) - 1,
+           "send application HTTP request");
+      uint8_t response[512];
+      size_t response_length = 0;
+      for (;;) {
+        ssize_t received = recv(client, response + response_length,
+                                sizeof(response) - response_length, 0);
+        need(received >= 0, "read real HTTP response");
+        if (received == 0) break;
+        response_length += (size_t)received;
+        need(response_length < sizeof(response), "bounded local HTTP response");
+      }
+      need(close(client) == 0, "close application HTTP socket");
+      size_t separator = 0;
+      while (separator + 4 <= response_length &&
+             memcmp(response + separator, "\r\n\r\n", 4) != 0) ++separator;
+      need(separator + 4 <= response_length &&
+           contains_bytes(response, separator, "200 OK", 6),
+           "HTTP response head");
+      size_t body_length = response_length - separator - 4;
+      need(body_length == 6 && memcmp(response + separator + 4, "C-HTTP", 6) == 0,
+           "real HTTP response body");
+      wire payload = {0}, answer = {0};
+      put_u16(&payload, 39); /* HttpEffectResponse v1 */
+      put_u8(&payload, 1);
+      put_u8(&payload, 0); /* success */
+      const char head[] = "200 OK\r\nContent-Length: 6\r\n\r\n";
+      put_bytes(&payload, (const uint8_t *)head, sizeof(head) - 1);
+      put_bytes(&payload, response + separator + 4, body_length);
+      put_u16(&answer, 24); /* EffectResponse v1 */
+      put_u8(&answer, 1);
+      put_u32(&answer, MC_HOST_EVENT_HTTP_REQUEST);
+      put_u64(&answer, event);
+      put_bytes(&answer, payload.bytes, payload.length);
+      check(effect_api->respond(runtime, event,
+          (mc_host_bytes_v1){answer.bytes, answer.length}, NULL), "answer guest HTTP request");
+      handled = 1;
+    } else {
+      need(next == MC_HOST_WOULD_BLOCK, "HTTP event queue");
+    }
+    check(op_api->poll(runtime, operation, &status, NULL), "poll guest HTTP fetch");
+    if (status.state == MC_HOST_OP_READY) break;
+  }
+  need(handled && status.state == MC_HOST_OP_READY && status.result_length < 4096,
+       "guest HTTP fetch completes");
+  uint8_t result[4096];
+  mc_host_buffer_v1 buffer = {result, sizeof(result), 0};
+  check(op_api->result(runtime, operation, &buffer, NULL), "read guest HTTP result");
+  need(contains_bytes(result, buffer.required, "native-http-ok", 14),
+       "real guest saw HTTP status");
+  check(op_api->close(runtime, operation, NULL), "close guest HTTP fetch");
+  need(pthread_join(server, NULL) == 0, "join real HTTP server");
+}
+
 static void run_layer_commit(const mc_host_operation_api_v1 *op_api,
                              mc_host_runtime_t runtime, mc_host_handle_t vm) {
   wire request = {0};
@@ -943,6 +1105,17 @@ int main(int argc, char **argv) {
   check(attachment_api.plan_add(runtime, plan,
                                 (mc_host_bytes_v1){persist_definition.bytes, persist_definition.length}, NULL),
         "register native persistence provider");
+  wire http = {0}, http_definition = {0};
+  put_u16(&http, 37); /* HttpApplicationAttachment v1 */
+  put_u8(&http, 1);
+  put_bytes(&http, (const uint8_t *)"native-http-transport", strlen("native-http-transport"));
+  put_u16(&http_definition, 20);
+  put_u8(&http_definition, 1);
+  put_u32(&http_definition, MC_HOST_ATTACHMENT_HTTP_APPLICATION);
+  put_bytes(&http_definition, http.bytes, http.length);
+  check(attachment_api.plan_add(runtime, plan,
+                                (mc_host_bytes_v1){http_definition.bytes, http_definition.length}, NULL),
+        "register application HTTP transport");
   check(attachment_api.plan_seal(runtime, plan, NULL), "seal attachment plan");
 
   mc_host_handle_t kernel_handle = 0;
@@ -976,6 +1149,7 @@ int main(int argc, char **argv) {
   run_service_call(&vm_api, &op_api, runtime, vm);
   run_mount_relay(&vm_api, &op_api, &effect_api, runtime, vm);
   run_persist_relay(&vm_api, &op_api, &effect_api, runtime, vm);
+  run_http_relay(&vm_api, &op_api, &effect_api, runtime, vm);
 
   mc_host_snapshot_begin_options_v1 full_options = MC_HOST_INIT(mc_host_snapshot_begin_options_v1);
   full_options.mode = MC_HOST_SNAPSHOT_FULL;

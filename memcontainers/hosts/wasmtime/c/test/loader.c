@@ -33,7 +33,8 @@ int main(int argc, char **argv) {
                       MC_HOST_FEATURE_ATTACHMENT_PLAN |
                       MC_HOST_FEATURE_HOST_CALL_EFFECT |
                       MC_HOST_FEATURE_MOUNT_OPERATION |
-                      MC_HOST_FEATURE_PERSIST_EFFECT;
+                      MC_HOST_FEATURE_PERSIST_EFFECT |
+                      MC_HOST_FEATURE_HTTP_EFFECT;
   need(api.header.size == sizeof(api) && api.feature_bits == features,
        "staged feature set");
 

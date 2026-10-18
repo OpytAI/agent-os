@@ -248,6 +248,7 @@ constant "MC_HOST_FEATURE_ATTACHMENT_PLAN" value=256 type="u64"
 constant "MC_HOST_FEATURE_HOST_CALL_EFFECT" value=512 type="u64"
 constant "MC_HOST_FEATURE_MOUNT_OPERATION" value=1024 type="u64"
 constant "MC_HOST_FEATURE_PERSIST_EFFECT" value=2048 type="u64"
+constant "MC_HOST_FEATURE_HTTP_EFFECT" value=4096 type="u64"
 
 constant "MC_HOST_TICK_WAITING" value=0 type="u32"
 constant "MC_HOST_TICK_RUNNABLE" value=1 type="u32"
@@ -308,6 +309,7 @@ constant "MC_HOST_OP_CATALOG_INJECT" value=17 type="u32"
 
 constant "MC_HOST_ATTACHMENT_HOST_CALL" value=1 type="u32"
 constant "MC_HOST_ATTACHMENT_PERSIST" value=2 type="u32"
+constant "MC_HOST_ATTACHMENT_HTTP_APPLICATION" value=3 type="u32"
 
 constant "MC_HOST_EVENT_HTTP_REQUEST" value=1 type="u32"
 constant "MC_HOST_EVENT_HTTP_CANCEL" value=2 type="u32"
@@ -430,4 +432,21 @@ message "PersistEffectResponse" id=36 version=1 {
   field "failed" type="bool"
   field "body" type="bytes"
   doc "One complete persistence result delivered before kernel poll reports ready."
+}
+
+message "HttpApplicationAttachment" id=37 version=1 {
+  field "identity" type="str"
+  doc "Non-secret identity of the application HTTP transport. Connection markers are refused."
+}
+
+message "HttpEffectRequest" id=38 version=1 {
+  field "request" type="bytes"
+  doc "Unmarked kernel HTTP request blob. No credential is injected by this transport."
+}
+
+message "HttpEffectResponse" id=39 version=1 {
+  field "failed" type="bool"
+  field "head" type="bytes"
+  field "body" type="bytes"
+  doc "Complete HTTP response. The head is at most the kernel HEAD_BUF size."
 }

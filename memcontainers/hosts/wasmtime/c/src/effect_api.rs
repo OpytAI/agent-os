@@ -3,7 +3,9 @@
 use std::mem::{align_of, size_of};
 use std::ptr;
 
-use embedder_rust::{self as contract, EffectResponse, HostCallResponse, PersistEffectResponse};
+use embedder_rust::{
+    self as contract, EffectResponse, HostCallResponse, HttpEffectResponse, PersistEffectResponse,
+};
 
 use super::relay::EffectBody;
 use super::vm_api::{bytes, copy_output, output_size};
@@ -113,6 +115,7 @@ unsafe extern "C" fn respond(
                     .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
                 EffectBody {
                     failed: body.failed,
+                    head: Vec::new(),
                     body: body.body,
                 }
             }
@@ -124,6 +127,19 @@ unsafe extern "C" fn respond(
                     .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
                 EffectBody {
                     failed: body.failed,
+                    head: Vec::new(),
+                    body: body.body,
+                }
+            }
+            contract::MC_HOST_EVENT_HTTP_REQUEST => {
+                let body = HttpEffectResponse::decode(&response.payload)
+                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+                if !body.failed && body.head.is_empty() {
+                    return Err(contract::MC_HOST_INVALID_ARGUMENT);
+                }
+                EffectBody {
+                    failed: body.failed,
+                    head: body.head,
                     body: body.body,
                 }
             }

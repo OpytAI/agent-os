@@ -40,6 +40,7 @@ const MAX_PLANS: usize = 64;
 struct PlanRecord {
     routes: BTreeMap<String, String>,
     persist_identity: Option<String>,
+    http_identity: Option<String>,
     sealed: bool,
 }
 
@@ -643,6 +644,25 @@ impl RuntimeState {
         Ok(())
     }
 
+    pub fn add_http_application(&self, plan: u64, identity: String) -> Result<(), u32> {
+        if identity.is_empty() || identity.contains('\0') {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let plan = resources.plans.get_mut(self.namespace, plan)?;
+        if plan.sealed {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        if plan.http_identity.is_some() {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        plan.http_identity = Some(identity);
+        Ok(())
+    }
+
     pub fn seal_plan(&self, plan: u64) -> Result<(), u32> {
         let mut resources = self
             .resources
@@ -913,12 +933,16 @@ impl RuntimeState {
             Relay::new(
                 plan.routes.into_keys().collect(),
                 plan.persist_identity.is_some(),
+                plan.http_identity.is_some(),
             )
         });
         if let Some(relay) = &relay {
             builder = builder.with_host_call(relay.adapter());
             if relay.persist_enabled() {
                 builder = builder.with_persist(relay.persist_adapter());
+            }
+            if relay.http_enabled() {
+                builder = builder.with_net(relay.net_adapter());
             }
         }
         if config.deterministic {
