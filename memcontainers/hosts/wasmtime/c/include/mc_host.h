@@ -56,6 +56,9 @@ typedef struct mc_host_runtime_options_v1 {
   /* Zero selects the published default. Nonzero values may lower the limit. */
   uint32_t max_vms;
   uint32_t max_drive_ticks;
+  /* Zero selects the default. At least 4 bytes and 4 records otherwise. */
+  uint32_t max_output_bytes;
+  uint32_t max_output_records;
 } mc_host_runtime_options_v1;
 
 typedef struct mc_host_library_info_v1 {

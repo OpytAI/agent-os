@@ -1510,6 +1510,8 @@ int main(int argc, char **argv) {
   mc_host_runtime_options_v1 runtime_options = MC_HOST_INIT(mc_host_runtime_options_v1);
   runtime_options.max_vms = 2;
   runtime_options.max_drive_ticks = 128;
+  runtime_options.max_output_bytes = 1024 * 1024;
+  runtime_options.max_output_records = 1024;
   check(api.runtime_create(&runtime_options, &runtime, NULL), "create bounded runtime");
 
   mc_host_vm_api_v1 vm_api = MC_HOST_INIT(mc_host_vm_api_v1);

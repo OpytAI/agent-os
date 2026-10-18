@@ -94,6 +94,20 @@ int main(int argc, char **argv) {
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
            runtime == 0, "reject drive limit above hard cap");
   options.known.max_drive_ticks = 0;
+  options.known.max_output_bytes = MC_HOST_HARD_MAX_OUTPUT_BYTES + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject output byte limit above hard cap");
+  options.known.max_output_bytes = 3;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
+           runtime == 0, "reject output byte limit too small for high water");
+  options.known.max_output_bytes = 0;
+  options.known.max_output_records = MC_HOST_HARD_MAX_OUTPUT_RECORDS + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject output record limit above hard cap");
+  options.known.max_output_records = 3;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
+           runtime == 0, "reject output record limit too small for high water");
+  options.known.max_output_records = 0;
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK,
        "accept zero future option");
   need(runtime != 0, "runtime handle");
@@ -132,6 +146,18 @@ int main(int argc, char **argv) {
        "old runtime options prefix uses defaults");
   need(api.runtime_close(old_runtime, NULL) == MC_HOST_OK,
        "close old-options runtime");
+
+  struct {
+    mc_host_header_v1 header;
+    uint32_t max_vms;
+    uint32_t max_drive_ticks;
+  } legacy_options = {{16, 1, 0}, 1, 16};
+  mc_host_runtime_t legacy_runtime = 0;
+  need(api.runtime_create((const mc_host_runtime_options_v1 *)&legacy_options,
+                          &legacy_runtime, NULL) == MC_HOST_OK,
+       "old runtime options retain default output quotas");
+  need(api.runtime_close(legacy_runtime, NULL) == MC_HOST_OK,
+       "close legacy-options runtime");
 
   mc_host_runtime_t second = 0;
   need(api.runtime_create(NULL, &second, NULL) == MC_HOST_OK,

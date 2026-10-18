@@ -29,9 +29,6 @@ const MAX_KERNEL_BYTES: usize = 256 * 1024 * 1024;
 const MAX_VMS: usize = contract::MC_HOST_HARD_MAX_VMS as usize;
 const MAX_IMAGE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_DRIVE_TICKS: u32 = contract::MC_HOST_HARD_MAX_DRIVE_TICKS;
-const OUTPUT_MAX_BYTES: usize = 4 * 1024 * 1024;
-const OUTPUT_HIGH_WATER: usize = 3 * 1024 * 1024;
-const OUTPUT_MAX_RECORDS: usize = 4_096;
 const SNAPSHOT_MAX_BYTES: usize = 512 * 1024 * 1024;
 const SNAPSHOT_TOTAL_BYTES: usize = 1024 * 1024 * 1024;
 const MAX_OPERATIONS_PER_VM: usize = 64;
@@ -41,12 +38,28 @@ const MAX_PLANS: usize = 64;
 pub struct RuntimeLimits {
     pub max_vms: usize,
     pub max_drive_ticks: u32,
+    pub max_output_bytes: usize,
+    pub max_output_records: usize,
 }
 
 impl RuntimeLimits {
-    pub fn new(max_vms: u32, max_drive_ticks: u32) -> Result<Self, u32> {
-        if max_vms > MAX_VMS as u32 || max_drive_ticks > MAX_DRIVE_TICKS {
+    pub fn new(
+        max_vms: u32,
+        max_drive_ticks: u32,
+        max_output_bytes: u32,
+        max_output_records: u32,
+    ) -> Result<Self, u32> {
+        if max_vms > MAX_VMS as u32
+            || max_drive_ticks > MAX_DRIVE_TICKS
+            || max_output_bytes > contract::MC_HOST_HARD_MAX_OUTPUT_BYTES
+            || max_output_records > contract::MC_HOST_HARD_MAX_OUTPUT_RECORDS
+        {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        if (max_output_bytes != 0 && max_output_bytes < 4)
+            || (max_output_records != 0 && max_output_records < 4)
+        {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
         Ok(Self {
             max_vms: if max_vms == 0 {
@@ -58,6 +71,16 @@ impl RuntimeLimits {
                 contract::MC_HOST_DEFAULT_MAX_DRIVE_TICKS
             } else {
                 max_drive_ticks
+            },
+            max_output_bytes: if max_output_bytes == 0 {
+                contract::MC_HOST_DEFAULT_MAX_OUTPUT_BYTES as usize
+            } else {
+                max_output_bytes as usize
+            },
+            max_output_records: if max_output_records == 0 {
+                contract::MC_HOST_DEFAULT_MAX_OUTPUT_RECORDS as usize
+            } else {
+                max_output_records as usize
             },
         })
     }
@@ -1123,7 +1146,11 @@ impl RuntimeState {
             Arc::clone(&record.bytes)
         };
 
-        let output = OutputQueue::new(OUTPUT_MAX_BYTES, OUTPUT_HIGH_WATER, OUTPUT_MAX_RECORDS);
+        let output = OutputQueue::new(
+            self.limits.max_output_bytes,
+            self.limits.max_output_bytes * 3 / 4,
+            self.limits.max_output_records,
+        );
         let mut builder = KernelHostBuilder::new(kernel_bytes.to_vec())
             .with_module_cache(Arc::clone(&self.cache))
             .with_layers(config.layers)
@@ -1250,7 +1277,11 @@ impl RuntimeState {
         };
         let snapshot: Arc<[u8]> = Arc::from(snapshot);
         let baseline: Option<Arc<[u8]>> = baseline.map(Arc::from);
-        let output = OutputQueue::new(OUTPUT_MAX_BYTES, OUTPUT_HIGH_WATER, OUTPUT_MAX_RECORDS);
+        let output = OutputQueue::new(
+            self.limits.max_output_bytes,
+            self.limits.max_output_bytes * 3 / 4,
+            self.limits.max_output_records,
+        );
         let builder = KernelHostBuilder::new(kernel_bytes.to_vec())
             .with_module_cache(Arc::clone(&self.cache))
             .with_stdout(Box::new(output.sink(STDOUT)))

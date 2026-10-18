@@ -26,10 +26,12 @@ layout "ERROR" size=48 align=8 {
   offset "reserved" value=17
   offset "message" value=24
 }
-layout "RUNTIME_OPTIONS" size=16 align=4 {
+layout "RUNTIME_OPTIONS" size=24 align=4 {
   offset "header" value=0
   offset "max_vms" value=8
   offset "max_drive_ticks" value=12
+  offset "max_output_bytes" value=16
+  offset "max_output_records" value=20
 }
 layout "LIBRARY_INFO" size=24 align=8 {
   offset "header" value=0
@@ -272,6 +274,10 @@ constant "MC_HOST_DEFAULT_MAX_VMS" value=16 type="u32"
 constant "MC_HOST_HARD_MAX_VMS" value=16 type="u32"
 constant "MC_HOST_DEFAULT_MAX_DRIVE_TICKS" value=1000 type="u32"
 constant "MC_HOST_HARD_MAX_DRIVE_TICKS" value=1000 type="u32"
+constant "MC_HOST_DEFAULT_MAX_OUTPUT_BYTES" value=4194304 type="u32"
+constant "MC_HOST_HARD_MAX_OUTPUT_BYTES" value=4194304 type="u32"
+constant "MC_HOST_DEFAULT_MAX_OUTPUT_RECORDS" value=4096 type="u32"
+constant "MC_HOST_HARD_MAX_OUTPUT_RECORDS" value=4096 type="u32"
 
 constant "MC_HOST_TICK_WAITING" value=0 type="u32"
 constant "MC_HOST_TICK_RUNNABLE" value=1 type="u32"
