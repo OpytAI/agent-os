@@ -28,6 +28,8 @@ CHECK_FIELD(mc_host_error_v1, ERROR, message, MESSAGE);
 
 CHECK_LAYOUT(mc_host_runtime_options_v1, RUNTIME_OPTIONS);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, header, HEADER);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_vms, MAX_VMS);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_drive_ticks, MAX_DRIVE_TICKS);
 
 CHECK_LAYOUT(mc_host_library_info_v1, LIBRARY_INFO);
 CHECK_FIELD(mc_host_library_info_v1, LIBRARY_INFO, header, HEADER);

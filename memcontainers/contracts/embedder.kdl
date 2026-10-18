@@ -26,8 +26,10 @@ layout "ERROR" size=48 align=8 {
   offset "reserved" value=17
   offset "message" value=24
 }
-layout "RUNTIME_OPTIONS" size=8 align=4 {
+layout "RUNTIME_OPTIONS" size=16 align=4 {
   offset "header" value=0
+  offset "max_vms" value=8
+  offset "max_drive_ticks" value=12
 }
 layout "LIBRARY_INFO" size=24 align=8 {
   offset "header" value=0
@@ -256,6 +258,10 @@ constant "MC_HOST_FEATURE_MOUNT_OPERATION" value=1024 type="u64"
 constant "MC_HOST_FEATURE_PERSIST_EFFECT" value=2048 type="u64"
 constant "MC_HOST_FEATURE_HTTP_EFFECT" value=4096 type="u64"
 constant "MC_HOST_FEATURE_WS_EFFECT" value=8192 type="u64"
+constant "MC_HOST_DEFAULT_MAX_VMS" value=16 type="u32"
+constant "MC_HOST_HARD_MAX_VMS" value=16 type="u32"
+constant "MC_HOST_DEFAULT_MAX_DRIVE_TICKS" value=1000 type="u32"
+constant "MC_HOST_HARD_MAX_DRIVE_TICKS" value=1000 type="u32"
 
 constant "MC_HOST_TICK_WAITING" value=0 type="u32"
 constant "MC_HOST_TICK_RUNNABLE" value=1 type="u32"

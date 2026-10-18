@@ -53,6 +53,9 @@ typedef struct mc_host_error_v1 {
 
 typedef struct mc_host_runtime_options_v1 {
   mc_host_header_v1 header;
+  /* Zero selects the published default. Nonzero values may lower the limit. */
+  uint32_t max_vms;
+  uint32_t max_drive_ticks;
 } mc_host_runtime_options_v1;
 
 typedef struct mc_host_library_info_v1 {

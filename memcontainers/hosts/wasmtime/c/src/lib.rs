@@ -20,7 +20,7 @@ mod relay;
 mod resources;
 mod snapshot_api;
 mod vm_api;
-use resources::RuntimeState;
+use resources::{RuntimeLimits, RuntimeState};
 
 type ResultCode = u32;
 type RuntimeHandle = u64;
@@ -76,6 +76,8 @@ struct Error {
 #[derive(Clone, Copy)]
 struct RuntimeOptions {
     header: Header,
+    max_vms: u32,
+    max_drive_ticks: u32,
 }
 
 #[repr(C)]
@@ -380,6 +382,14 @@ const _: () = {
     assert!(
         offset_of!(RuntimeOptions, header)
             == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_HEADER_OFFSET
+    );
+    assert!(
+        offset_of!(RuntimeOptions, max_vms)
+            == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_MAX_VMS_OFFSET
+    );
+    assert!(
+        offset_of!(RuntimeOptions, max_drive_ticks)
+            == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_MAX_DRIVE_TICKS_OFFSET
     );
 
     assert!(size_of::<LibraryInfo>() == contract::MC_HOST_LAYOUT_LIBRARY_INFO_SIZE);
@@ -838,7 +848,7 @@ struct RuntimeTable {
 }
 
 impl RuntimeTable {
-    fn insert(&mut self) -> Result<RuntimeHandle, ResultCode> {
+    fn insert(&mut self, limits: RuntimeLimits) -> Result<RuntimeHandle, ResultCode> {
         let namespace = self.next_namespace.saturating_add(1);
         if namespace > MAX_NAMESPACE {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
@@ -865,7 +875,10 @@ impl RuntimeTable {
         }
         slot.namespace = namespace as u16;
         slot.open = true;
-        slot.state = Some(std::sync::Arc::new(RuntimeState::new(slot.namespace)));
+        slot.state = Some(std::sync::Arc::new(RuntimeState::new(
+            slot.namespace,
+            limits,
+        )));
         self.next_namespace = namespace;
         Ok(pack(slot.namespace, slot.generation, index))
     }
@@ -973,18 +986,23 @@ fn ranges_overlap(a: usize, a_len: usize, b: usize, b_len: usize) -> bool {
     }
 }
 
-unsafe fn validate_options(options: *const RuntimeOptions) -> Result<(), ResultCode> {
+unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimits, ResultCode> {
     if options.is_null() {
-        return Ok(());
+        return RuntimeLimits::new(0, 0);
     }
     if (options as usize) % align_of::<Header>() != 0 {
         return Err(contract::MC_HOST_INVALID_ARGUMENT);
     }
-    let header = unsafe { (*options).header };
-    if !valid_header(header, size_of::<RuntimeOptions>())
+    let header = unsafe { ptr::read(options.cast::<Header>()) };
+    if !valid_header(header, size_of::<Header>())
         || header.size as usize > MAX_INPUT_STRUCT_SIZE
+        || (header.size as usize != size_of::<Header>()
+            && (header.size as usize) < size_of::<RuntimeOptions>())
     {
         return Err(contract::MC_HOST_INVALID_ARGUMENT);
+    }
+    if header.size as usize == size_of::<Header>() {
+        return RuntimeLimits::new(0, 0);
     }
     let tail_len = header.size as usize - size_of::<RuntimeOptions>();
     if tail_len != 0 {
@@ -998,7 +1016,8 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<(), ResultC
             return Err(contract::MC_HOST_UNSUPPORTED);
         }
     }
-    Ok(())
+    let options = unsafe { ptr::read(options) };
+    RuntimeLimits::new(options.max_vms, options.max_drive_ticks)
 }
 
 unsafe fn write_error(error: *mut Error, code: ResultCode, message: &str) {
@@ -1106,11 +1125,11 @@ unsafe extern "C" fn runtime_create(
             }
         }
         unsafe { *out = 0 };
-        unsafe { validate_options(options)? };
+        let limits = unsafe { validate_options(options)? };
         let handle = runtimes()
             .lock()
             .map_err(|_| contract::MC_HOST_INTERNAL)?
-            .insert()?;
+            .insert(limits)?;
         unsafe { *out = handle };
         Ok(())
     })

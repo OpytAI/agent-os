@@ -26,9 +26,9 @@ pub const EFFECT_KIND: u8 = 9;
 pub const SOCKET_KIND: u8 = 10;
 const MAX_KERNELS: usize = 64;
 const MAX_KERNEL_BYTES: usize = 256 * 1024 * 1024;
-const MAX_VMS: usize = 16;
+const MAX_VMS: usize = contract::MC_HOST_HARD_MAX_VMS as usize;
 const MAX_IMAGE_BYTES: usize = 256 * 1024 * 1024;
-const MAX_DRIVE_TICKS: u32 = 1_000;
+const MAX_DRIVE_TICKS: u32 = contract::MC_HOST_HARD_MAX_DRIVE_TICKS;
 const OUTPUT_MAX_BYTES: usize = 4 * 1024 * 1024;
 const OUTPUT_HIGH_WATER: usize = 3 * 1024 * 1024;
 const OUTPUT_MAX_RECORDS: usize = 4_096;
@@ -36,6 +36,32 @@ const SNAPSHOT_MAX_BYTES: usize = 512 * 1024 * 1024;
 const SNAPSHOT_TOTAL_BYTES: usize = 1024 * 1024 * 1024;
 const MAX_OPERATIONS_PER_VM: usize = 64;
 const MAX_PLANS: usize = 64;
+
+#[derive(Clone, Copy)]
+pub struct RuntimeLimits {
+    pub max_vms: usize,
+    pub max_drive_ticks: u32,
+}
+
+impl RuntimeLimits {
+    pub fn new(max_vms: u32, max_drive_ticks: u32) -> Result<Self, u32> {
+        if max_vms > MAX_VMS as u32 || max_drive_ticks > MAX_DRIVE_TICKS {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        Ok(Self {
+            max_vms: if max_vms == 0 {
+                contract::MC_HOST_DEFAULT_MAX_VMS as usize
+            } else {
+                max_vms as usize
+            },
+            max_drive_ticks: if max_drive_ticks == 0 {
+                contract::MC_HOST_DEFAULT_MAX_DRIVE_TICKS
+            } else {
+                max_drive_ticks
+            },
+        })
+    }
+}
 
 #[derive(Clone, Default)]
 struct PlanRecord {
@@ -167,6 +193,7 @@ pub struct VmRecord {
     observed: Mutex<VmObserved>,
     operations: Mutex<Vec<Weak<OperationRecord>>>,
     relay: Option<Arc<Relay>>,
+    max_drive_ticks: u32,
     // The Rust host memoizes baseline integrity by buffer address. Keep the
     // immutable full MCSN bytes at that address until this VM is closed.
     _snapshot_anchor: Option<Arc<[u8]>>,
@@ -387,7 +414,7 @@ impl VmRecord {
     }
 
     pub fn drive(&self, max_ticks: u32, stop_mask: u64) -> Result<VmDriveResult, u32> {
-        if max_ticks == 0 || max_ticks > MAX_DRIVE_TICKS {
+        if max_ticks == 0 || max_ticks > self.max_drive_ticks {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
         if stop_mask
@@ -559,14 +586,16 @@ struct OutputLease {
 
 pub struct RuntimeState {
     namespace: u16,
+    limits: RuntimeLimits,
     pub cache: Arc<KernelModuleCache>,
     resources: Mutex<Resources>,
 }
 
 impl RuntimeState {
-    pub fn new(namespace: u16) -> Self {
+    pub fn new(namespace: u16, limits: RuntimeLimits) -> Self {
         Self {
             namespace,
+            limits,
             cache: Arc::new(KernelModuleCache::bounded(MAX_KERNELS, MAX_KERNEL_BYTES)),
             resources: Mutex::new(Resources {
                 kernels: HandleTable::new(KERNEL_KIND),
@@ -1045,7 +1074,7 @@ impl RuntimeState {
                 .resources
                 .lock()
                 .map_err(|_| contract::MC_HOST_INTERNAL)?;
-            if resources.vms.live >= MAX_VMS {
+            if resources.vms.live >= self.limits.max_vms {
                 return Err(contract::MC_HOST_RESOURCE_LIMIT);
             }
             let record = resources.kernels.get_mut(self.namespace, kernel_handle)?;
@@ -1120,6 +1149,7 @@ impl RuntimeState {
             }),
             operations: Mutex::new(Vec::new()),
             relay,
+            max_drive_ticks: self.limits.max_drive_ticks,
             _snapshot_anchor: None,
         });
         let inserted = {
@@ -1127,7 +1157,7 @@ impl RuntimeState {
                 .resources
                 .lock()
                 .map_err(|_| contract::MC_HOST_INTERNAL)?;
-            if resources.vms.live >= MAX_VMS {
+            if resources.vms.live >= self.limits.max_vms {
                 Err(contract::MC_HOST_RESOURCE_LIMIT)
             } else {
                 resources.vms.insert(self.namespace, vm)
@@ -1161,7 +1191,7 @@ impl RuntimeState {
                 .resources
                 .lock()
                 .map_err(|_| contract::MC_HOST_INTERNAL)?;
-            if resources.vms.live >= MAX_VMS {
+            if resources.vms.live >= self.limits.max_vms {
                 return Err(contract::MC_HOST_RESOURCE_LIMIT);
             }
             if resources
@@ -1217,6 +1247,7 @@ impl RuntimeState {
             }),
             operations: Mutex::new(Vec::new()),
             relay: None,
+            max_drive_ticks: self.limits.max_drive_ticks,
             _snapshot_anchor: Some(baseline.unwrap_or(snapshot)),
         });
         let inserted = {
@@ -1224,7 +1255,7 @@ impl RuntimeState {
                 .resources
                 .lock()
                 .map_err(|_| contract::MC_HOST_INTERNAL)?;
-            if resources.vms.live >= MAX_VMS {
+            if resources.vms.live >= self.limits.max_vms {
                 Err(contract::MC_HOST_RESOURCE_LIMIT)
             } else {
                 resources.vms.insert(self.namespace, vm)

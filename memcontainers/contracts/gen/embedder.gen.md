@@ -47,6 +47,10 @@ ABI **1.0**.
 | `MC_HOST_FEATURE_PERSIST_EFFECT` | `u64` | 2048 |
 | `MC_HOST_FEATURE_HTTP_EFFECT` | `u64` | 4096 |
 | `MC_HOST_FEATURE_WS_EFFECT` | `u64` | 8192 |
+| `MC_HOST_DEFAULT_MAX_VMS` | `u32` | 16 |
+| `MC_HOST_HARD_MAX_VMS` | `u32` | 16 |
+| `MC_HOST_DEFAULT_MAX_DRIVE_TICKS` | `u32` | 1000 |
+| `MC_HOST_HARD_MAX_DRIVE_TICKS` | `u32` | 1000 |
 | `MC_HOST_TICK_WAITING` | `u32` | 0 |
 | `MC_HOST_TICK_RUNNABLE` | `u32` | 1 |
 | `MC_HOST_TICK_EXITED` | `u32` | 2 |
@@ -126,7 +130,7 @@ ABI **1.0**.
 | `HEADER` | 8 | 4 |
 | `BUFFER` | 24 | 8 |
 | `ERROR` | 48 | 8 |
-| `RUNTIME_OPTIONS` | 8 | 4 |
+| `RUNTIME_OPTIONS` | 16 | 4 |
 | `LIBRARY_INFO` | 24 | 8 |
 | `API` | 56 | 8 |
 | `BYTES` | 16 | 8 |

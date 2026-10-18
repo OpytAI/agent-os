@@ -1374,7 +1374,10 @@ int main(int argc, char **argv) {
   mc_host_api_v1 api = MC_HOST_INIT(mc_host_api_v1);
   check(get_api(MC_HOST_ABI_MAJOR, 0, sizeof(api), &api), "negotiate API");
   mc_host_runtime_t runtime = 0;
-  check(api.runtime_create(NULL, &runtime, NULL), "create runtime");
+  mc_host_runtime_options_v1 runtime_options = MC_HOST_INIT(mc_host_runtime_options_v1);
+  runtime_options.max_vms = 2;
+  runtime_options.max_drive_ticks = 128;
+  check(api.runtime_create(&runtime_options, &runtime, NULL), "create bounded runtime");
 
   mc_host_vm_api_v1 vm_api = MC_HOST_INIT(mc_host_vm_api_v1);
   mc_host_output_api_v1 output_api = MC_HOST_INIT(mc_host_output_api_v1);
@@ -1453,6 +1456,11 @@ int main(int argc, char **argv) {
   create.requested_workers = -1;
   mc_host_handle_t vm = 0;
   check(vm_api.vm_create(runtime, kernel_handle, plan, &create, &vm, NULL), "boot real image");
+  mc_host_drive_options_v1 over_limit = MC_HOST_INIT(mc_host_drive_options_v1);
+  over_limit.max_ticks = 129;
+  mc_host_drive_result_v1 rejected_drive = MC_HOST_INIT(mc_host_drive_result_v1);
+  need(vm_api.vm_drive(runtime, vm, &over_limit, &rejected_drive, NULL) ==
+           MC_HOST_INVALID_ARGUMENT, "runtime drive limit is enforced");
   need(api.runtime_close(runtime, NULL) == MC_HOST_BUSY, "runtime owns children");
   mc_host_vm_status_v1 status = MC_HOST_INIT(mc_host_vm_status_v1);
   need(vm_api.vm_status(runtime, kernel_handle, &status, NULL) == MC_HOST_WRONG_KIND,
@@ -1517,6 +1525,10 @@ int main(int argc, char **argv) {
   mc_host_handle_t restored = 0;
   check(vm_api.vm_restore(runtime, kernel_handle, 0, &restore, &restored, NULL),
         "restore real incremental snapshot");
+  mc_host_handle_t over_limit_vm = 0;
+  need(vm_api.vm_restore(runtime, kernel_handle, 0, &restore, &over_limit_vm, NULL) ==
+           MC_HOST_RESOURCE_LIMIT && over_limit_vm == 0,
+       "runtime VM limit prevents a third live VM");
   const uint8_t restored_command[] = "git --version\n";
   check(vm_api.terminal_input(runtime, restored,
                               (mc_host_bytes_v1){restored_command, sizeof(restored_command) - 1}, NULL),

@@ -86,6 +86,14 @@ int main(int argc, char **argv) {
        "reject unknown nonzero option");
   need(runtime == 0, "failure clears output");
   options.future[0] = 0;
+  options.known.max_vms = 17;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject VM limit above hard cap");
+  options.known.max_vms = 0;
+  options.known.max_drive_ticks = 1001;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject drive limit above hard cap");
+  options.known.max_drive_ticks = 0;
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK,
        "accept zero future option");
   need(runtime != 0, "runtime handle");
@@ -116,6 +124,14 @@ int main(int argc, char **argv) {
        "effect table prefix");
   need(api.runtime_close(runtime, NULL) == MC_HOST_OK, "close runtime");
   need(api.runtime_close(runtime, NULL) == MC_HOST_STALE_HANDLE, "stale close");
+
+  mc_host_header_v1 old_options = {sizeof(old_options), 1, 0};
+  mc_host_runtime_t old_runtime = 0;
+  need(api.runtime_create((const mc_host_runtime_options_v1 *)&old_options,
+                          &old_runtime, NULL) == MC_HOST_OK,
+       "old runtime options prefix uses defaults");
+  need(api.runtime_close(old_runtime, NULL) == MC_HOST_OK,
+       "close old-options runtime");
 
   mc_host_runtime_t second = 0;
   need(api.runtime_create(NULL, &second, NULL) == MC_HOST_OK,
