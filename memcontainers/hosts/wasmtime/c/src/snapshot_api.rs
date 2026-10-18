@@ -257,6 +257,36 @@ pub unsafe extern "C" fn inspect(
     })
 }
 
+pub unsafe extern "C" fn readiness(
+    runtime: u64,
+    vm: u64,
+    out: *mut SnapshotReadiness,
+    error: *mut Error,
+) -> ResultCode {
+    guard(error, || {
+        let size = unsafe { output_size(out)? };
+        let observed = ActiveRuntime::acquire(runtime)?
+            .state
+            .vm(vm)?
+            .snapshot_readiness()?;
+        let value = SnapshotReadiness {
+            header: Header {
+                size: size as u32,
+                version: 1,
+                flags: 0,
+            },
+            inflight_egress: u32::from(observed.inflight_egress),
+            pending_commits: u32::from(observed.pending_commits),
+            pending_operations: u32::from(observed.pending_operations),
+            pending_effects: u32::from(observed.pending_effects),
+            pending_transactions: 0,
+            reserved: 0,
+        };
+        unsafe { copy_output(out, &value, size) };
+        Ok(())
+    })
+}
+
 pub static SNAPSHOT_API: SnapshotApi = SnapshotApi {
     header: Header {
         size: size_of::<SnapshotApi>() as u32,
@@ -270,4 +300,5 @@ pub static SNAPSHOT_API: SnapshotApi = SnapshotApi {
     finish,
     cancel,
     inspect,
+    readiness,
 };

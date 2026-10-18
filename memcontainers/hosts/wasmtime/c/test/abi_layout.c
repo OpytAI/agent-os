@@ -156,6 +156,15 @@ CHECK_FIELD(mc_host_snapshot_info_v1, SNAPSHOT_INFO, content_digest, CONTENT_DIG
 CHECK_FIELD(mc_host_snapshot_info_v1, SNAPSHOT_INFO, length, LENGTH);
 CHECK_FIELD(mc_host_snapshot_info_v1, SNAPSHOT_INFO, memory_len, MEMORY_LEN);
 
+CHECK_LAYOUT(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS);
+CHECK_FIELD(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS, header, HEADER);
+CHECK_FIELD(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS, inflight_egress, INFLIGHT_EGRESS);
+CHECK_FIELD(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS, pending_commits, PENDING_COMMITS);
+CHECK_FIELD(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS, pending_operations, PENDING_OPERATIONS);
+CHECK_FIELD(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS, pending_effects, PENDING_EFFECTS);
+CHECK_FIELD(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS, pending_transactions, PENDING_TRANSACTIONS);
+CHECK_FIELD(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS, reserved, RESERVED);
+
 CHECK_LAYOUT(mc_host_snapshot_api_v1, SNAPSHOT_API);
 CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, header, HEADER);
 CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, baseline_import, BASELINE_IMPORT);
@@ -165,6 +174,7 @@ CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, read, READ);
 CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, finish, FINISH);
 CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, cancel, CANCEL);
 CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, inspect, INSPECT);
+CHECK_FIELD(mc_host_snapshot_api_v1, SNAPSHOT_API, readiness, READINESS);
 CHECK_LAYOUT(mc_host_operation_status_v1, OPERATION_STATUS);
 CHECK_FIELD(mc_host_operation_status_v1, OPERATION_STATUS, header, HEADER);
 CHECK_FIELD(mc_host_operation_status_v1, OPERATION_STATUS, kind, KIND);

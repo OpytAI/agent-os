@@ -837,6 +837,7 @@ static void answer_ws(const mc_host_effect_api_v1 *effect_api,
 
 static void run_ws_relay(const mc_host_vm_api_v1 *vm_api,
                          const mc_host_operation_api_v1 *op_api,
+                         const mc_host_snapshot_api_v1 *snap_api,
                          const mc_host_effect_api_v1 *effect_api,
                          mc_host_runtime_t runtime, mc_host_handle_t vm) {
   int listener = socket(AF_INET, SOCK_STREAM, 0);
@@ -960,6 +961,11 @@ static void run_ws_relay(const mc_host_vm_api_v1 *vm_api,
         need(mc_host_wire_decode_ws_close_event(decoded.payload.data,
                  decoded.payload.len, &close_event) == MC_HOST_WIRE_OK &&
              close_event.reason == MC_HOST_WS_CLOSE_GUEST, "WebSocket close reason");
+        mc_host_snapshot_readiness_v1 readiness = MC_HOST_INIT(mc_host_snapshot_readiness_v1);
+        check(snap_api->readiness(runtime, vm, &readiness, NULL),
+              "inspect snapshot blockers with WebSocket close notice");
+        need(!readiness.pending_effects,
+             "close notice alone does not block a snapshot");
         check(effect_api->ack(runtime, event, NULL), "acknowledge WebSocket close");
         need(effect_api->socket_push(runtime, socket_handle,
              (mc_host_bytes_v1){(const uint8_t *)"x", 1}, NULL) == MC_HOST_STALE_HANDLE,
@@ -1188,6 +1194,11 @@ static void run_control_command(const mc_host_vm_api_v1 *vm_api,
   mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
   check(op_api->poll(runtime, operation, &status, NULL), "initial operation poll");
   need(status.state == MC_HOST_OP_PENDING, "poll does not drive the kernel");
+  mc_host_snapshot_readiness_v1 readiness = MC_HOST_INIT(mc_host_snapshot_readiness_v1);
+  check(snap_api->readiness(runtime, vm, &readiness, NULL),
+        "inspect snapshot blockers with live control operation");
+  need(readiness.pending_operations && !readiness.pending_transactions,
+       "readiness reports live control operation separately");
   need(vm_api->vm_close(runtime, vm, NULL) == MC_HOST_BUSY,
        "VM cannot close with an operation handle");
   mc_host_snapshot_begin_options_v1 capture = MC_HOST_INIT(mc_host_snapshot_begin_options_v1);
@@ -1596,7 +1607,15 @@ int main(int argc, char **argv) {
   run_mount_relay(&vm_api, &op_api, &effect_api, runtime, vm);
   run_persist_relay(&vm_api, &op_api, &effect_api, runtime, vm);
   run_http_relay(&vm_api, &op_api, &effect_api, runtime, vm);
-  run_ws_relay(&vm_api, &op_api, &effect_api, runtime, vm);
+  run_ws_relay(&vm_api, &op_api, &snap_api, &effect_api, runtime, vm);
+
+  mc_host_snapshot_readiness_v1 readiness = MC_HOST_INIT(mc_host_snapshot_readiness_v1);
+  check(snap_api.readiness(runtime, vm, &readiness, NULL),
+        "inspect quiescent VM before snapshot");
+  need(!readiness.inflight_egress && !readiness.pending_commits &&
+       !readiness.pending_operations && !readiness.pending_effects &&
+       !readiness.pending_transactions,
+       "snapshot readiness reports no remaining blockers");
 
   mc_host_snapshot_begin_options_v1 full_options = MC_HOST_INIT(mc_host_snapshot_begin_options_v1);
   full_options.mode = MC_HOST_SNAPSHOT_FULL;

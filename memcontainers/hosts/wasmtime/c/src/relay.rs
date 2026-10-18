@@ -304,6 +304,22 @@ impl Relay {
         })
     }
 
+    pub fn has_snapshot_blockers(&self) -> bool {
+        self.inner.lock().is_ok_and(|inner| {
+            inner.sockets.values().any(|state| !state.guest_closed)
+                || inner.events.values().any(|event| {
+                    event.phase != EventPhase::Cancelled
+                        && !matches!(
+                            event.kind,
+                            contract::MC_HOST_EVENT_HTTP_CANCEL
+                                | contract::MC_HOST_EVENT_HOST_CALL_CLOSE
+                                | contract::MC_HOST_EVENT_OPERATION_CANCEL
+                                | contract::MC_HOST_EVENT_WS_CLOSE
+                        )
+                })
+        })
+    }
+
     pub fn socket_native_handle(&self, socket: i32) -> Result<Option<u64>, u32> {
         let inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
         Ok(inner

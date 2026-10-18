@@ -218,6 +218,13 @@ pub struct VmDriveResult {
     pub report: VmReport,
 }
 
+pub struct VmSnapshotReadiness {
+    pub inflight_egress: bool,
+    pub pending_commits: bool,
+    pub pending_operations: bool,
+    pub pending_effects: bool,
+}
+
 pub struct VmReport {
     pub observed: VmObserved,
     pub output: OutputStats,
@@ -241,6 +248,37 @@ pub struct VmConfig {
 }
 
 impl VmRecord {
+    pub fn snapshot_readiness(&self) -> Result<VmSnapshotReadiness, u32> {
+        let mut host = self.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
+        let host = host.as_mut().ok_or(contract::MC_HOST_INVALID_STATE)?;
+        let observed = self
+            .observed
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if observed.closing {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        if observed.poisoned {
+            return Err(contract::MC_HOST_POISONED);
+        }
+        drop(observed);
+        Ok(VmSnapshotReadiness {
+            inflight_egress: host
+                .inflight_egress()
+                .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?
+                != 0,
+            pending_commits: host
+                .pending_commits()
+                .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?
+                != 0,
+            pending_operations: self.operation_readiness()?.1,
+            pending_effects: self
+                .relay
+                .as_ref()
+                .is_some_and(|relay| relay.has_snapshot_blockers()),
+        })
+    }
+
     fn operation_readiness(&self) -> Result<(bool, bool), u32> {
         let mut ready = false;
         let mut pending = false;
@@ -293,7 +331,7 @@ impl VmRecord {
         if self
             .relay
             .as_ref()
-            .is_some_and(|relay| relay.has_live_events())
+            .is_some_and(|relay| relay.has_snapshot_blockers())
         {
             return Err(contract::MC_HOST_NOT_QUIESCENT);
         }

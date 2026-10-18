@@ -159,7 +159,16 @@ layout "SNAPSHOT_INFO" size=128 align=8 {
   offset "length" value=112
   offset "memory_len" value=120
 }
-layout "SNAPSHOT_API" size=64 align=8 {
+layout "SNAPSHOT_READINESS" size=32 align=4 {
+  offset "header" value=0
+  offset "inflight_egress" value=8
+  offset "pending_commits" value=12
+  offset "pending_operations" value=16
+  offset "pending_effects" value=20
+  offset "pending_transactions" value=24
+  offset "reserved" value=28
+}
+layout "SNAPSHOT_API" size=72 align=8 {
   offset "header" value=0
   offset "baseline_import" value=8
   offset "baseline_close" value=16
@@ -168,6 +177,7 @@ layout "SNAPSHOT_API" size=64 align=8 {
   offset "finish" value=40
   offset "cancel" value=48
   offset "inspect" value=56
+  offset "readiness" value=64
 }
 layout "OPERATION_STATUS" size=32 align=8 {
   offset "header" value=0

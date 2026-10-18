@@ -274,6 +274,17 @@ struct SnapshotInfo {
 }
 
 #[repr(C)]
+struct SnapshotReadiness {
+    header: Header,
+    inflight_egress: u32,
+    pending_commits: u32,
+    pending_operations: u32,
+    pending_effects: u32,
+    pending_transactions: u32,
+    reserved: u32,
+}
+
+#[repr(C)]
 struct SnapshotApi {
     header: Header,
     baseline_import: unsafe extern "C" fn(
@@ -297,6 +308,7 @@ struct SnapshotApi {
     finish: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
     cancel: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
     inspect: unsafe extern "C" fn(u64, Bytes, Bytes, *mut SnapshotInfo, *mut Error) -> ResultCode,
+    readiness: unsafe extern "C" fn(u64, u64, *mut SnapshotReadiness, *mut Error) -> ResultCode,
 }
 
 #[repr(C)]
@@ -709,6 +721,37 @@ const _: () = {
             == contract::MC_HOST_LAYOUT_SNAPSHOT_INFO_MEMORY_LEN_OFFSET
     );
 
+    assert!(size_of::<SnapshotReadiness>() == contract::MC_HOST_LAYOUT_SNAPSHOT_READINESS_SIZE);
+    assert!(align_of::<SnapshotReadiness>() == contract::MC_HOST_LAYOUT_SNAPSHOT_READINESS_ALIGN);
+    assert!(
+        offset_of!(SnapshotReadiness, header)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_READINESS_HEADER_OFFSET
+    );
+    assert!(
+        offset_of!(SnapshotReadiness, inflight_egress)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_READINESS_INFLIGHT_EGRESS_OFFSET
+    );
+    assert!(
+        offset_of!(SnapshotReadiness, pending_commits)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_READINESS_PENDING_COMMITS_OFFSET
+    );
+    assert!(
+        offset_of!(SnapshotReadiness, pending_operations)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_READINESS_PENDING_OPERATIONS_OFFSET
+    );
+    assert!(
+        offset_of!(SnapshotReadiness, pending_effects)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_READINESS_PENDING_EFFECTS_OFFSET
+    );
+    assert!(
+        offset_of!(SnapshotReadiness, pending_transactions)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_READINESS_PENDING_TRANSACTIONS_OFFSET
+    );
+    assert!(
+        offset_of!(SnapshotReadiness, reserved)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_READINESS_RESERVED_OFFSET
+    );
+
     assert!(size_of::<SnapshotApi>() == contract::MC_HOST_LAYOUT_SNAPSHOT_API_SIZE);
     assert!(align_of::<SnapshotApi>() == contract::MC_HOST_LAYOUT_SNAPSHOT_API_ALIGN);
     assert!(offset_of!(SnapshotApi, header) == contract::MC_HOST_LAYOUT_SNAPSHOT_API_HEADER_OFFSET);
@@ -726,6 +769,10 @@ const _: () = {
     assert!(offset_of!(SnapshotApi, cancel) == contract::MC_HOST_LAYOUT_SNAPSHOT_API_CANCEL_OFFSET);
     assert!(
         offset_of!(SnapshotApi, inspect) == contract::MC_HOST_LAYOUT_SNAPSHOT_API_INSPECT_OFFSET
+    );
+    assert!(
+        offset_of!(SnapshotApi, readiness)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_API_READINESS_OFFSET
     );
     assert!(size_of::<OperationStatus>() == contract::MC_HOST_LAYOUT_OPERATION_STATUS_SIZE);
     assert!(align_of::<OperationStatus>() == contract::MC_HOST_LAYOUT_OPERATION_STATUS_ALIGN);

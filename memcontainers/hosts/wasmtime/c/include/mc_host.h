@@ -221,6 +221,16 @@ typedef struct mc_host_snapshot_info_v1 {
   uint64_t memory_len;
 } mc_host_snapshot_info_v1;
 
+typedef struct mc_host_snapshot_readiness_v1 {
+  mc_host_header_v1 header;
+  uint32_t inflight_egress;
+  uint32_t pending_commits;
+  uint32_t pending_operations;
+  uint32_t pending_effects;
+  uint32_t pending_transactions;
+  uint32_t reserved;
+} mc_host_snapshot_readiness_v1;
+
 typedef struct mc_host_snapshot_api_v1 {
   mc_host_header_v1 header;
   mc_host_result_t (MC_HOST_CALL *baseline_import)(
@@ -242,6 +252,10 @@ typedef struct mc_host_snapshot_api_v1 {
   mc_host_result_t (MC_HOST_CALL *inspect)(
       mc_host_runtime_t, mc_host_bytes_v1, mc_host_bytes_v1,
       mc_host_snapshot_info_v1 *, mc_host_error_v1 *);
+  /* Advisory. begin rechecks quiescence in the VM store. */
+  mc_host_result_t (MC_HOST_CALL *readiness)(
+      mc_host_runtime_t, mc_host_handle_t,
+      mc_host_snapshot_readiness_v1 *, mc_host_error_v1 *);
 } mc_host_snapshot_api_v1;
 
 typedef struct mc_host_operation_status_v1 {
