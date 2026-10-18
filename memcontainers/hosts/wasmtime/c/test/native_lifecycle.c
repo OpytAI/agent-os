@@ -1668,10 +1668,11 @@ int main(int argc, char **argv) {
         "close quota runtime kernel");
   check(api.runtime_close(tight_runtime, NULL), "close quota runtime");
 
-  need(full_info.length <= UINT32_MAX / 2,
-       "real snapshot fits two-file aggregate quota test");
+  need(full_info.length > 1024 * 1024 &&
+           full_info.length + 1024 * 1024 <= MC_HOST_HARD_MAX_SNAPSHOT_TOTAL_BYTES,
+       "real snapshot fits aggregate quota test");
   mc_host_runtime_options_v1 aggregate_options = MC_HOST_INIT(mc_host_runtime_options_v1);
-  aggregate_options.max_snapshot_total_bytes = (uint32_t)full_info.length * 2 - 1;
+  aggregate_options.max_snapshot_total_bytes = (uint32_t)full_info.length + 1024 * 1024;
   mc_host_runtime_t aggregate_runtime = 0;
   check(api.runtime_create(&aggregate_options, &aggregate_runtime, NULL),
         "create runtime with aggregate snapshot quota");
@@ -1699,8 +1700,34 @@ int main(int argc, char **argv) {
   need(vm_api.vm_restore(aggregate_runtime, aggregate_kernel, 0, &aggregate_restore,
                          &aggregate_vm, NULL) == MC_HOST_RESOURCE_LIMIT && aggregate_vm == 0,
        "aggregate quota rejects restore while baseline is retained");
+  mc_host_handle_t capture_vm = 0;
+  check(vm_api.vm_create(aggregate_runtime, aggregate_kernel, 0, &create,
+                         &capture_vm, NULL), "boot guest under aggregate quota");
+  drive_to_prompt(&vm_api, &output_api, aggregate_runtime, capture_vm, NULL);
+  mc_host_snapshot_begin_options_v1 aggregate_capture =
+      MC_HOST_INIT(mc_host_snapshot_begin_options_v1);
+  aggregate_capture.mode = MC_HOST_SNAPSHOT_FULL;
+  mc_host_handle_t rejected_snapshot = 0;
+  mc_host_snapshot_info_v1 rejected_info = MC_HOST_INIT(mc_host_snapshot_info_v1);
+  need(snap_api.begin(aggregate_runtime, capture_vm, &aggregate_capture,
+                      &rejected_snapshot, &rejected_info, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           rejected_snapshot == 0,
+       "aggregate quota rejects real capture before allocating a full MCSN");
+  mc_host_vm_status_v1 capture_status = MC_HOST_INIT(mc_host_vm_status_v1);
+  check(vm_api.vm_status(aggregate_runtime, capture_vm, &capture_status, NULL),
+        "failed capture leaves guest available");
   check(snap_api.baseline_close(aggregate_runtime, retained_baseline, NULL),
         "release retained baseline quota");
+  mc_host_handle_t recovered_snapshot = 0;
+  mc_host_snapshot_info_v1 recovered_info = MC_HOST_INIT(mc_host_snapshot_info_v1);
+  check(snap_api.begin(aggregate_runtime, capture_vm, &aggregate_capture,
+                       &recovered_snapshot, &recovered_info, NULL),
+        "capture succeeds after releasing retained quota");
+  need(recovered_info.length > 128, "recovered capture is a real MCSN");
+  check(snap_api.finish(aggregate_runtime, recovered_snapshot, NULL),
+        "release recovered snapshot quota");
+  check(vm_api.vm_close(aggregate_runtime, capture_vm, NULL),
+        "close guest after quota recovery");
   check(vm_api.kernel_close(aggregate_runtime, aggregate_kernel, NULL),
         "close aggregate quota kernel");
   check(api.runtime_close(aggregate_runtime, NULL), "close aggregate quota runtime");

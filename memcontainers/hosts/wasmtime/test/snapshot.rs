@@ -1,4 +1,4 @@
-use host::{inspect_snapshot_bytes, CaptureSink, KernelHostBuilder};
+use host::{inspect_snapshot_bytes, CaptureSink, KernelHostBuilder, SnapshotLimitExceeded};
 use runfiles::Runfiles;
 use serde::Deserialize;
 use snapshot_rust::{parse_snapshot, SnapshotKind, SNAPSHOT_HEADER_LEN, SNAPSHOT_PAGE_SIZE};
@@ -51,18 +51,36 @@ fn real_kernel_snapshot_metadata_matches_restore_contract() {
     let full_info = inspect_snapshot_bytes(&full, None).unwrap();
     assert!(!full_info.incremental);
     assert_eq!(full_info.length, full.len());
-    assert_eq!(full_info.memory_len, parse_snapshot(&full).unwrap().memory_len);
+    assert_eq!(
+        full_info.memory_len,
+        parse_snapshot(&full).unwrap().memory_len
+    );
     assert_ne!(full_info.baseline_id, full_info.content_digest);
 
-    host.write_file("/tmp/native-snapshot-metadata", b"real kernel state").unwrap();
+    host.write_file("/tmp/native-snapshot-metadata", b"real kernel state")
+        .unwrap();
     let delta = host.snapshot_incremental(&full).unwrap();
+    let limit_error = host
+        .snapshot_incremental_bounded(&full, delta.len() - 1)
+        .expect_err("one byte below the real delta length must fail");
+    assert!(limit_error
+        .downcast_ref::<SnapshotLimitExceeded>()
+        .is_some());
+    assert_eq!(
+        host.snapshot_incremental_bounded(&full, delta.len())
+            .unwrap(),
+        delta
+    );
     let delta_info = inspect_snapshot_bytes(&delta, Some(&full)).unwrap();
     assert!(delta_info.incremental);
     assert_eq!(delta_info.baseline_id, full_info.baseline_id);
     let mut corrupted = delta;
     *corrupted.last_mut().unwrap() ^= 1;
     assert!(inspect_snapshot_bytes(&corrupted, Some(&full)).is_err());
-    assert_eq!(host.read_file("/tmp/native-snapshot-metadata").unwrap(), b"real kernel state");
+    assert_eq!(
+        host.read_file("/tmp/native-snapshot-metadata").unwrap(),
+        b"real kernel state"
+    );
 }
 
 #[test]

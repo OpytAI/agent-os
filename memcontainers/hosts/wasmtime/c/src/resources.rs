@@ -390,13 +390,22 @@ impl VmRecord {
         {
             return Err(contract::MC_HOST_NOT_QUIESCENT);
         }
-        if host.snapshot_len() > max_bytes {
+        if baseline.is_none() && host.snapshot_len() > max_bytes {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
         let bytes = match baseline {
             Some(base) => host
-                .snapshot_incremental(base)
-                .map_err(|_| contract::MC_HOST_SNAPSHOT_ERROR)?,
+                .snapshot_incremental_bounded(base, max_bytes)
+                .map_err(|error| {
+                    if error
+                        .downcast_ref::<host::SnapshotLimitExceeded>()
+                        .is_some()
+                    {
+                        contract::MC_HOST_RESOURCE_LIMIT
+                    } else {
+                        contract::MC_HOST_SNAPSHOT_ERROR
+                    }
+                })?,
             None => {
                 let mut bytes = vec![0; host.snapshot_len()];
                 host.snapshot_into(&mut bytes)
@@ -671,6 +680,24 @@ pub struct RuntimeState {
     limits: RuntimeLimits,
     pub cache: Arc<KernelModuleCache>,
     resources: Mutex<Resources>,
+}
+
+struct SnapshotCaptureReservation<'a> {
+    runtime: &'a RuntimeState,
+    reserved: usize,
+}
+
+impl Drop for SnapshotCaptureReservation<'_> {
+    fn drop(&mut self) {
+        if self.reserved != 0 {
+            let mut resources = self
+                .runtime
+                .resources
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            resources.snapshot_bytes -= self.reserved;
+        }
+    }
 }
 
 impl RuntimeState {
@@ -1263,9 +1290,8 @@ impl RuntimeState {
     ) -> Result<u64, u32> {
         if snapshot.is_empty()
             || snapshot.len() > self.limits.max_snapshot_bytes
-            || baseline.is_some_and(|base| {
-                base.is_empty() || base.len() > self.limits.max_snapshot_bytes
-            })
+            || baseline
+                .is_some_and(|base| base.is_empty() || base.len() > self.limits.max_snapshot_bytes)
         {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
@@ -1463,9 +1489,28 @@ impl RuntimeState {
             }
             None => None,
         };
+        let mut reservation = {
+            let mut resources = self
+                .resources
+                .lock()
+                .map_err(|_| contract::MC_HOST_INTERNAL)?;
+            let available = self
+                .limits
+                .max_snapshot_total_bytes
+                .checked_sub(resources.snapshot_bytes)
+                .ok_or(contract::MC_HOST_INTERNAL)?;
+            if available == 0 {
+                return Err(contract::MC_HOST_RESOURCE_LIMIT);
+            }
+            resources.snapshot_bytes += available;
+            SnapshotCaptureReservation {
+                runtime: self,
+                reserved: available,
+            }
+        };
         let bytes = vm.snapshot(
             baseline.as_ref().map(|record| record.bytes.as_slice()),
-            self.limits.max_snapshot_bytes,
+            self.limits.max_snapshot_bytes.min(reservation.reserved),
         )?;
         let description = inspect_snapshot_bytes(
             &bytes,
@@ -1476,20 +1521,14 @@ impl RuntimeState {
             .resources
             .lock()
             .map_err(|_| contract::MC_HOST_INTERNAL)?;
-        if resources
-            .snapshot_bytes
-            .checked_add(bytes.len())
-            .is_none_or(|total| total > self.limits.max_snapshot_total_bytes)
-        {
-            return Err(contract::MC_HOST_RESOURCE_LIMIT);
-        }
         let length = bytes.len();
         let record = Arc::new(SnapshotRecord {
             bytes,
             kernel_handle: vm.kernel_handle,
         });
         let handle = resources.snapshots.insert(self.namespace, record)?;
-        resources.snapshot_bytes += length;
+        resources.snapshot_bytes -= reservation.reserved - length;
+        reservation.reserved = 0;
         Ok((handle, description))
     }
 

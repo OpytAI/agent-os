@@ -72,6 +72,18 @@ pub use net::{
     DeniedNet, NetCapability, RealNet, ToolApprovalDecision, ToolApprovalFacts, ToolApprover,
 };
 pub use persist::{DeniedPersist, DiskPersist, PersistCapability};
+
+#[derive(Debug)]
+pub struct SnapshotLimitExceeded;
+
+impl std::fmt::Display for SnapshotLimitExceeded {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("snapshot exceeds capture byte limit")
+    }
+}
+
+impl std::error::Error for SnapshotLimitExceeded {}
+
 // The connection-policy engine is single-source in toolcore; re-export it so the NIF + tests keep importing
 // it from this host crate (the wasmtime host links it natively, the JS host calls it via the wasm).
 pub use toolcore::policy::{
@@ -1613,10 +1625,22 @@ impl KernelHost {
     /// content digest and never references another incremental, keeping restore depth bounded at one.
     pub fn snapshot_incremental(&mut self, base: &[u8]) -> Result<Vec<u8>> {
         // Scrub diagnostic state before reading memory for the delta payload (A8).
-        self.with_perf_scrubbed_for_snapshot(|host| host.snapshot_incremental_inner(base))
+        self.snapshot_incremental_bounded(base, usize::MAX)
     }
 
-    fn snapshot_incremental_inner(&mut self, base: &[u8]) -> Result<Vec<u8>> {
+    /// Capture a delta only when its exact encoded length fits `max_bytes`.
+    /// The bound is checked before allocating the changed-page payload.
+    pub fn snapshot_incremental_bounded(
+        &mut self,
+        base: &[u8],
+        max_bytes: usize,
+    ) -> Result<Vec<u8>> {
+        self.with_perf_scrubbed_for_snapshot(|host| {
+            host.snapshot_incremental_inner(base, max_bytes)
+        })
+    }
+
+    fn snapshot_incremental_inner(&mut self, base: &[u8], max_bytes: usize) -> Result<Vec<u8>> {
         self.ensure_snapshot_ready()?;
         let base_view = parse_snapshot(base).map_err(|e| anyhow!("invalid base snapshot: {e}"))?;
         if base_view.kind != SnapshotKind::Full {
@@ -1658,7 +1682,7 @@ impl KernelHost {
         }
         let bitmap_len = snapshot_bitmap_len(mem.len());
         let mut bitmap = vec![0u8; bitmap_len];
-        let mut pages = Vec::new();
+        let mut changed_pages = 0usize;
         let zero = [0u8; SNAPSHOT_PAGE_SIZE];
         for (page, current) in mem.chunks_exact(SNAPSHOT_PAGE_SIZE).enumerate() {
             let prior = if page * SNAPSHOT_PAGE_SIZE < base_view.memory_len {
@@ -1668,10 +1692,20 @@ impl KernelHost {
             };
             if current != prior {
                 bitmap[page / 8] |= 1 << (page % 8);
-                pages.extend_from_slice(current);
+                changed_pages += 1;
             }
         }
-        let changed_pages = pages.len() / SNAPSHOT_PAGE_SIZE;
+        let encoded_len = SNAPSHOT_HEADER_LEN
+            .checked_add(bitmap.len())
+            .and_then(|length| {
+                changed_pages
+                    .checked_mul(SNAPSHOT_PAGE_SIZE)
+                    .and_then(|pages| length.checked_add(pages))
+            })
+            .ok_or_else(|| anyhow!("incremental snapshot size overflow"))?;
+        if encoded_len > max_bytes {
+            return Err(SnapshotLimitExceeded.into());
+        }
         let mut affected = vec![false; mem.len().div_ceil(SNAPSHOT_INTEGRITY_CHUNK_SIZE)];
         for page in 0..(mem.len() / SNAPSHOT_PAGE_SIZE) {
             if bitmap[page / 8] & (1 << (page % 8)) != 0 {
@@ -1705,7 +1739,7 @@ impl KernelHost {
             }
             IntegrityTree::new(leaves, mem.len()).root()
         };
-        let mut out = vec![0; SNAPSHOT_HEADER_LEN + bitmap.len() + pages.len()];
+        let mut out = vec![0; encoded_len];
         write_snapshot_header(
             &mut out,
             SnapshotKind::Incremental,
@@ -1717,7 +1751,13 @@ impl KernelHost {
         )
         .map_err(|e| anyhow!("encoding incremental snapshot: {e}"))?;
         out[SNAPSHOT_HEADER_LEN..SNAPSHOT_HEADER_LEN + bitmap.len()].copy_from_slice(&bitmap);
-        out[SNAPSHOT_HEADER_LEN + bitmap.len()..].copy_from_slice(&pages);
+        let mut offset = SNAPSHOT_HEADER_LEN + bitmap.len();
+        for (page, current) in mem.chunks_exact(SNAPSHOT_PAGE_SIZE).enumerate() {
+            if bitmap[page / 8] & (1 << (page % 8)) != 0 {
+                out[offset..offset + SNAPSHOT_PAGE_SIZE].copy_from_slice(current);
+                offset += SNAPSHOT_PAGE_SIZE;
+            }
+        }
         Ok(out)
     }
 
