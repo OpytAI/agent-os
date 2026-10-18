@@ -149,6 +149,35 @@ static wire shell_request(const char *command) {
   return envelope;
 }
 
+static wire direct_request(const char *program, const char *argument) {
+  wire argv_frames = {0}, request = {0}, envelope = {0};
+  mc_host_wire_list argv = {0};
+  const char *parts[] = {program, argument};
+  for (size_t index = 0; index < 2; ++index) {
+    mc_host_wire_exec_arg item = {
+        .value = {(const uint8_t *)parts[index], strlen(parts[index])}};
+    uint8_t frame[256];
+    size_t frame_length = 0;
+    need(mc_host_wire_encode_exec_arg(&item, frame, sizeof(frame), &frame_length) ==
+             MC_HOST_WIRE_OK,
+         "encode direct argv item");
+    need(mc_host_wire_list_append(&argv, argv_frames.bytes, sizeof(argv_frames.bytes),
+                                 (mc_host_wire_bytes){frame, frame_length}) == MC_HOST_WIRE_OK,
+         "append direct argv item");
+  }
+  mc_host_wire_exec_request exec = {.mode = 2, .argv = argv};
+  need(mc_host_wire_encode_exec_request(&exec, request.bytes, sizeof(request.bytes),
+                                        &request.length) == MC_HOST_WIRE_OK,
+       "encode direct exec request");
+  mc_host_wire_operation_request operation = {
+      .kind = MC_HOST_OP_EXEC_DIRECT,
+      .payload = {request.bytes, request.length}};
+  need(mc_host_wire_encode_operation_request(&operation, envelope.bytes,
+               sizeof(envelope.bytes), &envelope.length) == MC_HOST_WIRE_OK,
+       "encode direct exec operation");
+  return envelope;
+}
+
 static wire filesystem_request(uint32_t kind, const char *path,
                                const uint8_t *data, size_t data_length) {
   wire request = {0}, envelope = {0};
@@ -935,6 +964,34 @@ static void run_control_command(const mc_host_vm_api_v1 *vm_api,
   check(op_api->close(runtime, operation, NULL), "close operation");
   need(op_api->poll(runtime, operation, &status, NULL) == MC_HOST_STALE_HANDLE,
        "operation handle retires");
+
+  wire direct = direct_request("/bin/git", "--version");
+  check(op_api->start(runtime, vm,
+                      (mc_host_bytes_v1){direct.bytes, direct.length},
+                      &operation, NULL), "start direct argv command");
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    options.stop_mask = MC_HOST_DRIVE_ON_OPERATION;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "drive direct argv command");
+    check(op_api->poll(runtime, operation, &status, NULL), "poll direct argv command");
+    if (status.state == MC_HOST_OP_READY) break;
+    need(status.state == MC_HOST_OP_PENDING, "direct argv command stays pending");
+  }
+  need(status.state == MC_HOST_OP_READY && status.result_length < sizeof(result),
+       "direct argv command completes");
+  buffer.required = 0;
+  check(op_api->result(runtime, operation, &buffer, NULL), "read direct argv result");
+  need(mc_host_wire_decode_operation_result(result, buffer.required, &operation_result) ==
+           MC_HOST_WIRE_OK && operation_result.kind == MC_HOST_OP_EXEC_DIRECT &&
+           operation_result.status == 0 &&
+           mc_host_wire_decode_exec_outcome(operation_result.payload.data,
+                      operation_result.payload.len, &outcome) == MC_HOST_WIRE_OK &&
+           outcome.exit_code == 0 &&
+           contains_bytes(outcome.stdout.data, outcome.stdout.len, "git", 3),
+       "real direct argv execution");
+  check(op_api->close(runtime, operation, NULL), "close direct argv operation");
 }
 
 static void cancel_vm_with_operation(const mc_host_vm_api_v1 *vm_api,

@@ -527,6 +527,30 @@ static inline int mc_host_wire_list_next(mc_host_wire_list list, size_t *offset,
     *offset = r.off;
     return 1;
 }
+
+static inline mc_host_wire_result mc_host_wire_list_append(mc_host_wire_list *list,
+        uint8_t *buffer, size_t capacity, mc_host_wire_bytes item) {
+    if (!list || !buffer || (item.len && !item.data) ||
+        (list->data && list->data != buffer) || list->count == UINT32_MAX)
+        return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (item.len) {
+        uintptr_t start = (uintptr_t)item.data;
+        uintptr_t destination = (uintptr_t)buffer;
+        if ((start >= destination && start - destination < capacity) ||
+            (start < destination && item.len > destination - start))
+            return MC_HOST_WIRE_INVALID_ARGUMENT;
+    }
+    if (list->len > capacity || capacity - list->len < 4 ||
+        item.len > capacity - list->len - 4)
+        return MC_HOST_WIRE_BUFFER_TOO_SMALL;
+    mc_host_wire_writer writer = {buffer, capacity, list->len, MC_HOST_WIRE_OK};
+    mc_host_wire_put_bytes(&writer, item, 0);
+    if (writer.error != MC_HOST_WIRE_OK) return writer.error;
+    list->data = buffer;
+    list->len = writer.off;
+    ++list->count;
+    return MC_HOST_WIRE_OK;
+}
 #endif /* MC_HOST_WIRE_COMMON */
 
 typedef struct mc_host_wire_attachment_definition {
