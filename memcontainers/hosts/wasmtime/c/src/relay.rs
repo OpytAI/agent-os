@@ -4,9 +4,12 @@
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use constants_rust::{PERSIST_OP_DELETE, PERSIST_OP_GET, PERSIST_OP_LIST, PERSIST_OP_PUT};
+use constants_rust::{
+    EAGAIN, EMSGSIZE, PERSIST_OP_DELETE, PERSIST_OP_GET, PERSIST_OP_LIST, PERSIST_OP_PUT,
+};
 use embedder_rust::{
     self as contract, EffectCancel, HostCallEvent, HttpEffectRequest, PersistEffectRequest,
+    WsCloseEvent, WsConnectRequest, WsSendRequest,
 };
 use host::{HostCallCapability, NetCapability, PersistCapability};
 
@@ -15,6 +18,9 @@ const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
 const EVENT_HIGH_WATER: usize = 3 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TOTAL_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+const WS_WINDOW_BYTES: usize = 1024 * 1024;
+const MAX_WS_SOCKETS: usize = 256;
+const MAX_WS_INCOMING_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum EventPhase {
@@ -37,6 +43,19 @@ struct Event {
     native_handle: Option<u64>,
     original_handle: Option<u64>,
     stream: Option<ResponseStream>,
+    socket: Option<i32>,
+    ws_bytes: usize,
+}
+
+struct WsSocket {
+    native_handle: Option<u64>,
+    open: bool,
+    failed: bool,
+    guest_closed: bool,
+    incoming: VecDeque<Vec<u8>>,
+    incoming_bytes: usize,
+    front_offset: usize,
+    outgoing_bytes: usize,
 }
 
 struct Slot {
@@ -61,6 +80,7 @@ struct Inner {
     events: HashMap<u64, Event>,
     queue: VecDeque<u64>,
     slots: HashMap<i32, Slot>,
+    sockets: HashMap<i32, WsSocket>,
     queued_bytes: usize,
     response_bytes: usize,
 }
@@ -110,6 +130,8 @@ impl Inner {
                 native_handle: None,
                 original_handle: None,
                 stream: None,
+                socket: None,
+                ws_bytes: 0,
             },
         );
         self.queue.push_back(id);
@@ -123,6 +145,36 @@ impl Inner {
             },
         );
         Some(handle)
+    }
+
+    fn attach_socket(&mut self, event_handle: i32, socket: i32, ws_bytes: usize) {
+        let id = self.slots[&event_handle].event_id;
+        let event = self.events.get_mut(&id).expect("newly queued event");
+        event.socket = Some(socket);
+        event.ws_bytes = ws_bytes;
+    }
+
+    // Close notifications must be deliverable even when ordinary effect admission
+    // is full. At most one is generated for each application-owned socket.
+    fn enqueue_socket_close(&mut self, socket: i32, reason: u32) {
+        let payload = WsCloseEvent { reason }.encode();
+        let id = self.next_event_id;
+        self.next_event_id += 1;
+        self.queued_bytes += payload.len();
+        self.events.insert(
+            id,
+            Event {
+                kind: contract::MC_HOST_EVENT_WS_CLOSE,
+                payload,
+                phase: EventPhase::Queued,
+                native_handle: None,
+                original_handle: None,
+                stream: None,
+                socket: Some(socket),
+                ws_bytes: 0,
+            },
+        );
+        self.queue.push_back(id);
     }
 
     fn cancel_leased(&mut self, id: u64) {
@@ -163,6 +215,8 @@ impl Inner {
                 native_handle: None,
                 original_handle: Some(original_handle),
                 stream: None,
+                socket: None,
+                ws_bytes: 0,
             },
         );
         self.queue.push_back(notice_id);
@@ -177,6 +231,7 @@ pub struct LeasedEvent {
     pub id: u64,
     pub kind: u32,
     pub payload: Vec<u8>,
+    pub socket: Option<i32>,
 }
 
 impl Relay {
@@ -191,6 +246,7 @@ impl Relay {
                 events: HashMap::new(),
                 queue: VecDeque::new(),
                 slots: HashMap::new(),
+                sockets: HashMap::new(),
                 queued_bytes: 0,
                 response_bytes: 0,
             }),
@@ -234,9 +290,66 @@ impl Relay {
     }
 
     pub fn has_live_events(&self) -> bool {
-        self.inner
-            .lock()
-            .is_ok_and(|inner| !inner.events.is_empty())
+        self.inner.lock().is_ok_and(|inner| {
+            !inner.events.is_empty() || inner.sockets.values().any(|s| !s.guest_closed)
+        })
+    }
+
+    pub fn socket_native_handle(&self, socket: i32) -> Result<Option<u64>, u32> {
+        let inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        Ok(inner
+            .sockets
+            .get(&socket)
+            .ok_or(contract::MC_HOST_STALE_HANDLE)?
+            .native_handle)
+    }
+
+    pub fn socket_push(&self, socket: i32, data: &[u8]) -> Result<(), u32> {
+        if data.is_empty() {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        if data.len() > WS_WINDOW_BYTES {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        let mut inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let state = inner
+            .sockets
+            .get(&socket)
+            .ok_or(contract::MC_HOST_STALE_HANDLE)?;
+        if state.guest_closed || state.failed {
+            return Err(contract::MC_HOST_CANCELLED);
+        }
+        if !state.open {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        let total_incoming: usize = inner
+            .sockets
+            .values()
+            .map(|state| state.incoming_bytes)
+            .sum();
+        if total_incoming + data.len() > MAX_WS_INCOMING_BYTES {
+            return Err(contract::MC_HOST_WOULD_BLOCK);
+        }
+        let state = inner.sockets.get_mut(&socket).expect("validated socket");
+        if state.incoming_bytes + data.len() > WS_WINDOW_BYTES {
+            return Err(contract::MC_HOST_WOULD_BLOCK);
+        }
+        state.incoming_bytes += data.len();
+        state.incoming.push_back(data.to_vec());
+        Ok(())
+    }
+
+    pub fn socket_close(&self, socket: i32) -> Result<(), u32> {
+        let mut inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let state = inner
+            .sockets
+            .get_mut(&socket)
+            .ok_or(contract::MC_HOST_STALE_HANDLE)?;
+        if state.guest_closed {
+            return Err(contract::MC_HOST_CANCELLED);
+        }
+        state.failed = true;
+        Ok(())
     }
 
     pub fn next(&self, mask: u64) -> Result<Option<LeasedEvent>, u32> {
@@ -261,19 +374,42 @@ impl Relay {
             id,
             kind: event.kind,
             payload: event.payload.clone(),
+            socket: event.socket,
         }))
     }
 
-    pub fn bind_handle(&self, id: u64, handle: u64) -> Result<(), u32> {
+    pub fn bind_handle(&self, id: u64, handle: u64, socket_handle: Option<u64>) -> Result<(), u32> {
         let mut inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
         let event = inner
             .events
-            .get_mut(&id)
+            .get(&id)
             .ok_or(contract::MC_HOST_STALE_HANDLE)?;
         if event.phase != EventPhase::Leased || event.native_handle.is_some() {
             return Err(contract::MC_HOST_INVALID_STATE);
         }
-        event.native_handle = Some(handle);
+        if let Some(socket) = event.socket {
+            let state = inner
+                .sockets
+                .get(&socket)
+                .ok_or(contract::MC_HOST_STALE_HANDLE)?;
+            if (state.guest_closed && event.kind != contract::MC_HOST_EVENT_WS_CLOSE)
+                || (state.native_handle.is_some() && state.native_handle != socket_handle)
+            {
+                return Err(contract::MC_HOST_INVALID_STATE);
+            }
+            if event.kind == contract::MC_HOST_EVENT_WS_CONNECT {
+                inner
+                    .sockets
+                    .get_mut(&socket)
+                    .expect("validated socket")
+                    .native_handle = socket_handle;
+            }
+        }
+        inner
+            .events
+            .get_mut(&id)
+            .expect("validated event")
+            .native_handle = Some(handle);
         Ok(())
     }
 
@@ -334,6 +470,25 @@ impl Relay {
         Ok(original_handle)
     }
 
+    pub fn ack_socket_close(&self, id: u64, handle: u64) -> Result<i32, u32> {
+        let mut inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let event = inner
+            .events
+            .get(&id)
+            .ok_or(contract::MC_HOST_STALE_HANDLE)?;
+        if event.kind != contract::MC_HOST_EVENT_WS_CLOSE
+            || event.phase != EventPhase::Leased
+            || event.native_handle != Some(handle)
+        {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        let socket = event.socket.ok_or(contract::MC_HOST_INTERNAL)?;
+        let event = inner.events.remove(&id).ok_or(contract::MC_HOST_INTERNAL)?;
+        inner.queued_bytes -= event.payload.len();
+        inner.sockets.remove(&socket);
+        Ok(socket)
+    }
+
     pub fn respond(
         &self,
         id: u64,
@@ -362,6 +517,38 @@ impl Relay {
             || event.kind != kind
         {
             return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        if kind == contract::MC_HOST_EVENT_WS_CONNECT || kind == contract::MC_HOST_EVENT_WS_SEND {
+            if !response.head.is_empty() || !response.body.is_empty() {
+                return Err(contract::MC_HOST_INVALID_ARGUMENT);
+            }
+            let socket = event.socket.ok_or(contract::MC_HOST_INTERNAL)?;
+            let ws_bytes = event.ws_bytes;
+            let slot_handle = inner
+                .slots
+                .iter()
+                .find_map(|(slot_handle, slot)| (slot.event_id == id).then_some(*slot_handle))
+                .ok_or(contract::MC_HOST_CANCELLED)?;
+            let state = inner
+                .sockets
+                .get_mut(&socket)
+                .ok_or(contract::MC_HOST_CANCELLED)?;
+            if state.guest_closed {
+                return Err(contract::MC_HOST_CANCELLED);
+            }
+            if kind == contract::MC_HOST_EVENT_WS_CONNECT {
+                state.open = !response.failed && !state.failed;
+                state.failed |= response.failed;
+            } else {
+                state.outgoing_bytes -= ws_bytes;
+                if response.failed {
+                    state.failed = true;
+                }
+            }
+            inner.slots.remove(&slot_handle);
+            let event = inner.events.remove(&id).ok_or(contract::MC_HOST_INTERNAL)?;
+            inner.queued_bytes -= event.payload.len();
+            return Ok(());
         }
         if inner
             .response_bytes
@@ -392,6 +579,9 @@ impl Relay {
         response: EffectBody,
         declared_body_len: usize,
     ) -> Result<(), u32> {
+        if kind == contract::MC_HOST_EVENT_WS_CONNECT || kind == contract::MC_HOST_EVENT_WS_SEND {
+            return Err(contract::MC_HOST_UNSUPPORTED);
+        }
         if !response.body.is_empty()
             || (response.failed && declared_body_len != 0)
             || (kind == contract::MC_HOST_EVENT_HTTP_REQUEST && response.head.len() > 16 * 1024)
@@ -537,14 +727,29 @@ impl Relay {
 
     pub fn cancel_all(&self) {
         if let Ok(mut inner) = self.inner.lock() {
+            let closing = inner
+                .sockets
+                .iter_mut()
+                .filter_map(|(handle, state)| {
+                    if state.guest_closed {
+                        return None;
+                    }
+                    state.guest_closed = true;
+                    state.native_handle.map(|_| *handle)
+                })
+                .collect::<Vec<_>>();
+            inner
+                .sockets
+                .retain(|_, state| state.native_handle.is_some());
             inner.slots.clear();
             let leased = inner
                 .events
                 .iter()
                 .filter_map(|(id, event)| {
                     ((event.phase == EventPhase::Leased || event.phase == EventPhase::Responding)
-                        && event.original_handle.is_none())
-                    .then_some(*id)
+                        && event.original_handle.is_none()
+                        && event.kind != contract::MC_HOST_EVENT_WS_CLOSE)
+                        .then_some(*id)
                 })
                 .collect::<Vec<_>>();
             inner.events.retain(|_, event| {
@@ -554,7 +759,8 @@ impl Relay {
                     || (event.phase == EventPhase::Queued
                         && (event.kind == contract::MC_HOST_EVENT_HOST_CALL_CLOSE
                             || event.kind == contract::MC_HOST_EVENT_OPERATION_CANCEL
-                            || event.kind == contract::MC_HOST_EVENT_HTTP_CANCEL))
+                            || event.kind == contract::MC_HOST_EVENT_HTTP_CANCEL
+                            || event.kind == contract::MC_HOST_EVENT_WS_CLOSE))
             });
             let live_ids = inner
                 .events
@@ -564,6 +770,9 @@ impl Relay {
             inner.queue.retain(|id| live_ids.contains(id));
             for id in leased {
                 inner.cancel_leased(id);
+            }
+            for socket in closing {
+                inner.enqueue_socket_close(socket, contract::MC_HOST_WS_CLOSE_VM);
             }
             inner.response_bytes = 0;
             inner.queued_bytes = inner.events.values().map(|event| event.payload.len()).sum();
@@ -844,17 +1053,144 @@ impl NetCapability for RelayNet {
         }
     }
 
-    fn ws_connect(&mut self, _url: &str) -> i32 {
-        -1
+    fn ws_connect(&mut self, url: &str) -> i32 {
+        let Ok(mut inner) = self.0.inner.lock() else {
+            return -1;
+        };
+        if !inner.http_enabled
+            || inner.sockets.len() >= MAX_WS_SOCKETS
+            || url.len() > 16 * 1024
+            || (!url.starts_with("ws://") && !url.starts_with("wss://"))
+        {
+            return -1;
+        }
+        let Some(handle) = inner.enqueue(
+            contract::MC_HOST_EVENT_WS_CONNECT,
+            WsConnectRequest {
+                url: url.to_owned(),
+            }
+            .encode(),
+        ) else {
+            return -1;
+        };
+        inner.attach_socket(handle, handle, 0);
+        inner.sockets.insert(
+            handle,
+            WsSocket {
+                native_handle: None,
+                open: false,
+                failed: false,
+                guest_closed: false,
+                incoming: VecDeque::new(),
+                incoming_bytes: 0,
+                front_offset: 0,
+                outgoing_bytes: 0,
+            },
+        );
+        handle
     }
-    fn ws_send(&mut self, _handle: i32, _data: &[u8]) -> i32 {
-        -1
+    fn ws_send(&mut self, handle: i32, data: &[u8]) -> i32 {
+        let Ok(mut inner) = self.0.inner.lock() else {
+            return -1;
+        };
+        let Some(state) = inner.sockets.get(&handle) else {
+            return -1;
+        };
+        if state.failed || state.guest_closed {
+            return -1;
+        }
+        if data.len() > WS_WINDOW_BYTES {
+            return -EMSGSIZE;
+        }
+        if !state.open || state.outgoing_bytes + data.len() > WS_WINDOW_BYTES {
+            return -EAGAIN;
+        }
+        let Some(event_handle) = inner.enqueue(
+            contract::MC_HOST_EVENT_WS_SEND,
+            WsSendRequest {
+                data: data.to_vec(),
+            }
+            .encode(),
+        ) else {
+            return -EAGAIN;
+        };
+        inner.attach_socket(event_handle, handle, data.len());
+        inner
+            .sockets
+            .get_mut(&handle)
+            .expect("validated socket")
+            .outgoing_bytes += data.len();
+        data.len() as i32
     }
-    fn ws_ready(&mut self, _handle: i32) -> i32 {
-        1
+    fn ws_ready(&mut self, handle: i32) -> i32 {
+        let Ok(inner) = self.0.inner.lock() else {
+            return 1;
+        };
+        let Some(state) = inner.sockets.get(&handle) else {
+            return 1;
+        };
+        if state.failed || state.guest_closed {
+            return 1;
+        }
+        (state.open
+            && state.outgoing_bytes < WS_WINDOW_BYTES
+            && inner.slots.len() < MAX_EVENTS
+            && inner.queued_bytes <= MAX_EVENT_BYTES - WS_WINDOW_BYTES - 16) as i32
     }
-    fn ws_recv(&mut self, _handle: i32, _buf: &mut [u8]) -> i32 {
-        -1
+    fn ws_recv(&mut self, handle: i32, buf: &mut [u8]) -> i32 {
+        let Ok(mut inner) = self.0.inner.lock() else {
+            return -1;
+        };
+        let Some(state) = inner.sockets.get_mut(&handle) else {
+            return -1;
+        };
+        let Some(front) = state.incoming.front() else {
+            return if state.failed || state.guest_closed {
+                -1
+            } else {
+                0
+            };
+        };
+        let count = (front.len() - state.front_offset).min(buf.len());
+        buf[..count].copy_from_slice(&front[state.front_offset..state.front_offset + count]);
+        state.front_offset += count;
+        state.incoming_bytes -= count;
+        if state.front_offset == front.len() {
+            state.incoming.pop_front();
+            state.front_offset = 0;
+        }
+        count as i32
     }
-    fn ws_close(&mut self, _handle: i32) {}
+    fn ws_close(&mut self, handle: i32) {
+        let Ok(mut inner) = self.0.inner.lock() else {
+            return;
+        };
+        let Some(state) = inner.sockets.get_mut(&handle) else {
+            return;
+        };
+        if state.guest_closed {
+            return;
+        }
+        state.guest_closed = true;
+        let adopted = state.native_handle.is_some();
+        let handles = inner
+            .slots
+            .iter()
+            .filter_map(|(slot_handle, slot)| {
+                inner
+                    .events
+                    .get(&slot.event_id)
+                    .filter(|event| event.socket == Some(handle))
+                    .map(|_| *slot_handle)
+            })
+            .collect::<Vec<_>>();
+        for event_handle in handles {
+            inner.close_slot(event_handle);
+        }
+        if adopted {
+            inner.enqueue_socket_close(handle, contract::MC_HOST_WS_CLOSE_GUEST);
+        } else {
+            inner.sockets.remove(&handle);
+        }
+    }
 }

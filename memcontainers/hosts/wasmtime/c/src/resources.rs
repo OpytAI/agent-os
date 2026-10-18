@@ -23,6 +23,7 @@ pub const SNAPSHOT_KIND: u8 = 6;
 pub const OPERATION_KIND: u8 = 7;
 pub const PLAN_KIND: u8 = 8;
 pub const EFFECT_KIND: u8 = 9;
+pub const SOCKET_KIND: u8 = 10;
 const MAX_KERNELS: usize = 64;
 const MAX_KERNEL_BYTES: usize = 256 * 1024 * 1024;
 const MAX_VMS: usize = 16;
@@ -47,6 +48,13 @@ struct PlanRecord {
 struct EffectRecord {
     vm: u64,
     event_id: u64,
+    kind: u32,
+    socket: Option<u64>,
+}
+
+struct SocketRecord {
+    vm: u64,
+    bridge_handle: i32,
 }
 
 struct Slot<T> {
@@ -539,6 +547,7 @@ struct Resources {
     operations: HandleTable<Arc<OperationRecord>>,
     plans: HandleTable<PlanRecord>,
     effects: HandleTable<EffectRecord>,
+    sockets: HandleTable<SocketRecord>,
     snapshot_bytes: usize,
 }
 
@@ -569,6 +578,7 @@ impl RuntimeState {
                 operations: HandleTable::new(OPERATION_KIND),
                 plans: HandleTable::new(PLAN_KIND),
                 effects: HandleTable::new(EFFECT_KIND),
+                sockets: HandleTable::new(SOCKET_KIND),
                 snapshot_bytes: 0,
             }),
         }
@@ -584,6 +594,7 @@ impl RuntimeState {
                 && resources.operations.live == 0
                 && resources.plans.live == 0
                 && resources.effects.live == 0
+                && resources.sockets.live == 0
         })
     }
 
@@ -700,32 +711,75 @@ impl RuntimeState {
         let vm = self.vm(vm_handle)?;
         let relay = vm.relay.as_ref().ok_or(contract::MC_HOST_UNSUPPORTED)?;
         let leased = relay.next(mask)?.ok_or(contract::MC_HOST_WOULD_BLOCK)?;
-        let handle = {
+        let prepared = (|| -> Result<(u64, Option<u64>, bool), u32> {
             let mut resources = self
                 .resources
                 .lock()
                 .map_err(|_| contract::MC_HOST_INTERNAL)?;
-            resources.effects.insert(
+            let mut new_socket = false;
+            let socket_handle = if let Some(bridge_handle) = leased.socket {
+                match relay.socket_native_handle(bridge_handle)? {
+                    Some(handle) => {
+                        if resources.sockets.get(self.namespace, handle)?.vm != vm_handle {
+                            return Err(contract::MC_HOST_STALE_HANDLE);
+                        }
+                        Some(handle)
+                    }
+                    None if leased.kind == contract::MC_HOST_EVENT_WS_CONNECT => {
+                        new_socket = true;
+                        Some(resources.sockets.insert(
+                            self.namespace,
+                            SocketRecord {
+                                vm: vm_handle,
+                                bridge_handle,
+                            },
+                        )?)
+                    }
+                    None => return Err(contract::MC_HOST_INTERNAL),
+                }
+            } else {
+                None
+            };
+            let inserted = resources.effects.insert(
                 self.namespace,
                 EffectRecord {
                     vm: vm_handle,
                     event_id: leased.id,
+                    kind: leased.kind,
+                    socket: socket_handle,
                 },
-            )
-        };
-        let handle = match handle {
-            Ok(handle) => handle,
+            );
+            let handle = match inserted {
+                Ok(handle) => handle,
+                Err(error) => {
+                    if new_socket {
+                        resources
+                            .sockets
+                            .remove(self.namespace, socket_handle.expect("new socket"))?;
+                    }
+                    return Err(error);
+                }
+            };
+            Ok((handle, socket_handle, new_socket))
+        })();
+        let (handle, socket_handle, new_socket) = match prepared {
+            Ok(value) => value,
             Err(error) => {
                 relay.unlease(leased.id);
                 return Err(error);
             }
         };
-        if let Err(error) = relay.bind_handle(leased.id, handle) {
-            self.resources
+        if let Err(error) = relay.bind_handle(leased.id, handle, socket_handle) {
+            let mut resources = self
+                .resources
                 .lock()
-                .map_err(|_| contract::MC_HOST_INTERNAL)?
-                .effects
-                .remove(self.namespace, handle)?;
+                .map_err(|_| contract::MC_HOST_INTERNAL)?;
+            resources.effects.remove(self.namespace, handle)?;
+            if new_socket {
+                resources
+                    .sockets
+                    .remove(self.namespace, socket_handle.expect("new socket"))?;
+            }
             relay.unlease(leased.id);
             return Err(error);
         }
@@ -734,7 +788,7 @@ impl RuntimeState {
             event_id: handle as i64,
             vm_id: vm_handle as i64,
             operation_id: None,
-            socket_id: None,
+            socket_id: socket_handle.map(|handle| handle as i64),
             flags: 0,
             payload: leased.payload,
         }
@@ -759,12 +813,19 @@ impl RuntimeState {
     pub fn effect_frame(&self, handle: u64) -> Result<Vec<u8>, u32> {
         let (vm, event_id, relay) = self.effect_record(handle)?;
         let (kind, payload) = relay.event(event_id, handle)?;
+        let socket = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .effects
+            .get(self.namespace, handle)?
+            .socket;
         Ok(EffectEvent {
             kind,
             event_id: handle as i64,
             vm_id: vm as i64,
             operation_id: None,
-            socket_id: None,
+            socket_id: socket.map(|handle| handle as i64),
             flags: 0,
             payload,
         }
@@ -827,6 +888,26 @@ impl RuntimeState {
 
     pub fn effect_ack(&self, handle: u64) -> Result<(), u32> {
         let (_, event_id, relay) = self.effect_record(handle)?;
+        let (kind, socket) = {
+            let mut resources = self
+                .resources
+                .lock()
+                .map_err(|_| contract::MC_HOST_INTERNAL)?;
+            let record = resources.effects.get(self.namespace, handle)?;
+            (record.kind, record.socket)
+        };
+        if kind == contract::MC_HOST_EVENT_WS_CLOSE {
+            relay.ack_socket_close(event_id, handle)?;
+            let mut resources = self
+                .resources
+                .lock()
+                .map_err(|_| contract::MC_HOST_INTERNAL)?;
+            resources.effects.remove(self.namespace, handle)?;
+            resources
+                .sockets
+                .remove(self.namespace, socket.ok_or(contract::MC_HOST_INTERNAL)?)?;
+            return Ok(());
+        }
         let original_handle = relay.ack_cancelled(event_id, handle)?;
         let mut resources = self
             .resources
@@ -835,6 +916,32 @@ impl RuntimeState {
         resources.effects.remove(self.namespace, handle)?;
         resources.effects.remove(self.namespace, original_handle)?;
         Ok(())
+    }
+
+    fn socket_record(&self, handle: u64) -> Result<(Arc<Relay>, i32), u32> {
+        let (vm_handle, bridge_handle) = {
+            let mut resources = self
+                .resources
+                .lock()
+                .map_err(|_| contract::MC_HOST_INTERNAL)?;
+            let record = resources.sockets.get(self.namespace, handle)?;
+            (record.vm, record.bridge_handle)
+        };
+        let vm = self.vm(vm_handle)?;
+        Ok((
+            Arc::clone(vm.relay.as_ref().ok_or(contract::MC_HOST_INTERNAL)?),
+            bridge_handle,
+        ))
+    }
+
+    pub fn socket_push(&self, handle: u64, data: &[u8]) -> Result<(), u32> {
+        let (relay, bridge_handle) = self.socket_record(handle)?;
+        relay.socket_push(bridge_handle, data)
+    }
+
+    pub fn socket_close(&self, handle: u64) -> Result<(), u32> {
+        let (relay, bridge_handle) = self.socket_record(handle)?;
+        relay.socket_close(bridge_handle)
     }
 
     pub fn load_kernel(&self, wasm: &[u8]) -> Result<(u64, [u8; 32]), u32> {
@@ -1756,6 +1863,19 @@ impl RuntimeState {
             slot.value
                 .as_ref()
                 .is_some_and(|effect| effect.vm == handle)
+        }) {
+            if !was_closing {
+                vm.observed
+                    .lock()
+                    .map_err(|_| contract::MC_HOST_INTERNAL)?
+                    .closing = false;
+            }
+            return Err(contract::MC_HOST_BUSY);
+        }
+        if resources.sockets.slots.iter().any(|slot| {
+            slot.value
+                .as_ref()
+                .is_some_and(|socket| socket.vm == handle)
         }) {
             if !was_closing {
                 vm.observed

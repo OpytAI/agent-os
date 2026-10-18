@@ -44,7 +44,8 @@ const FEATURE_BITS: u64 = contract::MC_HOST_FEATURE_VM_BASIC
     | contract::MC_HOST_FEATURE_HOST_CALL_EFFECT
     | contract::MC_HOST_FEATURE_MOUNT_OPERATION
     | contract::MC_HOST_FEATURE_PERSIST_EFFECT
-    | contract::MC_HOST_FEATURE_HTTP_EFFECT;
+    | contract::MC_HOST_FEATURE_HTTP_EFFECT
+    | contract::MC_HOST_FEATURE_WS_EFFECT;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -346,6 +347,8 @@ struct EffectApi {
     response_write: unsafe extern "C" fn(u64, u64, Bytes, *mut Error) -> ResultCode,
     response_finish: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
     response_abort: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
+    socket_push: unsafe extern "C" fn(u64, u64, Bytes, *mut Error) -> ResultCode,
+    socket_close: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
 }
 
 // The manifest in embedder.kdl is checked independently by Rust and C. A
@@ -807,6 +810,14 @@ const _: () = {
     assert!(
         offset_of!(EffectApi, response_abort)
             == contract::MC_HOST_LAYOUT_EFFECT_API_RESPONSE_ABORT_OFFSET
+    );
+    assert!(
+        offset_of!(EffectApi, socket_push)
+            == contract::MC_HOST_LAYOUT_EFFECT_API_SOCKET_PUSH_OFFSET
+    );
+    assert!(
+        offset_of!(EffectApi, socket_close)
+            == contract::MC_HOST_LAYOUT_EFFECT_API_SOCKET_CLOSE_OFFSET
     );
 };
 

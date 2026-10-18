@@ -579,9 +579,51 @@ fn lNetFetch(L: ?*State) callconv(.c) c_int {
     return ok1(L);
 }
 
+fn lNetWebsocket(L: ?*State) callconv(.c) c_int {
+    var len: usize = 0;
+    const url = c.luaL_checklstring(L, 1, &len);
+    var fd: u32 = 0;
+    const e = mc.mc_sys_ws_open(mc.addr(url), @intCast(len), mc.addr(&fd));
+    if (e != 0) return fail(L, e);
+    c.lua_pushinteger(L, @intCast(fd));
+    return ok1(L);
+}
+
+fn lNetWsSend(L: ?*State) callconv(.c) c_int {
+    const fd: i32 = @intCast(c.luaL_checkinteger(L, 1));
+    var len: usize = 0;
+    const data = c.luaL_checklstring(L, 2, &len);
+    var written: u32 = 0;
+    const e = mc.mc_sys_write(fd, mc.addr(data), @intCast(len), mc.addr(&written));
+    if (e != 0) return fail(L, e);
+    c.lua_pushinteger(L, @intCast(written));
+    return ok1(L);
+}
+
+fn lNetWsRecv(L: ?*State) callconv(.c) c_int {
+    const fd: i32 = @intCast(c.luaL_checkinteger(L, 1));
+    var buf: [16384]u8 = undefined;
+    var received: u32 = 0;
+    const e = mc.mc_sys_read(fd, mc.addr(&buf), buf.len, mc.addr(&received));
+    if (e != 0) return fail(L, e);
+    _ = c.lua_pushlstring(L, &buf, received);
+    return ok1(L);
+}
+
+fn lNetWsClose(L: ?*State) callconv(.c) c_int {
+    const fd: i32 = @intCast(c.luaL_checkinteger(L, 1));
+    const e = mc.mc_sys_close(fd);
+    if (e != 0) return fail(L, e);
+    return okTrue(L);
+}
+
 const net_funcs = [_]Reg{
     .{ .name = "get", .fn_ = &lNetGet },
     .{ .name = "fetch", .fn_ = &lNetFetch },
+    .{ .name = "websocket", .fn_ = &lNetWebsocket },
+    .{ .name = "ws_send", .fn_ = &lNetWsSend },
+    .{ .name = "ws_recv", .fn_ = &lNetWsRecv },
+    .{ .name = "ws_close", .fn_ = &lNetWsClose },
 };
 
 fn lHostCall(L: ?*State) callconv(.c) c_int {

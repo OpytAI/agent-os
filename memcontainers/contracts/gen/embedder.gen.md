@@ -46,6 +46,7 @@ ABI **1.0**.
 | `MC_HOST_FEATURE_MOUNT_OPERATION` | `u64` | 1024 |
 | `MC_HOST_FEATURE_PERSIST_EFFECT` | `u64` | 2048 |
 | `MC_HOST_FEATURE_HTTP_EFFECT` | `u64` | 4096 |
+| `MC_HOST_FEATURE_WS_EFFECT` | `u64` | 8192 |
 | `MC_HOST_TICK_WAITING` | `u32` | 0 |
 | `MC_HOST_TICK_RUNNABLE` | `u32` | 1 |
 | `MC_HOST_TICK_EXITED` | `u32` | 2 |
@@ -117,6 +118,8 @@ ABI **1.0**.
 | `MC_HOST_EVENT_PERSIST_LIST` | `u32` | 11 |
 | `MC_HOST_EVENT_TOOL_APPROVAL` | `u32` | 12 |
 | `MC_HOST_EVENT_OPERATION_CANCEL` | `u32` | 13 |
+| `MC_HOST_WS_CLOSE_GUEST` | `u32` | 1 |
+| `MC_HOST_WS_CLOSE_VM` | `u32` | 2 |
 
 | Layout | Size | Align |
 | --- | ---: | ---: |
@@ -144,4 +147,4 @@ ABI **1.0**.
 | `OPERATION_API` | 56 | 8 |
 | `ATTACHMENT_API` | 40 | 8 |
 | `EFFECT_INFO` | 24 | 8 |
-| `EFFECT_API` | 80 | 8 |
+| `EFFECT_API` | 96 | 8 |

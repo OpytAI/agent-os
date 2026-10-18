@@ -25,6 +25,9 @@ static void check(mc_host_result_t result, const char *step) {
   exit(2);
 }
 
+static int contains_bytes(const uint8_t *haystack, size_t length,
+                          const char *needle, size_t needle_length);
+
 static uint8_t *read_artifact(const char *path, size_t *length) {
   FILE *file = fopen(path, "rb");
   need(file != NULL, "open artifact");
@@ -64,6 +67,48 @@ static void *serve_http_once(void *argument) {
   need(send(peer, response, sizeof(response) - 1, 0) == sizeof(response) - 1,
        "send real HTTP response");
   need(close(peer) == 0 && close(listener) == 0, "close HTTP sockets");
+  return NULL;
+}
+
+static void read_exact(int socket_fd, uint8_t *buffer, size_t length) {
+  size_t offset = 0;
+  while (offset < length) {
+    ssize_t received = recv(socket_fd, buffer + offset, length - offset, 0);
+    need(received > 0, "read complete WebSocket frame");
+    offset += (size_t)received;
+  }
+}
+
+static void *serve_ws_once(void *argument) {
+  int listener = *(int *)argument;
+  int peer = accept(listener, NULL, NULL);
+  need(peer >= 0, "accept local WebSocket request");
+  uint8_t request[1024];
+  size_t length = 0;
+  while (!contains_bytes(request, length, "\r\n\r\n", 4)) {
+    ssize_t received = recv(peer, request + length, sizeof(request) - length, 0);
+    need(received > 0 && length + (size_t)received < sizeof(request),
+         "read bounded WebSocket handshake");
+    length += (size_t)received;
+  }
+  need(contains_bytes(request, length, "GET /echo HTTP/1.1", 18) &&
+       contains_bytes(request, length, "Upgrade: websocket", 18) &&
+       contains_bytes(request, length, "dGhlIHNhbXBsZSBub25jZQ==", 24),
+       "real WebSocket handshake request");
+  const char response[] = "HTTP/1.1 101 Switching Protocols\r\n"
+      "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+      "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n";
+  need(send(peer, response, sizeof(response) - 1, 0) == sizeof(response) - 1,
+       "send WebSocket handshake");
+  uint8_t frame[10];
+  read_exact(peer, frame, 6);
+  need(frame[0] == 0x82 && frame[1] == 0x84, "masked binary WebSocket frame");
+  read_exact(peer, frame + 6, 4);
+  for (size_t index = 0; index < 4; ++index) frame[6 + index] ^= frame[2 + index];
+  need(memcmp(frame + 6, "ping", 4) == 0, "real WebSocket frame payload");
+  const uint8_t echo[] = {0x82, 4, 'p', 'i', 'n', 'g'};
+  need(send(peer, echo, sizeof(echo), 0) == sizeof(echo), "send real WebSocket echo");
+  need(close(peer) == 0 && close(listener) == 0, "close WebSocket sockets");
   return NULL;
 }
 
@@ -764,6 +809,182 @@ static void run_http_relay(const mc_host_vm_api_v1 *vm_api,
   need(pthread_join(server, NULL) == 0, "join real HTTP server");
 }
 
+static void answer_ws(const mc_host_effect_api_v1 *effect_api,
+                      mc_host_runtime_t runtime, mc_host_handle_t event,
+                      uint32_t kind) {
+  wire payload = {0}, answer = {0};
+  if (kind == MC_HOST_EVENT_WS_CONNECT) {
+    mc_host_wire_ws_connect_response response = {.failed = 0};
+    need(mc_host_wire_encode_ws_connect_response(&response, payload.bytes,
+             sizeof(payload.bytes), &payload.length) == MC_HOST_WIRE_OK,
+         "encode WebSocket open");
+  } else {
+    mc_host_wire_ws_send_response response = {.failed = 0};
+    need(mc_host_wire_encode_ws_send_response(&response, payload.bytes,
+             sizeof(payload.bytes), &payload.length) == MC_HOST_WIRE_OK,
+         "encode WebSocket send ack");
+  }
+  mc_host_wire_effect_response response = {
+      .kind = kind, .event_id = (int64_t)event,
+      .payload = {payload.bytes, payload.length}};
+  need(mc_host_wire_encode_effect_response(&response, answer.bytes,
+           sizeof(answer.bytes), &answer.length) == MC_HOST_WIRE_OK,
+       "encode WebSocket effect answer");
+  check(effect_api->respond(runtime, event,
+        (mc_host_bytes_v1){answer.bytes, answer.length}, NULL),
+        "answer WebSocket event");
+}
+
+static void run_ws_relay(const mc_host_vm_api_v1 *vm_api,
+                         const mc_host_operation_api_v1 *op_api,
+                         const mc_host_effect_api_v1 *effect_api,
+                         mc_host_runtime_t runtime, mc_host_handle_t vm) {
+  int listener = socket(AF_INET, SOCK_STREAM, 0);
+  need(listener >= 0, "create WebSocket listener");
+  struct sockaddr_in address = {0};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  need(bind(listener, (struct sockaddr *)&address, sizeof(address)) == 0,
+       "bind loopback WebSocket listener");
+  need(listen(listener, 1) == 0, "listen for WebSocket request");
+  socklen_t address_length = sizeof(address);
+  need(getsockname(listener, (struct sockaddr *)&address, &address_length) == 0,
+       "read WebSocket loopback port");
+  pthread_t server;
+  need(pthread_create(&server, NULL, serve_ws_once, &listener) == 0,
+       "start real WebSocket server");
+
+  char script[512];
+  int script_length = snprintf(script, sizeof(script),
+      "local sys=require('sys'); local fd=assert(sys.net.websocket('ws://127.0.0.1:%u/echo')); "
+      "assert(sys.net.ws_send(fd,'ping')==4); "
+      "assert(sys.net.ws_recv(fd)=='ping'); assert(sys.net.ws_close(fd)); "
+      "print('native-ws-ok')", (unsigned)ntohs(address.sin_port));
+  need(script_length > 0 && (size_t)script_length < sizeof(script),
+       "guest WebSocket script");
+  wire write = filesystem_request(MC_HOST_OP_FS_WRITE, "/tmp/native-ws.luau",
+                                  (const uint8_t *)script, (size_t)script_length);
+  mc_host_handle_t operation = 0;
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){write.bytes, write.length},
+                      &operation, NULL), "write guest WebSocket script");
+  mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
+  for (int attempt = 0; attempt < 2048; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "drive WebSocket script write");
+    check(op_api->poll(runtime, operation, &status, NULL), "poll WebSocket script write");
+    if (status.state == MC_HOST_OP_READY) break;
+  }
+  need(status.state == MC_HOST_OP_READY, "guest WebSocket script written");
+  check(op_api->close(runtime, operation, NULL), "close WebSocket script write");
+
+  wire exec = shell_request("luau /tmp/native-ws.luau");
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){exec.bytes, exec.length},
+                      &operation, NULL), "start guest WebSocket exchange");
+  int client = -1, opened = 0, sent = 0, closed = 0;
+  mc_host_handle_t socket_handle = 0;
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL),
+          "drive guest WebSocket exchange");
+    mc_host_handle_t event = 0;
+    mc_host_effect_info_v1 info = MC_HOST_INIT(mc_host_effect_info_v1);
+    uint64_t mask = (UINT64_C(1) << MC_HOST_EVENT_WS_CONNECT) |
+                    (UINT64_C(1) << MC_HOST_EVENT_WS_SEND) |
+                    (UINT64_C(1) << MC_HOST_EVENT_WS_CLOSE);
+    mc_host_result_t next = effect_api->next(runtime, vm, mask, &event, &info, NULL);
+    if (next == MC_HOST_OK) {
+      uint8_t frame[2048];
+      mc_host_buffer_v1 buffer = {frame, sizeof(frame), 0};
+      check(effect_api->read(runtime, event, &buffer, NULL), "read WebSocket event");
+      mc_host_wire_effect_event decoded;
+      need(mc_host_wire_decode_effect_event(frame, buffer.required, &decoded) == MC_HOST_WIRE_OK &&
+           decoded.event_id == (int64_t)event && decoded.has_socket_id,
+           "WebSocket event envelope");
+      if (info.kind == MC_HOST_EVENT_WS_CONNECT) {
+        need(!opened && !sent && !closed, "first WebSocket event is connect");
+        socket_handle = (mc_host_handle_t)decoded.socket_id;
+        mc_host_wire_ws_connect_request request;
+        need(mc_host_wire_decode_ws_connect_request(decoded.payload.data,
+                 decoded.payload.len, &request) == MC_HOST_WIRE_OK &&
+             contains_bytes(request.url.data, request.url.len, "/echo", 5),
+             "guest WebSocket URL");
+        client = socket(AF_INET, SOCK_STREAM, 0);
+        need(client >= 0 && connect(client, (struct sockaddr *)&address,
+                                   sizeof(address)) == 0,
+             "connect application WebSocket transport");
+        const char handshake[] = "GET /echo HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+            "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+            "Sec-WebSocket-Version: 13\r\n\r\n";
+        need(send(client, handshake, sizeof(handshake) - 1, 0) == sizeof(handshake) - 1,
+             "send application WebSocket handshake");
+        uint8_t handshake_response[512];
+        ssize_t received = recv(client, handshake_response, sizeof(handshake_response), 0);
+        need(received > 0 && contains_bytes(handshake_response, (size_t)received,
+                 "101 Switching Protocols", 23), "complete real WebSocket handshake");
+        answer_ws(effect_api, runtime, event, info.kind);
+        opened = 1;
+      } else if (info.kind == MC_HOST_EVENT_WS_SEND) {
+        need(opened && !sent && !closed && (mc_host_handle_t)decoded.socket_id == socket_handle,
+             "WebSocket send shares socket identity");
+        mc_host_wire_ws_send_request request;
+        need(mc_host_wire_decode_ws_send_request(decoded.payload.data,
+                 decoded.payload.len, &request) == MC_HOST_WIRE_OK &&
+             request.data.len == 4 && memcmp(request.data.data, "ping", 4) == 0,
+             "guest WebSocket send payload");
+        const uint8_t mask_bytes[4] = {1, 2, 3, 4};
+        uint8_t message[10] = {0x82, 0x84, 1, 2, 3, 4};
+        for (size_t index = 0; index < 4; ++index)
+          message[6 + index] = request.data.data[index] ^ mask_bytes[index];
+        need(send(client, message, sizeof(message), 0) == sizeof(message),
+             "send real WebSocket data frame");
+        uint8_t echoed[6];
+        read_exact(client, echoed, sizeof(echoed));
+        need(echoed[0] == 0x82 && echoed[1] == 4 &&
+             memcmp(echoed + 2, "ping", 4) == 0,
+             "receive real WebSocket echo");
+        check(effect_api->socket_push(runtime, socket_handle,
+              (mc_host_bytes_v1){echoed + 2, 4}, NULL),
+              "push echoed WebSocket data to guest");
+        answer_ws(effect_api, runtime, event, info.kind);
+        sent = 1;
+      } else {
+        need(info.kind == MC_HOST_EVENT_WS_CLOSE && opened && sent && !closed &&
+             (mc_host_handle_t)decoded.socket_id == socket_handle,
+             "guest WebSocket close event");
+        mc_host_wire_ws_close_event close_event;
+        need(mc_host_wire_decode_ws_close_event(decoded.payload.data,
+                 decoded.payload.len, &close_event) == MC_HOST_WIRE_OK &&
+             close_event.reason == MC_HOST_WS_CLOSE_GUEST, "WebSocket close reason");
+        check(effect_api->ack(runtime, event, NULL), "acknowledge WebSocket close");
+        need(effect_api->socket_push(runtime, socket_handle,
+             (mc_host_bytes_v1){(const uint8_t *)"x", 1}, NULL) == MC_HOST_STALE_HANDLE,
+             "closed WebSocket handle is stale");
+        need(close(client) == 0, "close application WebSocket transport");
+        closed = 1;
+      }
+    } else {
+      need(next == MC_HOST_WOULD_BLOCK, "WebSocket event queue");
+    }
+    check(op_api->poll(runtime, operation, &status, NULL), "poll guest WebSocket exchange");
+    if (status.state == MC_HOST_OP_READY && closed) break;
+  }
+  need(opened && sent && closed && status.state == MC_HOST_OP_READY &&
+       status.result_length < 4096, "guest WebSocket exchange completes");
+  uint8_t result[4096];
+  mc_host_buffer_v1 result_buffer = {result, sizeof(result), 0};
+  check(op_api->result(runtime, operation, &result_buffer, NULL),
+        "read guest WebSocket result");
+  need(contains_bytes(result, result_buffer.required, "native-ws-ok", 12),
+       "real guest received WebSocket echo");
+  check(op_api->close(runtime, operation, NULL), "close WebSocket operation");
+  need(pthread_join(server, NULL) == 0, "join real WebSocket server");
+}
+
 static void run_layer_commit(const mc_host_operation_api_v1 *op_api,
                              mc_host_runtime_t runtime, mc_host_handle_t vm) {
   wire request = {0};
@@ -1245,6 +1466,7 @@ int main(int argc, char **argv) {
   run_mount_relay(&vm_api, &op_api, &effect_api, runtime, vm);
   run_persist_relay(&vm_api, &op_api, &effect_api, runtime, vm);
   run_http_relay(&vm_api, &op_api, &effect_api, runtime, vm);
+  run_ws_relay(&vm_api, &op_api, &effect_api, runtime, vm);
 
   mc_host_snapshot_begin_options_v1 full_options = MC_HOST_INIT(mc_host_snapshot_begin_options_v1);
   full_options.mode = MC_HOST_SNAPSHOT_FULL;

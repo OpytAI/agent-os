@@ -44,6 +44,7 @@ pub const MC_HOST_FEATURE_HOST_CALL_EFFECT: u64 = 512;
 pub const MC_HOST_FEATURE_MOUNT_OPERATION: u64 = 1024;
 pub const MC_HOST_FEATURE_PERSIST_EFFECT: u64 = 2048;
 pub const MC_HOST_FEATURE_HTTP_EFFECT: u64 = 4096;
+pub const MC_HOST_FEATURE_WS_EFFECT: u64 = 8192;
 pub const MC_HOST_TICK_WAITING: u32 = 0;
 pub const MC_HOST_TICK_RUNNABLE: u32 = 1;
 pub const MC_HOST_TICK_EXITED: u32 = 2;
@@ -115,6 +116,8 @@ pub const MC_HOST_EVENT_PERSIST_DELETE: u32 = 10;
 pub const MC_HOST_EVENT_PERSIST_LIST: u32 = 11;
 pub const MC_HOST_EVENT_TOOL_APPROVAL: u32 = 12;
 pub const MC_HOST_EVENT_OPERATION_CANCEL: u32 = 13;
+pub const MC_HOST_WS_CLOSE_GUEST: u32 = 1;
+pub const MC_HOST_WS_CLOSE_VM: u32 = 2;
 
 extern crate alloc;
 use alloc::collections::BTreeMap;
@@ -890,6 +893,151 @@ impl HttpEffectResponse {
     }
 }
 
+/// Guest WebSocket URL presented to the application transport.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct WsConnectRequest {
+    pub url: String,
+}
+
+pub const WS_CONNECT_REQUEST_MSG_ID: u16 = 40;
+pub const WS_CONNECT_REQUEST_VERSION: u8 = 1;
+impl WsConnectRequest {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, WS_CONNECT_REQUEST_MSG_ID);
+        out.push(WS_CONNECT_REQUEST_VERSION);
+        ctl_put_str(&mut out, &self.url);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != WS_CONNECT_REQUEST_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != WS_CONNECT_REQUEST_VERSION { return Err(WireError::UnsupportedVersion); }
+        let url = ctl_read_str(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            url,
+        })
+    }
+}
+
+/// Handshake completion. A failed handshake wakes the guest with an error.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct WsConnectResponse {
+    pub failed: bool,
+}
+
+pub const WS_CONNECT_RESPONSE_MSG_ID: u16 = 41;
+pub const WS_CONNECT_RESPONSE_VERSION: u8 = 1;
+impl WsConnectResponse {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, WS_CONNECT_RESPONSE_MSG_ID);
+        out.push(WS_CONNECT_RESPONSE_VERSION);
+        ctl_put_bool(&mut out, self.failed);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != WS_CONNECT_RESPONSE_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != WS_CONNECT_RESPONSE_VERSION { return Err(WireError::UnsupportedVersion); }
+        let failed = ctl_read_bool(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            failed,
+        })
+    }
+}
+
+/// One guest WebSocket message held under the per-socket send credit.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct WsSendRequest {
+    pub data: Vec<u8>,
+}
+
+pub const WS_SEND_REQUEST_MSG_ID: u16 = 42;
+pub const WS_SEND_REQUEST_VERSION: u8 = 1;
+impl WsSendRequest {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, WS_SEND_REQUEST_MSG_ID);
+        out.push(WS_SEND_REQUEST_VERSION);
+        ctl_put_bytes(&mut out, &self.data);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != WS_SEND_REQUEST_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != WS_SEND_REQUEST_VERSION { return Err(WireError::UnsupportedVersion); }
+        let data = ctl_read_bytes(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            data,
+        })
+    }
+}
+
+/// Send completion releases credit; failure closes the guest socket.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct WsSendResponse {
+    pub failed: bool,
+}
+
+pub const WS_SEND_RESPONSE_MSG_ID: u16 = 43;
+pub const WS_SEND_RESPONSE_VERSION: u8 = 1;
+impl WsSendResponse {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, WS_SEND_RESPONSE_MSG_ID);
+        out.push(WS_SEND_RESPONSE_VERSION);
+        ctl_put_bool(&mut out, self.failed);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != WS_SEND_RESPONSE_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != WS_SEND_RESPONSE_VERSION { return Err(WireError::UnsupportedVersion); }
+        let failed = ctl_read_bool(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            failed,
+        })
+    }
+}
+
+/// Close notification for an application-owned WebSocket connection.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct WsCloseEvent {
+    pub reason: u32,
+}
+
+pub const WS_CLOSE_EVENT_MSG_ID: u16 = 44;
+pub const WS_CLOSE_EVENT_VERSION: u8 = 1;
+impl WsCloseEvent {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, WS_CLOSE_EVENT_MSG_ID);
+        out.push(WS_CLOSE_EVENT_VERSION);
+        ctl_put_u32(&mut out, self.reason);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != WS_CLOSE_EVENT_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != WS_CLOSE_EVENT_VERSION { return Err(WireError::UnsupportedVersion); }
+        let reason = ctl_read_u32(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            reason,
+        })
+    }
+}
+
 // Native embedder ABI constants.
 pub const MC_HOST_ABI_MAJOR: u16 = 1;
 pub const MC_HOST_ABI_MINOR: u16 = 0;
@@ -1082,7 +1230,7 @@ pub const MC_HOST_LAYOUT_EFFECT_INFO_HEADER_OFFSET: usize = 0;
 pub const MC_HOST_LAYOUT_EFFECT_INFO_KIND_OFFSET: usize = 8;
 pub const MC_HOST_LAYOUT_EFFECT_INFO_RESERVED_OFFSET: usize = 12;
 pub const MC_HOST_LAYOUT_EFFECT_INFO_LENGTH_OFFSET: usize = 16;
-pub const MC_HOST_LAYOUT_EFFECT_API_SIZE: usize = 80;
+pub const MC_HOST_LAYOUT_EFFECT_API_SIZE: usize = 96;
 pub const MC_HOST_LAYOUT_EFFECT_API_ALIGN: usize = 8;
 pub const MC_HOST_LAYOUT_EFFECT_API_HEADER_OFFSET: usize = 0;
 pub const MC_HOST_LAYOUT_EFFECT_API_NEXT_OFFSET: usize = 8;
@@ -1094,3 +1242,5 @@ pub const MC_HOST_LAYOUT_EFFECT_API_RESPONSE_BEGIN_OFFSET: usize = 48;
 pub const MC_HOST_LAYOUT_EFFECT_API_RESPONSE_WRITE_OFFSET: usize = 56;
 pub const MC_HOST_LAYOUT_EFFECT_API_RESPONSE_FINISH_OFFSET: usize = 64;
 pub const MC_HOST_LAYOUT_EFFECT_API_RESPONSE_ABORT_OFFSET: usize = 72;
+pub const MC_HOST_LAYOUT_EFFECT_API_SOCKET_PUSH_OFFSET: usize = 80;
+pub const MC_HOST_LAYOUT_EFFECT_API_SOCKET_CLOSE_OFFSET: usize = 88;

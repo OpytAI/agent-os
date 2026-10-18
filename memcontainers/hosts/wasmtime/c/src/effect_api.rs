@@ -5,6 +5,7 @@ use std::ptr;
 
 use embedder_rust::{
     self as contract, EffectResponse, HostCallResponse, HttpEffectResponse, PersistEffectResponse,
+    WsConnectResponse, WsSendResponse,
 };
 
 use super::relay::EffectBody;
@@ -135,6 +136,24 @@ fn decode_response(event: u64, frame: &[u8]) -> Result<(u32, EffectBody), u32> {
                 body: body.body,
             }
         }
+        contract::MC_HOST_EVENT_WS_CONNECT => {
+            let body = WsConnectResponse::decode(&response.payload)
+                .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+            EffectBody {
+                failed: body.failed,
+                head: Vec::new(),
+                body: Vec::new(),
+            }
+        }
+        contract::MC_HOST_EVENT_WS_SEND => {
+            let body = WsSendResponse::decode(&response.payload)
+                .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+            EffectBody {
+                failed: body.failed,
+                head: Vec::new(),
+                body: Vec::new(),
+            }
+        }
         _ => return Err(contract::MC_HOST_UNSUPPORTED),
     };
     Ok((response.kind, payload))
@@ -209,6 +228,26 @@ unsafe extern "C" fn ack(runtime: u64, event: u64, error: *mut Error) -> ResultC
     })
 }
 
+unsafe extern "C" fn socket_push(
+    runtime: u64,
+    socket: u64,
+    data: Bytes,
+    error: *mut Error,
+) -> ResultCode {
+    guard(error, || {
+        let data = unsafe { bytes(data, 1024 * 1024)? };
+        ActiveRuntime::acquire(runtime)?
+            .state
+            .socket_push(socket, data)
+    })
+}
+
+unsafe extern "C" fn socket_close(runtime: u64, socket: u64, error: *mut Error) -> ResultCode {
+    guard(error, || {
+        ActiveRuntime::acquire(runtime)?.state.socket_close(socket)
+    })
+}
+
 pub(super) static EFFECT_API: EffectApi = EffectApi {
     header: Header {
         size: size_of::<EffectApi>() as u32,
@@ -224,4 +263,6 @@ pub(super) static EFFECT_API: EffectApi = EffectApi {
     response_write,
     response_finish,
     response_abort,
+    socket_push,
+    socket_close,
 };

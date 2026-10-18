@@ -197,7 +197,7 @@ layout "EFFECT_INFO" size=24 align=8 {
   offset "reserved" value=12
   offset "length" value=16
 }
-layout "EFFECT_API" size=80 align=8 {
+layout "EFFECT_API" size=96 align=8 {
   offset "header" value=0
   offset "next" value=8
   offset "read" value=16
@@ -208,6 +208,8 @@ layout "EFFECT_API" size=80 align=8 {
   offset "response_write" value=56
   offset "response_finish" value=64
   offset "response_abort" value=72
+  offset "socket_push" value=80
+  offset "socket_close" value=88
 }
 
 constant "MC_HOST_OK" value=0 type="u32"
@@ -253,6 +255,7 @@ constant "MC_HOST_FEATURE_HOST_CALL_EFFECT" value=512 type="u64"
 constant "MC_HOST_FEATURE_MOUNT_OPERATION" value=1024 type="u64"
 constant "MC_HOST_FEATURE_PERSIST_EFFECT" value=2048 type="u64"
 constant "MC_HOST_FEATURE_HTTP_EFFECT" value=4096 type="u64"
+constant "MC_HOST_FEATURE_WS_EFFECT" value=8192 type="u64"
 
 constant "MC_HOST_TICK_WAITING" value=0 type="u32"
 constant "MC_HOST_TICK_RUNNABLE" value=1 type="u32"
@@ -328,6 +331,8 @@ constant "MC_HOST_EVENT_PERSIST_DELETE" value=10 type="u32"
 constant "MC_HOST_EVENT_PERSIST_LIST" value=11 type="u32"
 constant "MC_HOST_EVENT_TOOL_APPROVAL" value=12 type="u32"
 constant "MC_HOST_EVENT_OPERATION_CANCEL" value=13 type="u32"
+constant "MC_HOST_WS_CLOSE_GUEST" value=1 type="u32"
+constant "MC_HOST_WS_CLOSE_VM" value=2 type="u32"
 
 message "AttachmentDefinition" id=20 version=1 {
   field "kind" type="u32"
@@ -453,4 +458,29 @@ message "HttpEffectResponse" id=39 version=1 {
   field "head" type="bytes"
   field "body" type="bytes"
   doc "Complete HTTP response. The head is at most the kernel HEAD_BUF size."
+}
+
+message "WsConnectRequest" id=40 version=1 {
+  field "url" type="str"
+  doc "Guest WebSocket URL presented to the application transport."
+}
+
+message "WsConnectResponse" id=41 version=1 {
+  field "failed" type="bool"
+  doc "Handshake completion. A failed handshake wakes the guest with an error."
+}
+
+message "WsSendRequest" id=42 version=1 {
+  field "data" type="bytes"
+  doc "One guest WebSocket message held under the per-socket send credit."
+}
+
+message "WsSendResponse" id=43 version=1 {
+  field "failed" type="bool"
+  doc "Send completion releases credit; failure closes the guest socket."
+}
+
+message "WsCloseEvent" id=44 version=1 {
+  field "reason" type="u32"
+  doc "Close notification for an application-owned WebSocket connection."
 }

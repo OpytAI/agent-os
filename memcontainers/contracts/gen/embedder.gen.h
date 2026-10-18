@@ -195,7 +195,7 @@
 #define MC_HOST_LAYOUT_EFFECT_INFO_KIND_OFFSET 8
 #define MC_HOST_LAYOUT_EFFECT_INFO_RESERVED_OFFSET 12
 #define MC_HOST_LAYOUT_EFFECT_INFO_LENGTH_OFFSET 16
-#define MC_HOST_LAYOUT_EFFECT_API_SIZE 80
+#define MC_HOST_LAYOUT_EFFECT_API_SIZE 96
 #define MC_HOST_LAYOUT_EFFECT_API_ALIGN 8
 #define MC_HOST_LAYOUT_EFFECT_API_HEADER_OFFSET 0
 #define MC_HOST_LAYOUT_EFFECT_API_NEXT_OFFSET 8
@@ -207,6 +207,8 @@
 #define MC_HOST_LAYOUT_EFFECT_API_RESPONSE_WRITE_OFFSET 56
 #define MC_HOST_LAYOUT_EFFECT_API_RESPONSE_FINISH_OFFSET 64
 #define MC_HOST_LAYOUT_EFFECT_API_RESPONSE_ABORT_OFFSET 72
+#define MC_HOST_LAYOUT_EFFECT_API_SOCKET_PUSH_OFFSET 80
+#define MC_HOST_LAYOUT_EFFECT_API_SOCKET_CLOSE_OFFSET 88
 #define MC_HOST_OK UINT32_C(0)
 #define MC_HOST_BUFFER_TOO_SMALL UINT32_C(1)
 #define MC_HOST_WOULD_BLOCK UINT32_C(2)
@@ -249,6 +251,7 @@
 #define MC_HOST_FEATURE_MOUNT_OPERATION UINT64_C(1024)
 #define MC_HOST_FEATURE_PERSIST_EFFECT UINT64_C(2048)
 #define MC_HOST_FEATURE_HTTP_EFFECT UINT64_C(4096)
+#define MC_HOST_FEATURE_WS_EFFECT UINT64_C(8192)
 #define MC_HOST_TICK_WAITING UINT32_C(0)
 #define MC_HOST_TICK_RUNNABLE UINT32_C(1)
 #define MC_HOST_TICK_EXITED UINT32_C(2)
@@ -320,6 +323,8 @@
 #define MC_HOST_EVENT_PERSIST_LIST UINT32_C(11)
 #define MC_HOST_EVENT_TOOL_APPROVAL UINT32_C(12)
 #define MC_HOST_EVENT_OPERATION_CANCEL UINT32_C(13)
+#define MC_HOST_WS_CLOSE_GUEST UINT32_C(1)
+#define MC_HOST_WS_CLOSE_VM UINT32_C(2)
 
 
 /* Portable message codec. Decoded byte views borrow the input frame. */
@@ -1217,6 +1222,138 @@ static inline mc_host_wire_result mc_host_wire_encode_http_effect_response(const
             mc_host_wire_put_u8(&w, value->failed);
             mc_host_wire_put_bytes(&w, value->head, 0);
             mc_host_wire_put_bytes(&w, value->body, 0);
+        if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
+    }
+    return MC_HOST_WIRE_OK;
+}
+
+typedef struct mc_host_wire_ws_connect_request {
+    mc_host_wire_bytes url;
+} mc_host_wire_ws_connect_request;
+static inline mc_host_wire_result mc_host_wire_decode_ws_connect_request(const uint8_t *data, size_t len, mc_host_wire_ws_connect_request *out) {
+    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
+    if (mc_host_wire_get_u16(&r) != 40 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
+    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        out->url = mc_host_wire_get_bytes(&r, 1);
+    if (r.error != MC_HOST_WIRE_OK) return r.error;
+    return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
+}
+static inline mc_host_wire_result mc_host_wire_encode_ws_connect_request(const mc_host_wire_ws_connect_request *value, uint8_t *data, size_t capacity, size_t *required) {
+    if (!value || !required || (capacity && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    for (int pass = 0; pass < 2; ++pass) {
+        mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
+        mc_host_wire_put_u16(&w, 40);
+        mc_host_wire_put_u8(&w, 1);
+            mc_host_wire_put_bytes(&w, value->url, 1);
+        if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
+    }
+    return MC_HOST_WIRE_OK;
+}
+
+typedef struct mc_host_wire_ws_connect_response {
+    uint8_t failed;
+} mc_host_wire_ws_connect_response;
+static inline mc_host_wire_result mc_host_wire_decode_ws_connect_response(const uint8_t *data, size_t len, mc_host_wire_ws_connect_response *out) {
+    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
+    if (mc_host_wire_get_u16(&r) != 41 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
+    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        out->failed = mc_host_wire_get_flag(&r);
+    if (r.error != MC_HOST_WIRE_OK) return r.error;
+    return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
+}
+static inline mc_host_wire_result mc_host_wire_encode_ws_connect_response(const mc_host_wire_ws_connect_response *value, uint8_t *data, size_t capacity, size_t *required) {
+    if (!value || !required || (capacity && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    for (int pass = 0; pass < 2; ++pass) {
+        mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
+        mc_host_wire_put_u16(&w, 41);
+        mc_host_wire_put_u8(&w, 1);
+            if (value->failed > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
+            mc_host_wire_put_u8(&w, value->failed);
+        if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
+    }
+    return MC_HOST_WIRE_OK;
+}
+
+typedef struct mc_host_wire_ws_send_request {
+    mc_host_wire_bytes data;
+} mc_host_wire_ws_send_request;
+static inline mc_host_wire_result mc_host_wire_decode_ws_send_request(const uint8_t *data, size_t len, mc_host_wire_ws_send_request *out) {
+    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
+    if (mc_host_wire_get_u16(&r) != 42 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
+    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        out->data = mc_host_wire_get_bytes(&r, 0);
+    if (r.error != MC_HOST_WIRE_OK) return r.error;
+    return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
+}
+static inline mc_host_wire_result mc_host_wire_encode_ws_send_request(const mc_host_wire_ws_send_request *value, uint8_t *data, size_t capacity, size_t *required) {
+    if (!value || !required || (capacity && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    for (int pass = 0; pass < 2; ++pass) {
+        mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
+        mc_host_wire_put_u16(&w, 42);
+        mc_host_wire_put_u8(&w, 1);
+            mc_host_wire_put_bytes(&w, value->data, 0);
+        if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
+    }
+    return MC_HOST_WIRE_OK;
+}
+
+typedef struct mc_host_wire_ws_send_response {
+    uint8_t failed;
+} mc_host_wire_ws_send_response;
+static inline mc_host_wire_result mc_host_wire_decode_ws_send_response(const uint8_t *data, size_t len, mc_host_wire_ws_send_response *out) {
+    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
+    if (mc_host_wire_get_u16(&r) != 43 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
+    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        out->failed = mc_host_wire_get_flag(&r);
+    if (r.error != MC_HOST_WIRE_OK) return r.error;
+    return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
+}
+static inline mc_host_wire_result mc_host_wire_encode_ws_send_response(const mc_host_wire_ws_send_response *value, uint8_t *data, size_t capacity, size_t *required) {
+    if (!value || !required || (capacity && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    for (int pass = 0; pass < 2; ++pass) {
+        mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
+        mc_host_wire_put_u16(&w, 43);
+        mc_host_wire_put_u8(&w, 1);
+            if (value->failed > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
+            mc_host_wire_put_u8(&w, value->failed);
+        if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
+    }
+    return MC_HOST_WIRE_OK;
+}
+
+typedef struct mc_host_wire_ws_close_event {
+    uint32_t reason;
+} mc_host_wire_ws_close_event;
+static inline mc_host_wire_result mc_host_wire_decode_ws_close_event(const uint8_t *data, size_t len, mc_host_wire_ws_close_event *out) {
+    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
+    if (mc_host_wire_get_u16(&r) != 44 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
+    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        out->reason = mc_host_wire_get_u32(&r);
+    if (r.error != MC_HOST_WIRE_OK) return r.error;
+    return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
+}
+static inline mc_host_wire_result mc_host_wire_encode_ws_close_event(const mc_host_wire_ws_close_event *value, uint8_t *data, size_t capacity, size_t *required) {
+    if (!value || !required || (capacity && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    for (int pass = 0; pass < 2; ++pass) {
+        mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
+        mc_host_wire_put_u16(&w, 44);
+        mc_host_wire_put_u8(&w, 1);
+            mc_host_wire_put_u32(&w, (uint32_t)value->reason);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
