@@ -86,6 +86,15 @@ struct Inner {
 }
 
 impl Inner {
+    fn requeue(&mut self, id: u64) {
+        let index = self
+            .queue
+            .iter()
+            .position(|queued| *queued > id)
+            .unwrap_or(self.queue.len());
+        self.queue.insert(index, id);
+    }
+
     fn close_slot(&mut self, handle: i32) {
         let Some(slot) = self.slots.remove(&handle) else {
             return;
@@ -424,7 +433,7 @@ impl Relay {
         }
         event.native_handle = None;
         event.phase = EventPhase::Queued;
-        inner.queue.push_front(id);
+        inner.requeue(id);
         Ok(())
     }
 
@@ -433,7 +442,7 @@ impl Relay {
             if let Some(event) = inner.events.get_mut(&id) {
                 if event.phase == EventPhase::Leased && event.native_handle.is_none() {
                     event.phase = EventPhase::Queued;
-                    inner.queue.push_front(id);
+                    inner.requeue(id);
                 }
             }
         }
