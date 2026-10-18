@@ -133,19 +133,19 @@ static int contains_bytes(const uint8_t *haystack, size_t length,
 
 static wire shell_request(const char *command) {
   wire request = {0}, envelope = {0};
-  put_u16(&request, 1);  /* control.kdl ExecRequest v2 */
-  put_u8(&request, 2);
-  put_u32(&request, 1);  /* EXEC_MODE_SHELL */
-  put_u8(&request, 1);
-  put_bytes(&request, (const uint8_t *)command, strlen(command));
-  put_u32(&request, 0); /* argv */
-  put_u8(&request, 0);  /* cwd */
-  put_u32(&request, 0); /* env */
-  put_u8(&request, 0);  /* stdin */
-  put_u16(&envelope, 21); /* embedder.kdl OperationRequest v1 */
-  put_u8(&envelope, 1);
-  put_u32(&envelope, MC_HOST_OP_EXEC_SHELL);
-  put_bytes(&envelope, request.bytes, request.length);
+  mc_host_wire_exec_request exec = {
+      .mode = 1,
+      .has_command = 1,
+      .command = {(const uint8_t *)command, strlen(command)}};
+  need(mc_host_wire_encode_exec_request(&exec, request.bytes, sizeof(request.bytes),
+                                        &request.length) == MC_HOST_WIRE_OK,
+       "encode control exec request");
+  mc_host_wire_operation_request operation = {
+      .kind = MC_HOST_OP_EXEC_SHELL,
+      .payload = {request.bytes, request.length}};
+  need(mc_host_wire_encode_operation_request(&operation, envelope.bytes,
+                                             sizeof(envelope.bytes), &envelope.length) == MC_HOST_WIRE_OK,
+       "encode native exec operation");
   return envelope;
 }
 
@@ -168,30 +168,36 @@ static wire filesystem_request(uint32_t kind, const char *path,
 
 static wire autocomplete_request(const char *source) {
   wire request = {0}, envelope = {0};
-  put_u16(&request, 9); /* control.kdl AutocompleteRequest v1 */
-  put_u8(&request, 1);
-  put_bytes(&request, (const uint8_t *)source, strlen(source));
-  put_u32(&request, (uint32_t)strlen(source)); /* cursor */
-  put_u8(&request, 0); /* cwd */
-  put_u32(&request, 0); /* env */
-  put_u32(&request, 16); /* result limit */
-  put_u16(&envelope, 21);
-  put_u8(&envelope, 1);
-  put_u32(&envelope, MC_HOST_OP_AUTOCOMPLETE);
-  put_bytes(&envelope, request.bytes, request.length);
+  mc_host_wire_autocomplete_request completion = {
+      .source = {(const uint8_t *)source, strlen(source)},
+      .cursor = (uint32_t)strlen(source),
+      .limit = 16};
+  need(mc_host_wire_encode_autocomplete_request(&completion, request.bytes,
+               sizeof(request.bytes), &request.length) == MC_HOST_WIRE_OK,
+       "encode autocomplete request");
+  mc_host_wire_operation_request operation = {
+      .kind = MC_HOST_OP_AUTOCOMPLETE,
+      .payload = {request.bytes, request.length}};
+  need(mc_host_wire_encode_operation_request(&operation, envelope.bytes,
+               sizeof(envelope.bytes), &envelope.length) == MC_HOST_WIRE_OK,
+       "encode autocomplete operation");
   return envelope;
 }
 
 static wire service_request(const char *service, const char *body) {
   wire request = {0}, envelope = {0};
-  put_u16(&request, 6); /* control.kdl SvcRequest v1 */
-  put_u8(&request, 1);
-  put_bytes(&request, (const uint8_t *)service, strlen(service));
-  put_bytes(&request, (const uint8_t *)body, strlen(body));
-  put_u16(&envelope, 21);
-  put_u8(&envelope, 1);
-  put_u32(&envelope, MC_HOST_OP_SERVICE_CALL);
-  put_bytes(&envelope, request.bytes, request.length);
+  mc_host_wire_svc_request call = {
+      .service = {(const uint8_t *)service, strlen(service)},
+      .request = {(const uint8_t *)body, strlen(body)}};
+  need(mc_host_wire_encode_svc_request(&call, request.bytes, sizeof(request.bytes),
+                                       &request.length) == MC_HOST_WIRE_OK,
+       "encode resident service call");
+  mc_host_wire_operation_request operation = {
+      .kind = MC_HOST_OP_SERVICE_CALL,
+      .payload = {request.bytes, request.length}};
+  need(mc_host_wire_encode_operation_request(&operation, envelope.bytes,
+               sizeof(envelope.bytes), &envelope.length) == MC_HOST_WIRE_OK,
+       "encode service operation");
   return envelope;
 }
 
@@ -606,26 +612,18 @@ static void run_http_relay(const mc_host_vm_api_v1 *vm_api,
       uint8_t frame[2048];
       mc_host_buffer_v1 buffer = {frame, sizeof(frame), 0};
       check(effect_api->read(runtime, event, &buffer, NULL), "read HTTP event");
-      size_t offset = 0;
-      need(read_u16(frame, buffer.required, &offset) == 23 &&
-           read_u8(frame, buffer.required, &offset) == 1 &&
-           read_u32(frame, buffer.required, &offset) == MC_HOST_EVENT_HTTP_REQUEST,
+      mc_host_wire_effect_event decoded;
+      need(mc_host_wire_decode_effect_event(frame, buffer.required, &decoded) == MC_HOST_WIRE_OK &&
+           decoded.kind == MC_HOST_EVENT_HTTP_REQUEST && decoded.event_id == (int64_t)event &&
+           !decoded.has_operation_id && !decoded.has_socket_id,
            "HTTP event envelope");
-      read_u64(frame, buffer.required, &offset); /* event */
-      read_u64(frame, buffer.required, &offset); /* VM */
-      need(read_u8(frame, buffer.required, &offset) == 0 &&
-           read_u8(frame, buffer.required, &offset) == 0,
-           "HTTP event has no operation or socket");
-      read_u32(frame, buffer.required, &offset); /* flags */
-      uint32_t payload_length = read_u32(frame, buffer.required, &offset);
-      need(payload_length == buffer.required - offset &&
-           read_u16(frame, buffer.required, &offset) == 38 &&
-           read_u8(frame, buffer.required, &offset) == 1,
-           "HTTP request payload");
-      uint32_t request_length = read_u32(frame, buffer.required, &offset);
-      need(request_length == buffer.required - offset &&
-           contains_bytes(frame + offset, request_length, "GET http://127.0.0.1:", 21) &&
-           !contains_bytes(frame + offset, request_length, "X-MC-Connection", 15),
+      mc_host_wire_http_effect_request http_request;
+      need(mc_host_wire_decode_http_effect_request(decoded.payload.data,
+                                                    decoded.payload.len, &http_request) == MC_HOST_WIRE_OK &&
+           contains_bytes(http_request.request.data, http_request.request.len,
+                          "GET http://127.0.0.1:", 21) &&
+           !contains_bytes(http_request.request.data, http_request.request.len,
+                           "X-MC-Connection", 15),
            "raw unmarked guest HTTP request");
 
       int client = socket(AF_INET, SOCK_STREAM, 0);
@@ -655,17 +653,21 @@ static void run_http_relay(const mc_host_vm_api_v1 *vm_api,
       need(body_length == 6 && memcmp(response + separator + 4, "C-HTTP", 6) == 0,
            "real HTTP response body");
       wire payload = {0}, answer = {0};
-      put_u16(&payload, 39); /* HttpEffectResponse v1 */
-      put_u8(&payload, 1);
-      put_u8(&payload, 0); /* success */
       const char head[] = "200 OK\r\nContent-Length: 6\r\n\r\n";
-      put_bytes(&payload, (const uint8_t *)head, sizeof(head) - 1);
-      put_bytes(&payload, response + separator + 4, body_length);
-      put_u16(&answer, 24); /* EffectResponse v1 */
-      put_u8(&answer, 1);
-      put_u32(&answer, MC_HOST_EVENT_HTTP_REQUEST);
-      put_u64(&answer, event);
-      put_bytes(&answer, payload.bytes, payload.length);
+      mc_host_wire_http_effect_response http_response = {
+          .failed = 0,
+          .head = {(const uint8_t *)head, sizeof(head) - 1},
+          .body = {response + separator + 4, body_length}};
+      need(mc_host_wire_encode_http_effect_response(&http_response, payload.bytes,
+                  sizeof(payload.bytes), &payload.length) == MC_HOST_WIRE_OK,
+           "encode HTTP response");
+      mc_host_wire_effect_response effect_response = {
+          .kind = MC_HOST_EVENT_HTTP_REQUEST,
+          .event_id = (int64_t)event,
+          .payload = {payload.bytes, payload.length}};
+      need(mc_host_wire_encode_effect_response(&effect_response, answer.bytes,
+                  sizeof(answer.bytes), &answer.length) == MC_HOST_WIRE_OK,
+           "encode native effect response");
       check(effect_api->respond(runtime, event,
           (mc_host_bytes_v1){answer.bytes, answer.length}, NULL), "answer guest HTTP request");
       handled = 1;
@@ -756,21 +758,16 @@ static void run_service_call(const mc_host_vm_api_v1 *vm_api,
   uint8_t result[4096];
   mc_host_buffer_v1 buffer = {result, sizeof(result), 0};
   check(op_api->result(runtime, operation, &buffer, NULL), "read tools service result");
-  size_t offset = 0;
-  need(read_u16(result, buffer.required, &offset) == 22 &&
-           read_u8(result, buffer.required, &offset) == 1 &&
-           read_u32(result, buffer.required, &offset) == MC_HOST_OP_SERVICE_CALL &&
-           read_u32(result, buffer.required, &offset) == 0,
+  mc_host_wire_operation_result operation_result;
+  need(mc_host_wire_decode_operation_result(result, buffer.required, &operation_result) ==
+           MC_HOST_WIRE_OK && operation_result.kind == MC_HOST_OP_SERVICE_CALL &&
+           operation_result.status == 0,
        "service operation result envelope");
-  uint32_t payload_len = read_u32(result, buffer.required, &offset);
-  need(payload_len == buffer.required - offset &&
-           read_u16(result, buffer.required, &offset) == 7 &&
-           read_u8(result, buffer.required, &offset) == 1 &&
-           read_u32(result, buffer.required, &offset) == 0,
-       "service response envelope");
-  uint32_t body_len = read_u32(result, buffer.required, &offset);
-  need(body_len == buffer.required - offset &&
-           contains_bytes(result + offset, body_len, "\"tools\"", 7),
+  mc_host_wire_svc_response service_response;
+  need(mc_host_wire_decode_svc_response(operation_result.payload.data,
+                                       operation_result.payload.len, &service_response) ==
+           MC_HOST_WIRE_OK && service_response.status == 0 &&
+           contains_bytes(service_response.body.data, service_response.body.len, "\"tools\"", 7),
        "real tools broker responded");
   check(op_api->close(runtime, operation, NULL), "close tools service call");
 }
@@ -801,18 +798,15 @@ static void run_autocomplete(const mc_host_vm_api_v1 *vm_api,
   uint8_t result[4096];
   mc_host_buffer_v1 buffer = {result, sizeof(result), 0};
   check(op_api->result(runtime, operation, &buffer, NULL), "read autocomplete result");
-  size_t offset = 0;
-  need(read_u16(result, buffer.required, &offset) == 22 &&
-           read_u8(result, buffer.required, &offset) == 1 &&
-           read_u32(result, buffer.required, &offset) == MC_HOST_OP_AUTOCOMPLETE &&
-           read_u32(result, buffer.required, &offset) == 0,
+  mc_host_wire_operation_result operation_result;
+  need(mc_host_wire_decode_operation_result(result, buffer.required, &operation_result) ==
+           MC_HOST_WIRE_OK && operation_result.kind == MC_HOST_OP_AUTOCOMPLETE &&
+           operation_result.status == 0,
        "autocomplete operation envelope");
-  uint32_t payload_len = read_u32(result, buffer.required, &offset);
-  need(payload_len == buffer.required - offset &&
-           read_u16(result, buffer.required, &offset) == 11 &&
-           read_u8(result, buffer.required, &offset) == 1 &&
-           read_u32(result, buffer.required, &offset) == 0 &&
-           read_u32(result, buffer.required, &offset) == 2,
+  mc_host_wire_autocomplete_result completion;
+  need(mc_host_wire_decode_autocomplete_result(operation_result.payload.data,
+                 operation_result.payload.len, &completion) == MC_HOST_WIRE_OK &&
+           completion.replace_start == 0 && completion.replace_end == 2,
        "real shell autocomplete result");
   check(op_api->close(runtime, operation, NULL), "close autocomplete");
 }
@@ -924,28 +918,20 @@ static void run_control_command(const mc_host_vm_api_v1 *vm_api,
   mc_host_buffer_v1 buffer = {result, sizeof(result), 0};
   check(op_api->result(runtime, operation, &buffer, NULL), "read control result");
   need(buffer.required == status.result_length, "control result length");
-  size_t offset = 0;
-  need(read_u16(result, buffer.required, &offset) == 22 &&
-           read_u8(result, buffer.required, &offset) == 1 &&
-           read_u32(result, buffer.required, &offset) == MC_HOST_OP_EXEC_SHELL,
+  mc_host_wire_operation_result operation_result;
+  need(mc_host_wire_decode_operation_result(result, buffer.required, &operation_result) ==
+           MC_HOST_WIRE_OK && operation_result.kind == MC_HOST_OP_EXEC_SHELL,
        "operation result envelope");
-  need(read_u32(result, buffer.required, &offset) == 0, "control exit status");
-  uint32_t payload_len = read_u32(result, buffer.required, &offset);
-  need(offset + payload_len == buffer.required, "control payload bounds");
-  need(read_u16(result, buffer.required, &offset) == 2 &&
-           read_u8(result, buffer.required, &offset) == 1,
-       "ExecOutcome envelope");
-  need(read_u32(result, buffer.required, &offset) == 0, "guest process exit status");
-  uint32_t stdout_len = read_u32(result, buffer.required, &offset);
-  need(stdout_len <= buffer.required - offset, "stdout bounds");
-  need(stdout_len >= sizeof("git") - 1 &&
-           contains_bytes(result + offset, stdout_len,
+  need(operation_result.status == 0, "control exit status");
+  mc_host_wire_exec_outcome outcome;
+  need(mc_host_wire_decode_exec_outcome(operation_result.payload.data,
+             operation_result.payload.len, &outcome) == MC_HOST_WIRE_OK &&
+           outcome.exit_code == 0,
+       "guest process exit status");
+  need(outcome.stdout.len >= sizeof("git") - 1 &&
+           contains_bytes(outcome.stdout.data, outcome.stdout.len,
                           "git", sizeof("git") - 1),
        "real guest stdout");
-  offset += stdout_len;
-  uint32_t stderr_len = read_u32(result, buffer.required, &offset);
-  need(stderr_len <= buffer.required - offset && offset + stderr_len == buffer.required,
-       "stderr bounds");
   check(op_api->close(runtime, operation, NULL), "close operation");
   need(op_api->poll(runtime, operation, &status, NULL) == MC_HOST_STALE_HANDLE,
        "operation handle retires");
@@ -1106,13 +1092,18 @@ int main(int argc, char **argv) {
                                 (mc_host_bytes_v1){persist_definition.bytes, persist_definition.length}, NULL),
         "register native persistence provider");
   wire http = {0}, http_definition = {0};
-  put_u16(&http, 37); /* HttpApplicationAttachment v1 */
-  put_u8(&http, 1);
-  put_bytes(&http, (const uint8_t *)"native-http-transport", strlen("native-http-transport"));
-  put_u16(&http_definition, 20);
-  put_u8(&http_definition, 1);
-  put_u32(&http_definition, MC_HOST_ATTACHMENT_HTTP_APPLICATION);
-  put_bytes(&http_definition, http.bytes, http.length);
+  const char transport_name[] = "native-http-transport";
+  mc_host_wire_http_application_attachment http_attachment = {
+      .identity = {(const uint8_t *)transport_name, sizeof(transport_name) - 1}};
+  need(mc_host_wire_encode_http_application_attachment(&http_attachment, http.bytes,
+               sizeof(http.bytes), &http.length) == MC_HOST_WIRE_OK,
+       "encode application HTTP attachment");
+  mc_host_wire_attachment_definition http_entry = {
+      .kind = MC_HOST_ATTACHMENT_HTTP_APPLICATION,
+      .payload = {http.bytes, http.length}};
+  need(mc_host_wire_encode_attachment_definition(&http_entry, http_definition.bytes,
+               sizeof(http_definition.bytes), &http_definition.length) == MC_HOST_WIRE_OK,
+       "encode attachment definition");
   check(attachment_api.plan_add(runtime, plan,
                                 (mc_host_bytes_v1){http_definition.bytes, http_definition.length}, NULL),
         "register application HTTP transport");

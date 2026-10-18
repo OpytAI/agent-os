@@ -38,7 +38,10 @@ cc_library(
     hdrs = ["include/mc_host.h"],
     includes = ["include"],
     visibility = ["//visibility:public"],
-    deps = ["//memcontainers/contracts:embedder_c"],
+    deps = [
+        "//memcontainers/contracts:ctl_c",
+        "//memcontainers/contracts:embedder_c",
+    ],
 )
 
 cc_test(

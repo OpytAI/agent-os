@@ -26,6 +26,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::process::ExitCode;
 
+mod c_codec;
+
 // ===========================================================================
 // KDL model + reader (a minimal subset tailored to contracts/*.kdl)
 // ===========================================================================
@@ -2523,6 +2525,17 @@ fn emit_table(
         "elixir" => {
             o.push_str(&emit_elixir_messages(messages, contract));
         }
+        "c" => {
+            let guard = format!(
+                "MC_{}_CONTRACT_H",
+                screaming_snake(contract.trim_end_matches(".kdl"))
+            );
+            o.push_str(&format!(
+                "#ifndef {guard}\n#define {guard}\n\n#include <stdint.h>\n"
+            ));
+            o.push_str(&c_codec::emit(messages));
+            o.push_str(&format!("\n#endif /* {guard} */\n"));
+        }
         "md" => {
             o = format!(
                 "<!-- {} -->\n",
@@ -2699,6 +2712,7 @@ fn emit_embedder(lang: &str, nodes: &[Node], contract: &str) -> String {
                 };
                 out.push_str(&format!("#define {name} {macro_name}({value})\n"));
             }
+            out.push_str(&c_codec::emit(&collect_codec_messages(nodes)));
             out.push_str("\n#endif /* MC_EMBEDDER_CONTRACT_H */\n");
             out
         }

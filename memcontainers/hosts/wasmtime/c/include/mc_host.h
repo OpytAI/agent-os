@@ -2,6 +2,7 @@
 #define MC_HOST_H
 
 #include <stdint.h>
+#include "memcontainers/contracts/ctl.gen.h"
 #include "memcontainers/contracts/embedder.gen.h"
 
 #if defined(_WIN32)
