@@ -108,6 +108,10 @@ int main(int argc, char **argv) {
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
            runtime == 0, "reject output record limit too small for high water");
   options.known.max_output_records = 0;
+  options.known.max_snapshot_bytes = MC_HOST_HARD_MAX_SNAPSHOT_BYTES + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject snapshot limit above hard cap");
+  options.known.max_snapshot_bytes = 0;
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK,
        "accept zero future option");
   need(runtime != 0, "runtime handle");
@@ -158,6 +162,20 @@ int main(int argc, char **argv) {
        "old runtime options retain default output quotas");
   need(api.runtime_close(legacy_runtime, NULL) == MC_HOST_OK,
        "close legacy-options runtime");
+
+  struct {
+    mc_host_header_v1 header;
+    uint32_t max_vms;
+    uint32_t max_drive_ticks;
+    uint32_t max_output_bytes;
+    uint32_t max_output_records;
+  } output_options = {{24, 1, 0}, 1, 16, 4096, 64};
+  mc_host_runtime_t output_runtime = 0;
+  need(api.runtime_create((const mc_host_runtime_options_v1 *)&output_options,
+                          &output_runtime, NULL) == MC_HOST_OK,
+       "pre-snapshot runtime options retain default snapshot quota");
+  need(api.runtime_close(output_runtime, NULL) == MC_HOST_OK,
+       "close pre-snapshot-options runtime");
 
   mc_host_runtime_t second = 0;
   need(api.runtime_create(NULL, &second, NULL) == MC_HOST_OK,

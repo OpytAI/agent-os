@@ -59,6 +59,8 @@ typedef struct mc_host_runtime_options_v1 {
   /* Zero selects the default. At least 4 bytes and 4 records otherwise. */
   uint32_t max_output_bytes;
   uint32_t max_output_records;
+  /* Maximum size of one MCSN file. Zero selects the default. */
+  uint32_t max_snapshot_bytes;
 } mc_host_runtime_options_v1;
 
 typedef struct mc_host_library_info_v1 {

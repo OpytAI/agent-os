@@ -29,7 +29,6 @@ const MAX_KERNEL_BYTES: usize = 256 * 1024 * 1024;
 const MAX_VMS: usize = contract::MC_HOST_HARD_MAX_VMS as usize;
 const MAX_IMAGE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_DRIVE_TICKS: u32 = contract::MC_HOST_HARD_MAX_DRIVE_TICKS;
-const SNAPSHOT_MAX_BYTES: usize = 512 * 1024 * 1024;
 const SNAPSHOT_TOTAL_BYTES: usize = 1024 * 1024 * 1024;
 const MAX_OPERATIONS_PER_VM: usize = 64;
 const MAX_PLANS: usize = 64;
@@ -40,6 +39,7 @@ pub struct RuntimeLimits {
     pub max_drive_ticks: u32,
     pub max_output_bytes: usize,
     pub max_output_records: usize,
+    pub max_snapshot_bytes: usize,
 }
 
 impl RuntimeLimits {
@@ -48,11 +48,13 @@ impl RuntimeLimits {
         max_drive_ticks: u32,
         max_output_bytes: u32,
         max_output_records: u32,
+        max_snapshot_bytes: u32,
     ) -> Result<Self, u32> {
         if max_vms > MAX_VMS as u32
             || max_drive_ticks > MAX_DRIVE_TICKS
             || max_output_bytes > contract::MC_HOST_HARD_MAX_OUTPUT_BYTES
             || max_output_records > contract::MC_HOST_HARD_MAX_OUTPUT_RECORDS
+            || max_snapshot_bytes > contract::MC_HOST_HARD_MAX_SNAPSHOT_BYTES
         {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
@@ -81,6 +83,11 @@ impl RuntimeLimits {
                 contract::MC_HOST_DEFAULT_MAX_OUTPUT_RECORDS as usize
             } else {
                 max_output_records as usize
+            },
+            max_snapshot_bytes: if max_snapshot_bytes == 0 {
+                contract::MC_HOST_DEFAULT_MAX_SNAPSHOT_BYTES as usize
+            } else {
+                max_snapshot_bytes as usize
             },
         })
     }
@@ -332,7 +339,7 @@ impl VmRecord {
         Ok(live)
     }
 
-    pub fn snapshot(&self, baseline: Option<&[u8]>) -> Result<Vec<u8>, u32> {
+    pub fn snapshot(&self, baseline: Option<&[u8]>, max_bytes: usize) -> Result<Vec<u8>, u32> {
         let mut host = self.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
         let host = host.as_mut().ok_or(contract::MC_HOST_INVALID_STATE)?;
         let observed = self
@@ -369,7 +376,7 @@ impl VmRecord {
         {
             return Err(contract::MC_HOST_NOT_QUIESCENT);
         }
-        if host.snapshot_len() > SNAPSHOT_MAX_BYTES {
+        if host.snapshot_len() > max_bytes {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
         let bytes = match baseline {
@@ -383,7 +390,7 @@ impl VmRecord {
                 bytes
             }
         };
-        if bytes.len() > SNAPSHOT_MAX_BYTES {
+        if bytes.len() > max_bytes {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
         Ok(bytes)
@@ -1241,8 +1248,10 @@ impl RuntimeState {
         baseline: Option<&[u8]>,
     ) -> Result<u64, u32> {
         if snapshot.is_empty()
-            || snapshot.len() > 512 * 1024 * 1024
-            || baseline.is_some_and(|base| base.is_empty() || base.len() > 512 * 1024 * 1024)
+            || snapshot.len() > self.limits.max_snapshot_bytes
+            || baseline.is_some_and(|base| {
+                base.is_empty() || base.len() > self.limits.max_snapshot_bytes
+            })
         {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
@@ -1356,7 +1365,7 @@ impl RuntimeState {
         kernel_handle: u64,
         bytes: &[u8],
     ) -> Result<(u64, SnapshotDescription), u32> {
-        if bytes.is_empty() || bytes.len() > SNAPSHOT_MAX_BYTES {
+        if bytes.is_empty() || bytes.len() > self.limits.max_snapshot_bytes {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
         let description =
@@ -1440,7 +1449,10 @@ impl RuntimeState {
             }
             None => None,
         };
-        let bytes = vm.snapshot(baseline.as_ref().map(|record| record.bytes.as_slice()))?;
+        let bytes = vm.snapshot(
+            baseline.as_ref().map(|record| record.bytes.as_slice()),
+            self.limits.max_snapshot_bytes,
+        )?;
         let description = inspect_snapshot_bytes(
             &bytes,
             baseline.as_ref().map(|record| record.bytes.as_slice()),

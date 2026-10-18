@@ -1512,6 +1512,7 @@ int main(int argc, char **argv) {
   runtime_options.max_drive_ticks = 128;
   runtime_options.max_output_bytes = 1024 * 1024;
   runtime_options.max_output_records = 1024;
+  runtime_options.max_snapshot_bytes = 480 * 1024 * 1024;
   check(api.runtime_create(&runtime_options, &runtime, NULL), "create bounded runtime");
 
   mc_host_vm_api_v1 vm_api = MC_HOST_INIT(mc_host_vm_api_v1);
@@ -1634,6 +1635,36 @@ int main(int argc, char **argv) {
   need(memcmp(inspected.content_digest, full_info.content_digest, 32) == 0,
        "exact snapshot digest");
   check(snap_api.finish(runtime, full_handle, NULL), "finish full snapshot read");
+
+  need(full_info.length > 1 && full_info.length <= UINT32_MAX,
+       "real snapshot supports a tighter runtime quota");
+  mc_host_runtime_options_v1 tight_options = MC_HOST_INIT(mc_host_runtime_options_v1);
+  tight_options.max_snapshot_bytes = (uint32_t)full_info.length - 1;
+  mc_host_runtime_t tight_runtime = 0;
+  check(api.runtime_create(&tight_options, &tight_runtime, NULL),
+        "create runtime with snapshot quota below a real capture");
+  mc_host_handle_t tight_kernel = 0;
+  mc_host_kernel_info_v1 tight_kernel_info = MC_HOST_INIT(mc_host_kernel_info_v1);
+  check(vm_api.kernel_load(tight_runtime, (mc_host_bytes_v1){kernel, kernel_len},
+                           &tight_kernel, &tight_kernel_info, NULL),
+        "load real kernel into quota runtime");
+  mc_host_handle_t tight_baseline = 0;
+  mc_host_snapshot_info_v1 tight_info = MC_HOST_INIT(mc_host_snapshot_info_v1);
+  need(snap_api.baseline_import(tight_runtime, tight_kernel,
+                                (mc_host_bytes_v1){full, full_info.length},
+                                &tight_baseline, &tight_info, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           tight_baseline == 0,
+       "runtime snapshot quota rejects real baseline import");
+  mc_host_vm_restore_options_v1 tight_restore = MC_HOST_INIT(mc_host_vm_restore_options_v1);
+  tight_restore.snapshot = (mc_host_bytes_v1){full, full_info.length};
+  tight_restore.mode = MC_HOST_RESTORE_DETACHED;
+  mc_host_handle_t tight_vm = 0;
+  need(vm_api.vm_restore(tight_runtime, tight_kernel, 0, &tight_restore,
+                         &tight_vm, NULL) == MC_HOST_RESOURCE_LIMIT && tight_vm == 0,
+       "runtime snapshot quota rejects real restore");
+  check(vm_api.kernel_close(tight_runtime, tight_kernel, NULL),
+        "close quota runtime kernel");
+  check(api.runtime_close(tight_runtime, NULL), "close quota runtime");
 
   mc_host_handle_t baseline = 0;
   mc_host_snapshot_info_v1 baseline_info = MC_HOST_INIT(mc_host_snapshot_info_v1);
