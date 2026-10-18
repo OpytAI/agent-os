@@ -1513,6 +1513,8 @@ int main(int argc, char **argv) {
   runtime_options.max_output_bytes = 1024 * 1024;
   runtime_options.max_output_records = 1024;
   runtime_options.max_snapshot_bytes = 480 * 1024 * 1024;
+  runtime_options.max_snapshot_total_bytes = 900 * 1024 * 1024;
+  runtime_options.max_operations_per_vm = 16;
   check(api.runtime_create(&runtime_options, &runtime, NULL), "create bounded runtime");
 
   mc_host_vm_api_v1 vm_api = MC_HOST_INIT(mc_host_vm_api_v1);
@@ -1665,6 +1667,43 @@ int main(int argc, char **argv) {
   check(vm_api.kernel_close(tight_runtime, tight_kernel, NULL),
         "close quota runtime kernel");
   check(api.runtime_close(tight_runtime, NULL), "close quota runtime");
+
+  need(full_info.length <= UINT32_MAX / 2,
+       "real snapshot fits two-file aggregate quota test");
+  mc_host_runtime_options_v1 aggregate_options = MC_HOST_INIT(mc_host_runtime_options_v1);
+  aggregate_options.max_snapshot_total_bytes = (uint32_t)full_info.length * 2 - 1;
+  mc_host_runtime_t aggregate_runtime = 0;
+  check(api.runtime_create(&aggregate_options, &aggregate_runtime, NULL),
+        "create runtime with aggregate snapshot quota");
+  mc_host_handle_t aggregate_kernel = 0;
+  mc_host_kernel_info_v1 aggregate_kernel_info = MC_HOST_INIT(mc_host_kernel_info_v1);
+  check(vm_api.kernel_load(aggregate_runtime, (mc_host_bytes_v1){kernel, kernel_len},
+                           &aggregate_kernel, &aggregate_kernel_info, NULL),
+        "load kernel into aggregate quota runtime");
+  mc_host_handle_t retained_baseline = 0;
+  mc_host_snapshot_info_v1 retained_info = MC_HOST_INIT(mc_host_snapshot_info_v1);
+  check(snap_api.baseline_import(aggregate_runtime, aggregate_kernel,
+                                 (mc_host_bytes_v1){full, full_info.length},
+                                 &retained_baseline, &retained_info, NULL),
+        "retain one real snapshot within aggregate quota");
+  mc_host_handle_t second_baseline = 0;
+  need(snap_api.baseline_import(aggregate_runtime, aggregate_kernel,
+                                (mc_host_bytes_v1){full, full_info.length},
+                                &second_baseline, &retained_info, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           second_baseline == 0,
+       "aggregate quota rejects second real baseline");
+  mc_host_vm_restore_options_v1 aggregate_restore = MC_HOST_INIT(mc_host_vm_restore_options_v1);
+  aggregate_restore.snapshot = (mc_host_bytes_v1){full, full_info.length};
+  aggregate_restore.mode = MC_HOST_RESTORE_DETACHED;
+  mc_host_handle_t aggregate_vm = 0;
+  need(vm_api.vm_restore(aggregate_runtime, aggregate_kernel, 0, &aggregate_restore,
+                         &aggregate_vm, NULL) == MC_HOST_RESOURCE_LIMIT && aggregate_vm == 0,
+       "aggregate quota rejects restore while baseline is retained");
+  check(snap_api.baseline_close(aggregate_runtime, retained_baseline, NULL),
+        "release retained baseline quota");
+  check(vm_api.kernel_close(aggregate_runtime, aggregate_kernel, NULL),
+        "close aggregate quota kernel");
+  check(api.runtime_close(aggregate_runtime, NULL), "close aggregate quota runtime");
 
   mc_host_handle_t baseline = 0;
   mc_host_snapshot_info_v1 baseline_info = MC_HOST_INIT(mc_host_snapshot_info_v1);

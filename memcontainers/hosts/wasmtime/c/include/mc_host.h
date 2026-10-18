@@ -61,6 +61,10 @@ typedef struct mc_host_runtime_options_v1 {
   uint32_t max_output_records;
   /* Maximum size of one MCSN file. Zero selects the default. */
   uint32_t max_snapshot_bytes;
+  /* Aggregate retained snapshots, baselines, and restore buffers. */
+  uint32_t max_snapshot_total_bytes;
+  /* Maximum outstanding control operations on one VM. */
+  uint32_t max_operations_per_vm;
 } mc_host_runtime_options_v1;
 
 typedef struct mc_host_library_info_v1 {

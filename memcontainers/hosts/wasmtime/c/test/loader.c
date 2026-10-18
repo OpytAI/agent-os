@@ -112,6 +112,14 @@ int main(int argc, char **argv) {
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
            runtime == 0, "reject snapshot limit above hard cap");
   options.known.max_snapshot_bytes = 0;
+  options.known.max_snapshot_total_bytes = MC_HOST_HARD_MAX_SNAPSHOT_TOTAL_BYTES + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject total snapshot quota above hard cap");
+  options.known.max_snapshot_total_bytes = 0;
+  options.known.max_operations_per_vm = MC_HOST_HARD_MAX_OPERATIONS_PER_VM + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject operation limit above hard cap");
+  options.known.max_operations_per_vm = 0;
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK,
        "accept zero future option");
   need(runtime != 0, "runtime handle");
@@ -176,6 +184,21 @@ int main(int argc, char **argv) {
        "pre-snapshot runtime options retain default snapshot quota");
   need(api.runtime_close(output_runtime, NULL) == MC_HOST_OK,
        "close pre-snapshot-options runtime");
+
+  struct {
+    mc_host_header_v1 header;
+    uint32_t max_vms;
+    uint32_t max_drive_ticks;
+    uint32_t max_output_bytes;
+    uint32_t max_output_records;
+    uint32_t max_snapshot_bytes;
+  } snapshot_options = {{28, 1, 0}, 1, 16, 4096, 64, 8192};
+  mc_host_runtime_t snapshot_runtime = 0;
+  need(api.runtime_create((const mc_host_runtime_options_v1 *)&snapshot_options,
+                          &snapshot_runtime, NULL) == MC_HOST_OK,
+       "pre-total runtime options retain default aggregate quota");
+  need(api.runtime_close(snapshot_runtime, NULL) == MC_HOST_OK,
+       "close pre-total-options runtime");
 
   mc_host_runtime_t second = 0;
   need(api.runtime_create(NULL, &second, NULL) == MC_HOST_OK,

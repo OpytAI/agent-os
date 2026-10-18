@@ -81,6 +81,8 @@ struct RuntimeOptions {
     max_output_bytes: u32,
     max_output_records: u32,
     max_snapshot_bytes: u32,
+    max_snapshot_total_bytes: u32,
+    max_operations_per_vm: u32,
 }
 
 #[repr(C)]
@@ -417,6 +419,14 @@ const _: () = {
     assert!(
         offset_of!(RuntimeOptions, max_snapshot_bytes)
             == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_MAX_SNAPSHOT_BYTES_OFFSET
+    );
+    assert!(
+        offset_of!(RuntimeOptions, max_snapshot_total_bytes)
+            == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_MAX_SNAPSHOT_TOTAL_BYTES_OFFSET
+    );
+    assert!(
+        offset_of!(RuntimeOptions, max_operations_per_vm)
+            == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_MAX_OPERATIONS_PER_VM_OFFSET
     );
 
     assert!(size_of::<LibraryInfo>() == contract::MC_HOST_LAYOUT_LIBRARY_INFO_SIZE);
@@ -1050,7 +1060,7 @@ fn ranges_overlap(a: usize, a_len: usize, b: usize, b_len: usize) -> bool {
 
 unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimits, ResultCode> {
     if options.is_null() {
-        return RuntimeLimits::new(0, 0, 0, 0, 0);
+        return RuntimeLimits::new(0, 0, 0, 0, 0, 0, 0);
     }
     if (options as usize) % align_of::<Header>() != 0 {
         return Err(contract::MC_HOST_INVALID_ARGUMENT);
@@ -1058,15 +1068,16 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
     let header = unsafe { ptr::read(options.cast::<Header>()) };
     const OLD_OPTIONS_SIZE: usize = 16;
     const PRE_SNAPSHOT_OPTIONS_SIZE: usize = 24;
+    const PRE_TOTAL_OPTIONS_SIZE: usize = 28;
     if !valid_header(header, size_of::<Header>())
         || header.size as usize > MAX_INPUT_STRUCT_SIZE
-        || !matches!(header.size as usize, 8 | OLD_OPTIONS_SIZE | PRE_SNAPSHOT_OPTIONS_SIZE)
+        || !matches!(header.size as usize, 8 | OLD_OPTIONS_SIZE | PRE_SNAPSHOT_OPTIONS_SIZE | PRE_TOTAL_OPTIONS_SIZE)
             && (header.size as usize) < size_of::<RuntimeOptions>()
     {
         return Err(contract::MC_HOST_INVALID_ARGUMENT);
     }
     if header.size as usize == size_of::<Header>() {
-        return RuntimeLimits::new(0, 0, 0, 0, 0);
+        return RuntimeLimits::new(0, 0, 0, 0, 0, 0, 0);
     }
     let tail_len = (header.size as usize).saturating_sub(size_of::<RuntimeOptions>());
     if tail_len != 0 {
@@ -1090,17 +1101,26 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
             unsafe { ptr::read((options as *const u8).add(20).cast::<u32>()) },
         )
     };
-    let max_snapshot_bytes = if (header.size as usize) < size_of::<RuntimeOptions>() {
+    let max_snapshot_bytes = if (header.size as usize) < PRE_TOTAL_OPTIONS_SIZE {
         0
     } else {
-        unsafe { ptr::read(options) }.max_snapshot_bytes
+        unsafe { ptr::read((options as *const u8).add(24).cast::<u32>()) }
     };
+    let (max_snapshot_total_bytes, max_operations_per_vm) =
+        if (header.size as usize) < size_of::<RuntimeOptions>() {
+            (0, 0)
+        } else {
+            let options = unsafe { ptr::read(options) };
+            (options.max_snapshot_total_bytes, options.max_operations_per_vm)
+        };
     RuntimeLimits::new(
         max_vms,
         max_drive_ticks,
         max_output_bytes,
         max_output_records,
         max_snapshot_bytes,
+        max_snapshot_total_bytes,
+        max_operations_per_vm,
     )
 }
 

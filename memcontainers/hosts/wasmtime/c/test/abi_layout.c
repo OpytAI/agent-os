@@ -33,6 +33,8 @@ CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_drive_ticks, MAX_DR
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_output_bytes, MAX_OUTPUT_BYTES);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_output_records, MAX_OUTPUT_RECORDS);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_snapshot_bytes, MAX_SNAPSHOT_BYTES);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_snapshot_total_bytes, MAX_SNAPSHOT_TOTAL_BYTES);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_operations_per_vm, MAX_OPERATIONS_PER_VM);
 
 CHECK_LAYOUT(mc_host_library_info_v1, LIBRARY_INFO);
 CHECK_FIELD(mc_host_library_info_v1, LIBRARY_INFO, header, HEADER);
