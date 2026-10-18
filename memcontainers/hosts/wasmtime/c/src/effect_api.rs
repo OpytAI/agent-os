@@ -3,8 +3,9 @@
 use std::mem::{align_of, size_of};
 use std::ptr;
 
-use embedder_rust::{self as contract, EffectResponse, HostCallResponse};
+use embedder_rust::{self as contract, EffectResponse, HostCallResponse, PersistEffectResponse};
 
+use super::relay::EffectBody;
 use super::vm_api::{bytes, copy_output, output_size};
 use super::*;
 
@@ -103,14 +104,34 @@ unsafe extern "C" fn respond(
         let frame = unsafe { bytes(frame, 16 * 1024 * 1024 + 128)? };
         let response =
             EffectResponse::decode(frame).map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
-        if response.event_id as u64 != event || response.kind != contract::MC_HOST_EVENT_HOST_CALL {
+        if response.event_id as u64 != event {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
-        let payload = HostCallResponse::decode(&response.payload)
-            .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+        let payload = match response.kind {
+            contract::MC_HOST_EVENT_HOST_CALL => {
+                let body = HostCallResponse::decode(&response.payload)
+                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+                EffectBody {
+                    failed: body.failed,
+                    body: body.body,
+                }
+            }
+            contract::MC_HOST_EVENT_PERSIST_GET
+            | contract::MC_HOST_EVENT_PERSIST_PUT
+            | contract::MC_HOST_EVENT_PERSIST_DELETE
+            | contract::MC_HOST_EVENT_PERSIST_LIST => {
+                let body = PersistEffectResponse::decode(&response.payload)
+                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+                EffectBody {
+                    failed: body.failed,
+                    body: body.body,
+                }
+            }
+            _ => return Err(contract::MC_HOST_UNSUPPORTED),
+        };
         ActiveRuntime::acquire(runtime)?
             .state
-            .effect_respond(event, payload)
+            .effect_respond(event, response.kind, payload)
     })
 }
 

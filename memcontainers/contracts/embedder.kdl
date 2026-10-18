@@ -247,6 +247,7 @@ constant "MC_HOST_FEATURE_COMMIT_OPERATION" value=128 type="u64"
 constant "MC_HOST_FEATURE_ATTACHMENT_PLAN" value=256 type="u64"
 constant "MC_HOST_FEATURE_HOST_CALL_EFFECT" value=512 type="u64"
 constant "MC_HOST_FEATURE_MOUNT_OPERATION" value=1024 type="u64"
+constant "MC_HOST_FEATURE_PERSIST_EFFECT" value=2048 type="u64"
 
 constant "MC_HOST_TICK_WAITING" value=0 type="u32"
 constant "MC_HOST_TICK_RUNNABLE" value=1 type="u32"
@@ -306,6 +307,7 @@ constant "MC_HOST_OP_COMMIT_LAYER" value=16 type="u32"
 constant "MC_HOST_OP_CATALOG_INJECT" value=17 type="u32"
 
 constant "MC_HOST_ATTACHMENT_HOST_CALL" value=1 type="u32"
+constant "MC_HOST_ATTACHMENT_PERSIST" value=2 type="u32"
 
 constant "MC_HOST_EVENT_HTTP_REQUEST" value=1 type="u32"
 constant "MC_HOST_EVENT_HTTP_CANCEL" value=2 type="u32"
@@ -411,4 +413,21 @@ message "HostCallResponse" id=32 version=1 {
 message "EffectCancel" id=33 version=1 {
   field "original_event_id" type="i64"
   doc "One cancellation notice for a leased effect. Acknowledgment retires the original lease."
+}
+
+message "PersistAttachment" id=34 version=1 {
+  field "identity" type="str"
+  doc "Non-secret identity of the application persistence provider."
+}
+
+message "PersistEffectRequest" id=35 version=1 {
+  field "key" type="bytes"
+  field "value" type="bytes" opt=1
+  doc "Typed persistence request. The event kind selects get, put, delete, or list."
+}
+
+message "PersistEffectResponse" id=36 version=1 {
+  field "failed" type="bool"
+  field "body" type="bytes"
+  doc "One complete persistence result delivered before kernel poll reports ready."
 }

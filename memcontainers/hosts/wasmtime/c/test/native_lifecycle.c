@@ -1,10 +1,13 @@
 #include "mc_host.h"
 
 #include <dlfcn.h>
+#include <dirent.h>
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 static void need(int condition, const char *step) {
   if (condition) return;
@@ -31,6 +34,18 @@ static uint8_t *read_artifact(const char *path, size_t *length) {
   need(fread(bytes, 1, *length, file) == *length, "read artifact");
   need(fclose(file) == 0, "close artifact");
   return bytes;
+}
+
+static const char *test_tmpdir(void) {
+  const char *dir = getenv("TEST_TMPDIR");
+  need(dir != NULL && dir[0] == '/', "Bazel test directory");
+  return dir;
+}
+
+static void test_dir(const char *name, char *out, size_t capacity) {
+  int length = snprintf(out, capacity, "%s/%s", test_tmpdir(), name);
+  need(length > 0 && (size_t)length < capacity, "host test path");
+  need(mkdir(out, 0700) == 0 || errno == EEXIST, "create host test directory");
 }
 
 typedef struct wire {
@@ -187,9 +202,9 @@ static void run_mount_relay(const mc_host_vm_api_v1 *vm_api,
   need(status.state == MC_HOST_OP_READY, "mount installed before guest sees it");
   check(op_api->close(runtime, mount_op, NULL), "close mount operation");
 
-  wire stat = filesystem_request(MC_HOST_OP_FS_STAT, "/mnt/capi/missing", NULL, 0);
+  wire stat_request = filesystem_request(MC_HOST_OP_FS_STAT, "/mnt/capi/missing", NULL, 0);
   mc_host_handle_t stat_op = 0;
-  check(op_api->start(runtime, vm, (mc_host_bytes_v1){stat.bytes, stat.length},
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){stat_request.bytes, stat_request.length},
                       &stat_op, NULL), "start mount-backed stat");
   mc_host_handle_t event = 0;
   mc_host_effect_info_v1 info = MC_HOST_INIT(mc_host_effect_info_v1);
@@ -234,6 +249,20 @@ static void run_mount_relay(const mc_host_vm_api_v1 *vm_api,
   need(request_len == event_buffer.required - offset && request_len >= 4 &&
            read_u32(frame, event_buffer.required, &offset) == 5,
        "mount driver received one stat request");
+  uint32_t path_len = read_u32(frame, event_buffer.required, &offset);
+  need(path_len > 0 && path_len < 64 && path_len <= event_buffer.required - offset &&
+           !contains_bytes(frame + offset, path_len, "..", 2) &&
+           memchr(frame + offset, 0, path_len) == NULL,
+       "mount driver path stays inside host test directory");
+  char root[512], host_path[640];
+  test_dir("mount-root", root, sizeof(root));
+  int host_path_len = snprintf(host_path, sizeof(host_path), "%s/%.*s", root,
+                               (int)path_len, (const char *)(frame + offset));
+  need(host_path_len > 0 && (size_t)host_path_len < sizeof(host_path),
+       "host mount path");
+  struct stat metadata;
+  need(stat(host_path, &metadata) == -1 && errno == ENOENT,
+       "host mount path is genuinely absent");
 
   mc_host_handle_t first_lease = event;
   check(effect_api->release(runtime, first_lease, NULL), "release mount-driver lease");
@@ -260,7 +289,7 @@ static void run_mount_relay(const mc_host_vm_api_v1 *vm_api,
   put_u16(&reply, 32); /* HostCallResponse v1 */
   put_u8(&reply, 1);
   put_u8(&reply, 0); /* not a transport failure */
-  const uint8_t enoent[] = {44, 0, 0, 0}; /* ENOENT from constants.kdl */
+  uint8_t enoent[4] = {44, 0, 0, 0}; /* ENOENT from constants.kdl */
   put_bytes(&reply, enoent, sizeof(enoent));
   put_u16(&response, 24); /* EffectResponse v1 */
   put_u8(&response, 1);
@@ -367,6 +396,132 @@ static void cancel_mount_relay(const mc_host_vm_api_v1 *vm_api,
   need(status.state == MC_HOST_OP_CANCELLED, "filesystem operation cancelled");
   check(op_api->close(runtime, stat_op, NULL), "close cancelled filesystem call");
   check(vm_api->vm_close(runtime, vm, NULL), "finish closing source VM");
+}
+
+static void run_persist_relay(const mc_host_vm_api_v1 *vm_api,
+                              const mc_host_operation_api_v1 *op_api,
+                              const mc_host_effect_api_v1 *effect_api,
+                              mc_host_runtime_t runtime, mc_host_handle_t vm) {
+  wire read = filesystem_request(MC_HOST_OP_FS_READ, "/var/persist/capi-missing", NULL, 0);
+  mc_host_handle_t operation = 0;
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){read.bytes, read.length},
+                      &operation, NULL), "start persistence-backed read");
+  mc_host_handle_t event = 0;
+  mc_host_effect_info_v1 info = MC_HOST_INIT(mc_host_effect_info_v1);
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    options.stop_mask = MC_HOST_DRIVE_ON_EFFECT;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "drive persistence-backed read");
+    mc_host_result_t next = effect_api->next(runtime, vm, 0, &event, &info, NULL);
+    if (next == MC_HOST_OK) break;
+    need(next == MC_HOST_WOULD_BLOCK, "persistence event eventually arrives");
+  }
+  need(event != 0 && info.kind == MC_HOST_EVENT_PERSIST_GET && info.length < 256,
+       "lease real persistence request");
+  uint8_t frame[256];
+  mc_host_buffer_v1 buffer = {frame, sizeof(frame), 0};
+  check(effect_api->read(runtime, event, &buffer, NULL), "read persistence request");
+  size_t offset = 0;
+  need(read_u16(frame, buffer.required, &offset) == 23 &&
+           read_u8(frame, buffer.required, &offset) == 1 &&
+           read_u32(frame, buffer.required, &offset) == MC_HOST_EVENT_PERSIST_GET &&
+           read_u64(frame, buffer.required, &offset) == event &&
+           read_u64(frame, buffer.required, &offset) == vm,
+       "persistence event identity");
+  offset += 2; /* absent operation and socket identities */
+  need(read_u32(frame, buffer.required, &offset) == 0,
+       "persistence event flags");
+  uint32_t payload_len = read_u32(frame, buffer.required, &offset);
+  need(payload_len == buffer.required - offset &&
+           read_u16(frame, buffer.required, &offset) == 35 &&
+           read_u8(frame, buffer.required, &offset) == 1,
+       "persistence request payload");
+  uint32_t key_len = read_u32(frame, buffer.required, &offset);
+  need(key_len == strlen("capi-missing") && key_len <= buffer.required - offset &&
+           memcmp(frame + offset, "capi-missing", key_len) == 0,
+       "guest persistence key");
+  char persist_root[512], persist_path[640];
+  test_dir("persist-root", persist_root, sizeof(persist_root));
+  int persist_path_len = snprintf(persist_path, sizeof(persist_path), "%s/%.*s",
+                                  persist_root, (int)key_len, (const char *)(frame + offset));
+  need(persist_path_len > 0 && (size_t)persist_path_len < sizeof(persist_path),
+       "host persistence path");
+  FILE *stored = fopen(persist_path, "rb");
+  need(stored == NULL && errno == ENOENT, "host persistence key is genuinely absent");
+  offset += key_len;
+  need(read_u8(frame, buffer.required, &offset) == 0 && offset == buffer.required,
+       "GET carries no value");
+
+  wire payload = {0}, response = {0};
+  put_u16(&payload, 36); /* PersistEffectResponse v1 */
+  put_u8(&payload, 1);
+  put_u8(&payload, 0); /* no transport failure */
+  const uint8_t absent = 0;
+  put_bytes(&payload, &absent, 1); /* PERSIST_GET_ABSENT */
+  put_u16(&response, 24);
+  put_u8(&response, 1);
+  put_u32(&response, MC_HOST_EVENT_PERSIST_GET);
+  put_u64(&response, event);
+  put_bytes(&response, payload.bytes, payload.length);
+  check(effect_api->respond(runtime, event,
+                            (mc_host_bytes_v1){response.bytes, response.length}, NULL),
+        "answer persistence GET");
+  mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
+  int list_requests = 0;
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    options.stop_mask = MC_HOST_DRIVE_ON_OPERATION | MC_HOST_DRIVE_ON_EFFECT;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "finish persistence read");
+    check(op_api->poll(runtime, operation, &status, NULL), "poll persistence read");
+    if (status.state == MC_HOST_OP_READY) break;
+    need(status.state == MC_HOST_OP_PENDING, "persistence read stays pending");
+    mc_host_handle_t next_event = 0;
+    mc_host_effect_info_v1 next_info = MC_HOST_INIT(mc_host_effect_info_v1);
+    mc_host_result_t next = effect_api->next(runtime, vm, 0, &next_event, &next_info, NULL);
+    if (next == MC_HOST_WOULD_BLOCK) continue;
+    check(next, "lease follow-up persistence request");
+    need(next_info.kind == MC_HOST_EVENT_PERSIST_LIST && list_requests++ == 0,
+         "missing key checks directory prefix once");
+    DIR *directory = opendir(persist_root);
+    need(directory != NULL, "open host persistence directory");
+    struct dirent *entry;
+    int listed = 0;
+    while ((entry = readdir(directory)) != NULL) {
+      if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0)
+        ++listed;
+    }
+    need(closedir(directory) == 0 && listed == 0,
+         "host persistence directory has no matching keys");
+    wire list_payload = {0}, list_response = {0};
+    put_u16(&list_payload, 36);
+    put_u8(&list_payload, 1);
+    put_u8(&list_payload, 0);
+    put_u32(&list_payload, 0); /* empty directory listing */
+    put_u16(&list_response, 24);
+    put_u8(&list_response, 1);
+    put_u32(&list_response, MC_HOST_EVENT_PERSIST_LIST);
+    put_u64(&list_response, next_event);
+    put_bytes(&list_response, list_payload.bytes, list_payload.length);
+    check(effect_api->respond(runtime, next_event,
+                              (mc_host_bytes_v1){list_response.bytes, list_response.length}, NULL),
+          "answer persistence LIST");
+  }
+  need(status.state == MC_HOST_OP_READY && status.result_length < 64 && list_requests == 1,
+       "persistence-backed read completes");
+  uint8_t result[64];
+  mc_host_buffer_v1 result_buffer = {result, sizeof(result), 0};
+  check(op_api->result(runtime, operation, &result_buffer, NULL), "read persistence result");
+  offset = 0;
+  need(read_u16(result, result_buffer.required, &offset) == 22 &&
+           read_u8(result, result_buffer.required, &offset) == 1 &&
+           read_u32(result, result_buffer.required, &offset) == MC_HOST_OP_FS_READ &&
+           (int32_t)read_u32(result, result_buffer.required, &offset) == -44,
+       "absent persistence key becomes guest ENOENT");
+  check(op_api->close(runtime, operation, NULL), "close persistence read");
 }
 
 static void run_layer_commit(const mc_host_operation_api_v1 *op_api,
@@ -777,6 +932,17 @@ int main(int argc, char **argv) {
   check(attachment_api.plan_add(runtime, plan,
                                 (mc_host_bytes_v1){definition.bytes, definition.length}, NULL),
         "register native mount driver");
+  wire persist = {0}, persist_definition = {0};
+  put_u16(&persist, 34); /* PersistAttachment v1 */
+  put_u8(&persist, 1);
+  put_bytes(&persist, (const uint8_t *)"native-test-store", strlen("native-test-store"));
+  put_u16(&persist_definition, 20);
+  put_u8(&persist_definition, 1);
+  put_u32(&persist_definition, MC_HOST_ATTACHMENT_PERSIST);
+  put_bytes(&persist_definition, persist.bytes, persist.length);
+  check(attachment_api.plan_add(runtime, plan,
+                                (mc_host_bytes_v1){persist_definition.bytes, persist_definition.length}, NULL),
+        "register native persistence provider");
   check(attachment_api.plan_seal(runtime, plan, NULL), "seal attachment plan");
 
   mc_host_handle_t kernel_handle = 0;
@@ -809,6 +975,7 @@ int main(int argc, char **argv) {
   run_autocomplete(&vm_api, &op_api, runtime, vm);
   run_service_call(&vm_api, &op_api, runtime, vm);
   run_mount_relay(&vm_api, &op_api, &effect_api, runtime, vm);
+  run_persist_relay(&vm_api, &op_api, &effect_api, runtime, vm);
 
   mc_host_snapshot_begin_options_v1 full_options = MC_HOST_INIT(mc_host_snapshot_begin_options_v1);
   full_options.mode = MC_HOST_SNAPSHOT_FULL;

@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 
-use embedder_rust::{self as contract, EffectEvent, HostCallResponse};
+use embedder_rust::{self as contract, EffectEvent};
 use host::output_queue::{OutputQueue, OutputRecord, OutputStats, LOG, STDERR, STDOUT};
 use host::{
     inspect_snapshot_bytes, ControlRetryAction, ExecOptions, KernelCacheLimit, KernelHost,
@@ -12,7 +12,7 @@ use host::{
 };
 
 use super::operations::OperationRecord;
-use super::relay::Relay;
+use super::relay::{EffectBody, Relay};
 use super::{pack_kind, unpack, MAX_GENERATION, MAX_INDEX};
 
 pub const KERNEL_KIND: u8 = 2;
@@ -36,9 +36,10 @@ const SNAPSHOT_TOTAL_BYTES: usize = 1024 * 1024 * 1024;
 const MAX_OPERATIONS_PER_VM: usize = 64;
 const MAX_PLANS: usize = 64;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct PlanRecord {
     routes: BTreeMap<String, String>,
+    persist_identity: Option<String>,
     sealed: bool,
 }
 
@@ -623,6 +624,25 @@ impl RuntimeState {
         Ok(())
     }
 
+    pub fn add_persist_provider(&self, plan: u64, identity: String) -> Result<(), u32> {
+        if identity.is_empty() || identity.contains('\0') {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let plan = resources.plans.get_mut(self.namespace, plan)?;
+        if plan.sealed {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        if plan.persist_identity.is_some() {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        plan.persist_identity = Some(identity);
+        Ok(())
+    }
+
     pub fn seal_plan(&self, plan: u64) -> Result<(), u32> {
         let mut resources = self
             .resources
@@ -641,7 +661,7 @@ impl RuntimeState {
         Ok(())
     }
 
-    fn plan_routes(&self, plan: u64) -> Result<Option<BTreeMap<String, String>>, u32> {
+    fn plan_capabilities(&self, plan: u64) -> Result<Option<PlanRecord>, u32> {
         if plan == 0 {
             return Ok(None);
         }
@@ -653,7 +673,7 @@ impl RuntimeState {
         if !plan.sealed {
             return Err(contract::MC_HOST_INVALID_STATE);
         }
-        Ok(Some(plan.routes.clone()))
+        Ok(Some(plan.clone()))
     }
 
     pub fn effect_next(&self, vm_handle: u64, mask: u64) -> Result<(u64, u32, u64), u32> {
@@ -742,9 +762,9 @@ impl RuntimeState {
         Ok(())
     }
 
-    pub fn effect_respond(&self, handle: u64, response: HostCallResponse) -> Result<(), u32> {
+    pub fn effect_respond(&self, handle: u64, kind: u32, response: EffectBody) -> Result<(), u32> {
         let (_, event_id, relay) = self.effect_record(handle)?;
-        relay.respond(event_id, handle, response)?;
+        relay.respond(event_id, handle, kind, response)?;
         self.resources
             .lock()
             .map_err(|_| contract::MC_HOST_INTERNAL)?
@@ -860,7 +880,7 @@ impl RuntimeState {
         {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
-        let routes = self.plan_routes(plan_handle)?;
+        let capabilities = self.plan_capabilities(plan_handle)?;
         let kernel_bytes = {
             let mut resources = self
                 .resources
@@ -889,9 +909,17 @@ impl RuntimeState {
             .with_stdout(Box::new(output.sink(STDOUT)))
             .with_stderr(Box::new(output.sink(STDERR)))
             .with_log(Box::new(output.sink(LOG)));
-        let relay = routes.map(|routes| Relay::new(routes.into_keys().collect()));
+        let relay = capabilities.map(|plan| {
+            Relay::new(
+                plan.routes.into_keys().collect(),
+                plan.persist_identity.is_some(),
+            )
+        });
         if let Some(relay) = &relay {
             builder = builder.with_host_call(relay.adapter());
+            if relay.persist_enabled() {
+                builder = builder.with_persist(relay.persist_adapter());
+            }
         }
         if config.deterministic {
             builder = builder.deterministic();
