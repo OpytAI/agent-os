@@ -96,6 +96,116 @@ pub struct CatalogApplyStatus {
     pub tools: usize,
 }
 
+/// Validated, canonical catalog transaction for an externally driven native host.
+/// The caller stages `records` through control retries, then starts one `tools`
+/// service call with `service_request`. The broker owns the final CAS commit.
+pub struct NativeCatalogUpdate {
+    pub records: Vec<(String, Vec<u8>)>,
+    pub service_request: Vec<u8>,
+    pub binding_names: Vec<String>,
+}
+
+pub fn prepare_native_catalog_update(
+    index_bytes: &[u8],
+    base_digest: &str,
+    records: Vec<(String, Vec<u8>)>,
+) -> Result<NativeCatalogUpdate> {
+    fn digest(value: &str) -> bool {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }
+
+    if index_bytes.is_empty()
+        || index_bytes.len() > 1024 * 1024
+        || (!base_digest.is_empty() && !digest(base_digest))
+        || records.len() > 256
+    {
+        return Err(anyhow!("invalid native catalog envelope"));
+    }
+    let index: Value = serde_json::from_slice(index_bytes)?;
+    if serde_json::to_vec(&index)? != index_bytes {
+        return Err(anyhow!("native catalog index is not canonical JSON"));
+    }
+    let generation = index
+        .get("generation")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow!("native catalog index has no generation"))?;
+    let tools = index
+        .get("tools")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("native catalog index has no tools"))?;
+    if tools.len() > 256 {
+        return Err(anyhow!("native catalog has too many tools"));
+    }
+    let mut by_sha = BTreeMap::new();
+    let mut total_bytes = 0usize;
+    for (sha, bytes) in records {
+        total_bytes = total_bytes
+            .checked_add(bytes.len())
+            .ok_or_else(|| anyhow!("native catalog records too large"))?;
+        if total_bytes > 16 * 1024 * 1024
+            || !digest(&sha)
+            || sha256_hex(&bytes) != sha
+            || serde_json::to_vec(&serde_json::from_slice::<Value>(&bytes)?)? != bytes
+            || by_sha.insert(sha, bytes).is_some()
+        {
+            return Err(anyhow!("invalid native catalog shard"));
+        }
+    }
+    let mut seen_addresses = std::collections::BTreeSet::new();
+    let mut used_shas = std::collections::BTreeSet::new();
+    let mut binding_names = Vec::new();
+    for tool in tools {
+        let address = tool
+            .get("address")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("native catalog tool has no address"))?;
+        let sha = tool
+            .get("sha")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("native catalog tool has no shard"))?;
+        if toolcore::parse_address(address).is_err() || !seen_addresses.insert(address) {
+            return Err(anyhow!("invalid or duplicate native catalog address"));
+        }
+        let bytes = by_sha
+            .get(sha)
+            .ok_or_else(|| anyhow!("native catalog is missing a referenced shard"))?;
+        used_shas.insert(sha);
+        let shard: Value = serde_json::from_slice(bytes)?;
+        let binding = shard
+            .get("binding")
+            .ok_or_else(|| anyhow!("native catalog shard has no binding"))?;
+        if binding.get("type").and_then(Value::as_str) != Some("host_call") {
+            return Err(anyhow!("native catalog requires an unsupported binding"));
+        }
+        let name = binding
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("native catalog host call has no name"))?;
+        if !toolcore::valid_binding_name(name) {
+            return Err(anyhow!("native catalog host call has invalid name"));
+        }
+        binding_names.push(name.to_owned());
+    }
+    if used_shas.len() != by_sha.len() {
+        return Err(anyhow!("native catalog includes unreferenced shards"));
+    }
+    let request = serde_json::json!({
+        "op": "catalog.apply",
+        "generation": generation,
+        "index": index,
+        "digest": sha256_hex(index_bytes),
+        "base_digest": base_digest,
+    });
+    Ok(NativeCatalogUpdate {
+        records: by_sha.into_iter().collect(),
+        service_request: serde_json::to_vec(&request)?,
+        binding_names,
+    })
+}
+
 #[derive(Debug, Clone)]
 struct SourceBytes {
     bytes: Vec<u8>,

@@ -515,3 +515,16 @@ message "WsCloseEvent" id=44 version=1 {
   field "reason" type="u32"
   doc "Close notification for an application-owned WebSocket connection."
 }
+
+message "CatalogRecord" id=45 version=1 {
+  field "sha" type="str"
+  field "bytes" type="bytes"
+  doc "One complete content-addressed catalog shard to stage before apply."
+}
+
+message "CatalogApplyRequest" id=46 version=1 {
+  field "index_json" type="bytes"
+  field "base_digest" type="str"
+  field "records" type="list<CatalogRecord>"
+  doc "Transactional live catalog update. Base digest is required; every indexed shard is supplied."
+}

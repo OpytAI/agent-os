@@ -8,7 +8,7 @@ use embedder_rust::{self as contract, EffectEvent};
 use host::output_queue::{OutputQueue, OutputRecord, OutputStats, LOG, STDERR, STDOUT};
 use host::{
     inspect_snapshot_bytes, ControlRetryAction, ExecOptions, KernelCacheLimit, KernelHost,
-    KernelHostBuilder, KernelModuleCache, SnapshotDescription, TickState,
+    KernelHostBuilder, KernelModuleCache, NativeCatalogUpdate, SnapshotDescription, TickState,
 };
 
 use super::operations::OperationRecord;
@@ -1832,6 +1832,48 @@ impl RuntimeState {
                 .operations
                 .insert(self.namespace, Arc::clone(&record))?
         };
+        vm.operations
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .push(Arc::downgrade(&record));
+        Ok(handle)
+    }
+
+    pub fn start_catalog(
+        &self,
+        vm_handle: u64,
+        update: NativeCatalogUpdate,
+    ) -> Result<u64, u32> {
+        let vm = self.vm(vm_handle)?;
+        let host = vm.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
+        if host.is_none() {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        let observed = vm.observed.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if observed.closing || observed.exit_code.is_some() {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        if observed.poisoned {
+            return Err(contract::MC_HOST_POISONED);
+        }
+        drop(observed);
+        if update
+            .binding_names
+            .iter()
+            .any(|name| !vm.relay.as_ref().is_some_and(|relay| relay.has_route(name)))
+        {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        if vm.live_operations()?.len() >= self.limits.max_operations_per_vm {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        let record = Arc::new(OperationRecord::new_catalog(vm_handle, update));
+        let handle = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .operations
+            .insert(self.namespace, Arc::clone(&record))?;
         vm.operations
             .lock()
             .map_err(|_| contract::MC_HOST_INTERNAL)?

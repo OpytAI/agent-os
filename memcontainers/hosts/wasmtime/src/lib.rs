@@ -61,7 +61,8 @@ mod snapshot;
 use snapshot::{baseline_id, hash_chunk, IntegrityTree};
 
 pub use catalog::{
-    CatalogApplyStatus, CatalogConnection, CatalogInjectOptions, CatalogSpecSource, HostToolDef,
+    prepare_native_catalog_update, CatalogApplyStatus, CatalogConnection, CatalogInjectOptions,
+    CatalogSpecSource, HostToolDef, NativeCatalogUpdate,
 };
 pub use connections::{
     derive_connection_origins, ConnectionCredential, ConnectionError, ConnectionRegistry,

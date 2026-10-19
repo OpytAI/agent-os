@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use ctl_rust::{ExecOutcome, SvcResponse};
 use embedder_rust::{self as contract, OperationResult};
-use host::{ControlAttempt, ControlRetryAction, KernelHost};
+use host::{ControlAttempt, ControlRetryAction, KernelHost, NativeCatalogUpdate};
 
 const MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
 
@@ -20,9 +20,16 @@ enum OperationState {
     PendingService(i32),
     NewRetry(ControlRetryAction),
     PendingRetry(ControlRetryAction),
+    CatalogStage(CatalogStage),
     Ready(Arc<[u8]>),
     Failed(u32),
     Cancelled,
+}
+
+struct CatalogStage {
+    actions: Vec<ControlRetryAction>,
+    cursor: usize,
+    service_request: Vec<u8>,
 }
 
 #[derive(Clone, Copy)]
@@ -47,6 +54,33 @@ impl OperationRecord {
             vm,
             kind,
             state: Mutex::new(OperationState::NewRetry(action)),
+        }
+    }
+
+    pub fn new_catalog(vm: u64, update: NativeCatalogUpdate) -> Self {
+        let mut actions = [
+            "/etc",
+            "/etc/tools",
+            "/etc/tools/catalog",
+            "/etc/tools/catalog/records",
+        ]
+        .into_iter()
+        .map(|path| ControlRetryAction::Mkdir(path.to_owned()))
+        .collect::<Vec<_>>();
+        actions.extend(update.records.into_iter().map(|(sha, data)| {
+            ControlRetryAction::Write {
+                path: format!("/etc/tools/catalog/records/{sha}"),
+                data,
+            }
+        }));
+        Self {
+            vm,
+            kind: contract::MC_HOST_OP_CATALOG_INJECT,
+            state: Mutex::new(OperationState::CatalogStage(CatalogStage {
+                actions,
+                cursor: 0,
+                service_request: update.service_request,
+            })),
         }
     }
 
@@ -99,6 +133,7 @@ impl OperationRecord {
             OperationState::PendingExec(_) => (contract::MC_HOST_OP_PENDING, 0, 0),
             OperationState::PendingService(_) => (contract::MC_HOST_OP_PENDING, 0, 0),
             OperationState::PendingRetry(_) => (contract::MC_HOST_OP_PENDING, 0, 0),
+            OperationState::CatalogStage(_) => (contract::MC_HOST_OP_PENDING, 0, 0),
             OperationState::Ready(bytes) => (contract::MC_HOST_OP_READY, 0, bytes.len() as u64),
             OperationState::Failed(error) => (contract::MC_HOST_OP_FAILED, *error, 0),
             OperationState::Cancelled => (
@@ -124,6 +159,7 @@ impl OperationRecord {
                 | OperationState::PendingService(_)
                 | OperationState::NewRetry(_)
                 | OperationState::PendingRetry(_)
+                | OperationState::CatalogStage(_)
         ))
     }
 
@@ -131,12 +167,42 @@ impl OperationRecord {
         let state = self.state.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
         Ok(matches!(
             *state,
-            OperationState::NewRetry(_) | OperationState::PendingRetry(_)
+            OperationState::NewRetry(_)
+                | OperationState::PendingRetry(_)
+                | OperationState::CatalogStage(_)
         ))
     }
 
     pub fn advance_retry(&self, host: &mut KernelHost) -> Result<(), u32> {
         let mut state = self.state.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if let OperationState::CatalogStage(stage) = &mut *state {
+            if stage.cursor < stage.actions.len() {
+                let action = &stage.actions[stage.cursor];
+                match host
+                    .control_retry_attempt(action)
+                    .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?
+                {
+                    ControlAttempt::Pending => return Ok(()),
+                    ControlAttempt::Complete { status, .. }
+                        if status == 0
+                            || (stage.cursor < 4 && status == -constants_rust::EEXIST) =>
+                    {
+                        stage.cursor += 1;
+                    }
+                    ControlAttempt::Complete { .. } => {
+                        *state = OperationState::Failed(contract::MC_HOST_KERNEL_ERROR);
+                        return Ok(());
+                    }
+                }
+            }
+            if stage.cursor == stage.actions.len() {
+                *state = match host.service_start("tools", &stage.service_request) {
+                    Ok(job) => OperationState::PendingService(job),
+                    Err(_) => OperationState::Failed(contract::MC_HOST_KERNEL_ERROR),
+                };
+            }
+            return Ok(());
+        }
         let action = match &*state {
             OperationState::NewRetry(action) | OperationState::PendingRetry(action) => action,
             _ => return Ok(()),
@@ -303,7 +369,10 @@ impl OperationRecord {
                     .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?;
                 *state = OperationState::Cancelled;
             }
-            OperationState::New | OperationState::NewRetry(_) | OperationState::PendingRetry(_) => {
+            OperationState::New
+            | OperationState::NewRetry(_)
+            | OperationState::PendingRetry(_)
+            | OperationState::CatalogStage(_) => {
                 *state = OperationState::Cancelled
             }
             OperationState::Ready(_) | OperationState::Failed(_) | OperationState::Cancelled => {}

@@ -1052,6 +1052,77 @@ impl WsCloseEvent {
     }
 }
 
+/// One complete content-addressed catalog shard to stage before apply.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CatalogRecord {
+    pub sha: String,
+    pub bytes: Vec<u8>,
+}
+
+pub const CATALOG_RECORD_MSG_ID: u16 = 45;
+pub const CATALOG_RECORD_VERSION: u8 = 1;
+impl CatalogRecord {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, CATALOG_RECORD_MSG_ID);
+        out.push(CATALOG_RECORD_VERSION);
+        ctl_put_str(&mut out, &self.sha);
+        ctl_put_bytes(&mut out, &self.bytes);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let frame_len = bytes.len();
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != CATALOG_RECORD_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != CATALOG_RECORD_VERSION { return Err(WireError::UnsupportedVersion); }
+        let sha = ctl_read_str(bytes, &mut off)?;
+        let bytes = ctl_read_bytes(bytes, &mut off)?;
+        if off != frame_len { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            sha,
+            bytes,
+        })
+    }
+}
+
+/// Transactional live catalog update. Base digest is required; every indexed shard is supplied.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CatalogApplyRequest {
+    pub index_json: Vec<u8>,
+    pub base_digest: String,
+    pub records: Vec<CatalogRecord>,
+}
+
+pub const CATALOG_APPLY_REQUEST_MSG_ID: u16 = 46;
+pub const CATALOG_APPLY_REQUEST_VERSION: u8 = 1;
+impl CatalogApplyRequest {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, CATALOG_APPLY_REQUEST_MSG_ID);
+        out.push(CATALOG_APPLY_REQUEST_VERSION);
+        ctl_put_bytes(&mut out, &self.index_json);
+        ctl_put_str(&mut out, &self.base_digest);
+        ctl_put_message_list(&mut out, &self.records, |v| v.encode());
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != CATALOG_APPLY_REQUEST_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != CATALOG_APPLY_REQUEST_VERSION { return Err(WireError::UnsupportedVersion); }
+        let index_json = ctl_read_bytes(bytes, &mut off)?;
+        let base_digest = ctl_read_str(bytes, &mut off)?;
+        let records = ctl_read_message_list(bytes, &mut off, CatalogRecord::decode)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            index_json,
+            base_digest,
+            records,
+        })
+    }
+}
+
 // Native embedder ABI constants.
 pub const MC_HOST_ABI_MAJOR: u16 = 1;
 pub const MC_HOST_ABI_MINOR: u16 = 0;

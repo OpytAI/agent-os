@@ -1736,6 +1736,10 @@ fn emit_rust_messages(messages: &[Message]) -> String {
         }
         o.push_str("        out\n    }\n\n");
         o.push_str("    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {\n");
+        let shadows_input = m.fields.iter().any(|field| field.name == "bytes");
+        if shadows_input {
+            o.push_str("        let frame_len = bytes.len();\n");
+        }
         o.push_str("        let mut off = 0usize;\n");
         o.push_str(&format!("        if ctl_read_u16(bytes, &mut off)? != {const_prefix}_MSG_ID {{ return Err(WireError::WrongMessage); }}\n"));
         o.push_str(&format!("        if ctl_read_u8(bytes, &mut off)? != {const_prefix}_VERSION {{ return Err(WireError::UnsupportedVersion); }}\n"));
@@ -1758,7 +1762,11 @@ fn emit_rust_messages(messages: &[Message]) -> String {
                 ));
             }
         }
-        o.push_str("        if off != bytes.len() { return Err(WireError::TrailingBytes); }\n");
+        if shadows_input {
+            o.push_str("        if off != frame_len { return Err(WireError::TrailingBytes); }\n");
+        } else {
+            o.push_str("        if off != bytes.len() { return Err(WireError::TrailingBytes); }\n");
+        }
         o.push_str("        Ok(Self {\n");
         for f in &m.fields {
             o.push_str(&format!("            {},\n", f.name));

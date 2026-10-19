@@ -1391,4 +1391,81 @@ static inline mc_host_wire_result mc_host_wire_encode_ws_close_event(const mc_ho
     return MC_HOST_WIRE_OK;
 }
 
+typedef struct mc_host_wire_catalog_record {
+    mc_host_wire_bytes sha;
+    mc_host_wire_bytes bytes;
+} mc_host_wire_catalog_record;
+static inline mc_host_wire_result mc_host_wire_decode_catalog_record(const uint8_t *data, size_t len, mc_host_wire_catalog_record *out) {
+    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
+    if (mc_host_wire_get_u16(&r) != 45 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
+    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        out->sha = mc_host_wire_get_bytes(&r, 1);
+        out->bytes = mc_host_wire_get_bytes(&r, 0);
+    if (r.error != MC_HOST_WIRE_OK) return r.error;
+    return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
+}
+static inline mc_host_wire_result mc_host_wire_encode_catalog_record(const mc_host_wire_catalog_record *value, uint8_t *data, size_t capacity, size_t *required) {
+    if (!value || !required || (capacity && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    for (int pass = 0; pass < 2; ++pass) {
+        mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
+        mc_host_wire_put_u16(&w, 45);
+        mc_host_wire_put_u8(&w, 1);
+            mc_host_wire_put_bytes(&w, value->sha, 1);
+            mc_host_wire_put_bytes(&w, value->bytes, 0);
+        if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
+    }
+    return MC_HOST_WIRE_OK;
+}
+
+typedef struct mc_host_wire_catalog_apply_request {
+    mc_host_wire_bytes index_json;
+    mc_host_wire_bytes base_digest;
+    mc_host_wire_list records;
+} mc_host_wire_catalog_apply_request;
+static inline mc_host_wire_result mc_host_wire_decode_catalog_apply_request(const uint8_t *data, size_t len, mc_host_wire_catalog_apply_request *out) {
+    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
+    if (mc_host_wire_get_u16(&r) != 46 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
+    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        out->index_json = mc_host_wire_get_bytes(&r, 0);
+        out->base_digest = mc_host_wire_get_bytes(&r, 1);
+        out->records.count = mc_host_wire_get_u32(&r);
+        out->records.data = r.data + r.off;
+        size_t list_start = r.off;
+        for (uint32_t i = 0; i < out->records.count && r.error == MC_HOST_WIRE_OK; ++i) {
+            mc_host_wire_bytes item = mc_host_wire_get_bytes(&r, 0);
+            mc_host_wire_catalog_record nested;
+            if (r.error == MC_HOST_WIRE_OK) r.error = mc_host_wire_decode_catalog_record(item.data, item.len, &nested);
+        }
+        out->records.len = r.off - list_start;
+    if (r.error != MC_HOST_WIRE_OK) return r.error;
+    return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
+}
+static inline mc_host_wire_result mc_host_wire_encode_catalog_apply_request(const mc_host_wire_catalog_apply_request *value, uint8_t *data, size_t capacity, size_t *required) {
+    if (!value || !required || (capacity && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    for (int pass = 0; pass < 2; ++pass) {
+        mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
+        mc_host_wire_put_u16(&w, 46);
+        mc_host_wire_put_u8(&w, 1);
+            mc_host_wire_put_bytes(&w, value->index_json, 0);
+            mc_host_wire_put_bytes(&w, value->base_digest, 1);
+            mc_host_wire_reader list_reader = {value->records.data, value->records.len, 0, MC_HOST_WIRE_OK};
+            for (uint32_t i = 0; i < value->records.count; ++i) {
+                mc_host_wire_bytes item = mc_host_wire_get_bytes(&list_reader, 0);
+                mc_host_wire_catalog_record nested;
+                if (list_reader.error == MC_HOST_WIRE_OK) list_reader.error = mc_host_wire_decode_catalog_record(item.data, item.len, &nested);
+            }
+            if (list_reader.error != MC_HOST_WIRE_OK || list_reader.off != value->records.len) return list_reader.error == MC_HOST_WIRE_OK ? MC_HOST_WIRE_TRAILING_BYTES : list_reader.error;
+            mc_host_wire_put_u32(&w, value->records.count);
+            mc_host_wire_put(&w, value->records.data, value->records.len);
+        if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
+    }
+    return MC_HOST_WIRE_OK;
+}
+
 #endif /* MC_EMBEDDER_CONTRACT_H */

@@ -1075,6 +1075,119 @@ static void run_service_call(const mc_host_vm_api_v1 *vm_api,
   check(op_api->close(runtime, operation, NULL), "close tools service call");
 }
 
+static void run_catalog_apply(const mc_host_vm_api_v1 *vm_api,
+                              const mc_host_operation_api_v1 *op_api,
+                              mc_host_runtime_t runtime, mc_host_handle_t vm) {
+  const char shard[] =
+      "{\"annotations\":{},\"binding\":{\"args\":\"json\",\"name\":\"native_echo\",\"type\":\"host_call\"}}";
+  const char sha[] = "f175d3ceee11b5f90b52fdbda276a7cfbdf302720d960dff46dbfe6c84ce8bec";
+  char index[512];
+  for (unsigned generation = 1; generation <= 2; ++generation) {
+    int index_length = snprintf(index, sizeof(index),
+        "{\"generation\":%u,\"tools\":[{\"address\":\"native.org.capi.echo\","
+        "\"description\":\"Native echo %u\",\"integration\":\"native\",\"sha\":\"%s\"}]}",
+        generation, generation, sha);
+    need(index_length > 0 && (size_t)index_length < sizeof(index),
+         "catalog index fixture fits");
+    uint8_t record_frame[256], list_frames[512], request_frame[1024], envelope[1200];
+    size_t record_length = 0, request_length = 0, envelope_length = 0;
+    mc_host_wire_catalog_record record = {
+        .sha = {(const uint8_t *)sha, sizeof(sha) - 1},
+        .bytes = {(const uint8_t *)shard, sizeof(shard) - 1}};
+    need(mc_host_wire_encode_catalog_record(&record, record_frame,
+             sizeof(record_frame), &record_length) == MC_HOST_WIRE_OK,
+         "encode content-addressed catalog shard");
+    mc_host_wire_list records = {0};
+    need(mc_host_wire_list_append(&records, list_frames, sizeof(list_frames),
+             (mc_host_wire_bytes){record_frame, record_length}) == MC_HOST_WIRE_OK,
+         "encode catalog shard list");
+    mc_host_wire_catalog_apply_request apply = {
+        .index_json = {(const uint8_t *)index, (size_t)index_length},
+        .base_digest = {(const uint8_t *)"", 0},
+        .records = records};
+    need(mc_host_wire_encode_catalog_apply_request(&apply, request_frame,
+             sizeof(request_frame), &request_length) == MC_HOST_WIRE_OK,
+         "encode catalog transaction");
+    mc_host_wire_catalog_apply_request decoded_apply;
+    need(mc_host_wire_decode_catalog_apply_request(request_frame, request_length,
+             &decoded_apply) == MC_HOST_WIRE_OK && decoded_apply.records.count == 1,
+         "decode catalog transaction");
+    mc_host_wire_operation_request operation_request = {
+        .kind = MC_HOST_OP_CATALOG_INJECT,
+        .payload = {request_frame, request_length}};
+    need(mc_host_wire_encode_operation_request(&operation_request, envelope,
+             sizeof(envelope), &envelope_length) == MC_HOST_WIRE_OK,
+         "encode catalog operation");
+    mc_host_handle_t operation = 0;
+    check(op_api->start(runtime, vm, (mc_host_bytes_v1){envelope, envelope_length},
+                        &operation, NULL), "start catalog transaction");
+    mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
+    check(op_api->poll(runtime, operation, &status, NULL), "poll catalog before drive");
+    need(status.state == MC_HOST_OP_PENDING, "catalog starts pending without guest effects");
+    for (int attempt = 0; attempt < 8192; ++attempt) {
+      mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+      options.max_ticks = 128;
+      options.stop_mask = MC_HOST_DRIVE_ON_OPERATION;
+      mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+      check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "drive catalog transaction");
+      check(op_api->poll(runtime, operation, &status, NULL), "poll catalog transaction");
+      if (status.state == MC_HOST_OP_READY) break;
+      need(status.state == MC_HOST_OP_PENDING, "catalog transaction stays pending");
+    }
+    need(status.state == MC_HOST_OP_READY && status.result_length < 4096,
+         "catalog transaction completes");
+    uint8_t result[4096];
+    mc_host_buffer_v1 buffer = {result, sizeof(result), 0};
+    check(op_api->result(runtime, operation, &buffer, NULL), "read catalog result");
+    mc_host_wire_operation_result operation_result;
+    need(mc_host_wire_decode_operation_result(result, buffer.required, &operation_result) ==
+             MC_HOST_WIRE_OK && operation_result.kind == MC_HOST_OP_CATALOG_INJECT &&
+             operation_result.status == 0,
+         "catalog operation result envelope");
+    mc_host_wire_svc_response response;
+    need(mc_host_wire_decode_svc_response(operation_result.payload.data,
+             operation_result.payload.len, &response) == MC_HOST_WIRE_OK &&
+             response.status == 0,
+         "real tools broker returned catalog result");
+    if (generation == 1)
+      need(contains_bytes(response.body.data, response.body.len, "\"ok\":true", 9),
+           "catalog CAS committed");
+    else
+      need(contains_bytes(response.body.data, response.body.len, "catalog_conflict", 16),
+           "stale catalog base rejected");
+    check(op_api->close(runtime, operation, NULL), "close catalog transaction");
+  }
+  wire list = service_request("tools", "{\"op\":\"list\"}");
+  mc_host_handle_t operation = 0;
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){list.bytes, list.length},
+                      &operation, NULL), "list committed catalog");
+  mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    options.stop_mask = MC_HOST_DRIVE_ON_OPERATION;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "drive committed catalog list");
+    check(op_api->poll(runtime, operation, &status, NULL), "poll committed catalog list");
+    if (status.state == MC_HOST_OP_READY) break;
+  }
+  need(status.state == MC_HOST_OP_READY && status.result_length < 4096,
+       "committed catalog is readable");
+  uint8_t result[4096];
+  mc_host_buffer_v1 buffer = {result, sizeof(result), 0};
+  check(op_api->result(runtime, operation, &buffer, NULL), "read committed catalog list");
+  mc_host_wire_operation_result operation_result;
+  mc_host_wire_svc_response response;
+  need(mc_host_wire_decode_operation_result(result, buffer.required, &operation_result) ==
+           MC_HOST_WIRE_OK &&
+           mc_host_wire_decode_svc_response(operation_result.payload.data,
+               operation_result.payload.len, &response) == MC_HOST_WIRE_OK &&
+           contains_bytes(response.body.data, response.body.len,
+               "native.org.capi.echo", strlen("native.org.capi.echo")),
+       "committed catalog lists native tool");
+  check(op_api->close(runtime, operation, NULL), "close catalog list");
+}
+
 static void run_autocomplete(const mc_host_vm_api_v1 *vm_api,
                              const mc_host_operation_api_v1 *op_api,
                              mc_host_runtime_t runtime, mc_host_handle_t vm) {
@@ -1546,6 +1659,18 @@ int main(int argc, char **argv) {
   check(attachment_api.plan_add(runtime, plan,
                                 (mc_host_bytes_v1){definition.bytes, definition.length}, NULL),
         "register native mount driver");
+  wire tool_route = {0}, tool_definition = {0};
+  put_u16(&tool_route, 29);
+  put_u8(&tool_route, 1);
+  put_bytes(&tool_route, (const uint8_t *)"native_echo", strlen("native_echo"));
+  put_bytes(&tool_route, (const uint8_t *)"native-tool-handler", strlen("native-tool-handler"));
+  put_u16(&tool_definition, 20);
+  put_u8(&tool_definition, 1);
+  put_u32(&tool_definition, MC_HOST_ATTACHMENT_HOST_CALL);
+  put_bytes(&tool_definition, tool_route.bytes, tool_route.length);
+  check(attachment_api.plan_add(runtime, plan,
+                                (mc_host_bytes_v1){tool_definition.bytes, tool_definition.length}, NULL),
+        "register native tool handler");
   wire persist = {0}, persist_definition = {0};
   put_u16(&persist, 34); /* PersistAttachment v1 */
   put_u8(&persist, 1);
@@ -1609,6 +1734,7 @@ int main(int argc, char **argv) {
   run_layer_commit(&op_api, runtime, vm);
   run_autocomplete(&vm_api, &op_api, runtime, vm);
   run_service_call(&vm_api, &op_api, runtime, vm);
+  run_catalog_apply(&vm_api, &op_api, runtime, vm);
   run_mount_relay(&vm_api, &op_api, &effect_api, runtime, vm);
   run_persist_relay(&vm_api, &op_api, &effect_api, runtime, vm);
   run_http_relay(&vm_api, &op_api, &effect_api, runtime, vm);

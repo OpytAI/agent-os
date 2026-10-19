@@ -6,13 +6,16 @@ use constants_rust::{
     AUTOCOMPLETE_MAX_FRAME_BYTES, AUTOCOMPLETE_MAX_ITEMS, EXEC_MODE_DIRECT, EXEC_MODE_SHELL,
 };
 use ctl_rust::{AutocompleteRequest, ExecRequest, SvcRequest};
-use embedder_rust::{self as contract, FilesystemRequest, MountRequest, OperationRequest};
+use embedder_rust::{
+    self as contract, CatalogApplyRequest, FilesystemRequest, MountRequest, OperationRequest,
+};
 use host::ControlRetryAction;
 
 use super::vm_api::{bytes, copy_output, output_size};
 use super::*;
 
-const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
+const MAX_REQUEST_BYTES: u64 = 18 * 1024 * 1024;
+const MAX_ORDINARY_REQUEST_BYTES: usize = 1024 * 1024;
 
 fn valid_exec_request(kind: u32, request: &ExecRequest) -> bool {
     let valid_shape = if kind == contract::MC_HOST_OP_EXEC_SHELL {
@@ -108,7 +111,28 @@ pub unsafe extern "C" fn start(
         }
         let envelope =
             OperationRequest::decode(frame).map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+        if envelope.kind != contract::MC_HOST_OP_CATALOG_INJECT
+            && frame.len() > MAX_ORDINARY_REQUEST_BYTES
+        {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
         let operation = match envelope.kind {
+            contract::MC_HOST_OP_CATALOG_INJECT => {
+                let request = CatalogApplyRequest::decode(&envelope.payload)
+                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+                let records = request
+                    .records
+                    .into_iter()
+                    .map(|record| (record.sha, record.bytes))
+                    .collect();
+                let update = host::prepare_native_catalog_update(
+                    &request.index_json,
+                    &request.base_digest,
+                    records,
+                )
+                .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+                ActiveRuntime::acquire(runtime)?.state.start_catalog(vm, update)?
+            }
             contract::MC_HOST_OP_MOUNT | contract::MC_HOST_OP_UNMOUNT => {
                 let request = MountRequest::decode(&envelope.payload)
                     .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
