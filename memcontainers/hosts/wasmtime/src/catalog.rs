@@ -206,6 +206,58 @@ pub fn prepare_native_catalog_update(
     })
 }
 
+/// Compare the restored guest catalog with the host tool definitions in a fresh
+/// attachment plan before the VM becomes visible to the embedding application.
+pub fn validate_native_restored_catalog(
+    host: &mut KernelHost,
+    host_tools: &[HostToolDef],
+) -> Result<()> {
+    let index_bytes = match host.read_file("/etc/tools/catalog/index.json") {
+        Ok(bytes) => bytes,
+        Err(_) if host_tools.is_empty() => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let index_text = std::str::from_utf8(&index_bytes)?;
+    let index = toolcore::CatalogIndex::parse(index_text)
+        .map_err(|error| anyhow!("invalid restored catalog index: {error:?}"))?;
+    let expected = host_tool_catalog_bundle(host_tools, index.generation())?;
+    let expected_tools = expected
+        .index
+        .tools
+        .iter()
+        .map(|tool| (tool.address.as_str(), tool))
+        .collect::<BTreeMap<_, _>>();
+    let expected_records = expected
+        .records
+        .iter()
+        .map(|record| (record.sha.as_str(), record.bytes.as_slice()))
+        .collect::<BTreeMap<_, _>>();
+    for entry in index.entries() {
+        let tool = expected_tools.get(entry.address.as_str()).ok_or_else(|| {
+            anyhow!(
+                "restored tool {} has no matching host attachment",
+                entry.address
+            )
+        })?;
+        if entry.description != tool.description || entry.sha != tool.sha {
+            return Err(anyhow!(
+                "restored tool {} differs from host attachment",
+                entry.address
+            ));
+        }
+        let bytes = host.read_file(&format!("/etc/tools/catalog/records/{}", entry.sha))?;
+        if sha256_hex(&bytes) != entry.sha
+            || expected_records.get(entry.sha.as_str()).copied() != Some(bytes.as_slice())
+        {
+            return Err(anyhow!(
+                "restored shard {} differs from host attachment",
+                entry.sha
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 struct SourceBytes {
     bytes: Vec<u8>,

@@ -7,8 +7,9 @@ use std::sync::{Arc, Mutex, Weak};
 use embedder_rust::{self as contract, EffectEvent};
 use host::output_queue::{OutputQueue, OutputRecord, OutputStats, LOG, STDERR, STDOUT};
 use host::{
-    inspect_snapshot_bytes, ControlRetryAction, ExecOptions, KernelCacheLimit, KernelHost,
-    KernelHostBuilder, KernelModuleCache, NativeCatalogUpdate, SnapshotDescription, TickState,
+    inspect_snapshot_bytes, ControlRetryAction, ExecOptions, HostToolDef, KernelCacheLimit,
+    KernelHost, KernelHostBuilder, KernelModuleCache, NativeCatalogUpdate, SnapshotDescription,
+    TickState,
 };
 
 use super::operations::OperationRecord;
@@ -110,6 +111,7 @@ impl RuntimeLimits {
 #[derive(Clone, Default)]
 struct PlanRecord {
     routes: BTreeMap<String, String>,
+    host_tools: Vec<HostToolDef>,
     persist_identity: Option<String>,
     http_identity: Option<String>,
     sealed: bool,
@@ -774,6 +776,33 @@ impl RuntimeState {
         Ok(())
     }
 
+    pub fn add_host_tool(&self, plan: u64, tool: HostToolDef) -> Result<(), u32> {
+        if tool.address.is_empty()
+            || tool.binding_name.is_empty()
+            || (tool.args_mode != "json" && tool.args_mode != "raw")
+        {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let plan = resources.plans.get_mut(self.namespace, plan)?;
+        if plan.sealed {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        if plan.host_tools.len() >= 256
+            || plan
+                .host_tools
+                .iter()
+                .any(|existing| existing.address == tool.address)
+        {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        plan.host_tools.push(tool);
+        Ok(())
+    }
+
     pub fn add_persist_provider(&self, plan: u64, identity: String) -> Result<(), u32> {
         if identity.is_empty() || identity.contains('\0') {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
@@ -1285,6 +1314,8 @@ impl RuntimeState {
     pub fn restore_vm(
         &self,
         kernel_handle: u64,
+        plan_handle: u64,
+        mode: u32,
         snapshot: &[u8],
         baseline: Option<&[u8]>,
     ) -> Result<u64, u32> {
@@ -1294,6 +1325,18 @@ impl RuntimeState {
                 .is_some_and(|base| base.is_empty() || base.len() > self.limits.max_snapshot_bytes)
         {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        let capabilities = if mode == contract::MC_HOST_RESTORE_STRICT {
+            self.plan_capabilities(plan_handle)?
+        } else {
+            None
+        };
+        if capabilities.as_ref().is_some_and(|plan| {
+            plan.host_tools
+                .iter()
+                .any(|tool| !plan.routes.contains_key(&tool.binding_name))
+        }) {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
         let transient_bytes = snapshot
             .len()
@@ -1331,16 +1374,32 @@ impl RuntimeState {
             self.limits.max_output_bytes * 3 / 4,
             self.limits.max_output_records,
         );
-        let builder = KernelHostBuilder::new(kernel_bytes.to_vec())
+        let mut builder = KernelHostBuilder::new(kernel_bytes.to_vec())
             .with_module_cache(Arc::clone(&self.cache))
             .with_stdout(Box::new(output.sink(STDOUT)))
             .with_stderr(Box::new(output.sink(STDERR)))
             .with_log(Box::new(output.sink(LOG)));
+        let relay = capabilities.as_ref().map(|plan| {
+            Relay::new(
+                plan.routes.keys().cloned().collect(),
+                plan.persist_identity.is_some(),
+                plan.http_identity.is_some(),
+            )
+        });
+        if let Some(relay) = &relay {
+            builder = builder.with_host_call(relay.adapter());
+            if relay.persist_enabled() {
+                builder = builder.with_persist(relay.persist_adapter());
+            }
+            if relay.http_enabled() {
+                builder = builder.with_net(relay.net_adapter());
+            }
+        }
         let restored = match baseline.as_deref() {
             Some(base) => builder.restore_incremental(&snapshot, base),
             None => builder.restore(&snapshot),
         };
-        let host = match restored {
+        let mut host = match restored {
             Ok(host) => host,
             Err(_) => {
                 self.unpin_kernel(kernel_handle)?;
@@ -1348,6 +1407,19 @@ impl RuntimeState {
                 return Err(contract::MC_HOST_SNAPSHOT_ERROR);
             }
         };
+        if mode == contract::MC_HOST_RESTORE_STRICT
+            && host::validate_native_restored_catalog(
+                &mut host,
+                capabilities
+                    .as_ref()
+                    .map_or(&[], |plan| plan.host_tools.as_slice()),
+            )
+            .is_err()
+        {
+            self.unpin_kernel(kernel_handle)?;
+            self.release_snapshot_charge(transient_bytes)?;
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
         let exit_code = host.exit_code();
         let vm = Arc::new(VmRecord {
             kernel_handle,
@@ -1364,7 +1436,7 @@ impl RuntimeState {
                 closing: false,
             }),
             operations: Mutex::new(Vec::new()),
-            relay: None,
+            relay,
             max_drive_ticks: self.limits.max_drive_ticks,
             _snapshot_anchor: Some(baseline.unwrap_or(snapshot)),
         });
@@ -1839,11 +1911,7 @@ impl RuntimeState {
         Ok(handle)
     }
 
-    pub fn start_catalog(
-        &self,
-        vm_handle: u64,
-        update: NativeCatalogUpdate,
-    ) -> Result<u64, u32> {
+    pub fn start_catalog(&self, vm_handle: u64, update: NativeCatalogUpdate) -> Result<u64, u32> {
         let vm = self.vm(vm_handle)?;
         let host = vm.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
         if host.is_none() {

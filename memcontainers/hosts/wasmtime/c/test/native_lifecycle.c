@@ -1671,6 +1671,26 @@ int main(int argc, char **argv) {
   check(attachment_api.plan_add(runtime, plan,
                                 (mc_host_bytes_v1){tool_definition.bytes, tool_definition.length}, NULL),
         "register native tool handler");
+  wire host_tool = {0}, host_tool_definition = {0};
+  mc_host_wire_host_tool_attachment host_tool_spec = {
+      .address = {(const uint8_t *)"native.org.capi.echo", strlen("native.org.capi.echo")},
+      .description = {(const uint8_t *)"Native echo 1", strlen("Native echo 1")},
+      .binding_name = {(const uint8_t *)"native_echo", strlen("native_echo")},
+      .args_mode = {(const uint8_t *)"json", strlen("json")}};
+  need(mc_host_wire_encode_host_tool_attachment(&host_tool_spec, host_tool.bytes,
+           sizeof(host_tool.bytes), &host_tool.length) == MC_HOST_WIRE_OK,
+       "encode native host tool attachment");
+  mc_host_wire_attachment_definition host_tool_entry = {
+      .kind = MC_HOST_ATTACHMENT_HOST_TOOL,
+      .payload = {host_tool.bytes, host_tool.length}};
+  need(mc_host_wire_encode_attachment_definition(&host_tool_entry,
+           host_tool_definition.bytes, sizeof(host_tool_definition.bytes),
+           &host_tool_definition.length) == MC_HOST_WIRE_OK,
+       "encode host tool definition");
+  check(attachment_api.plan_add(runtime, plan,
+                                (mc_host_bytes_v1){host_tool_definition.bytes,
+                                                   host_tool_definition.length}, NULL),
+        "register native host tool definition");
   wire persist = {0}, persist_definition = {0};
   put_u16(&persist, 34); /* PersistAttachment v1 */
   put_u8(&persist, 1);
@@ -1887,10 +1907,41 @@ int main(int argc, char **argv) {
   mc_host_vm_restore_options_v1 restore = MC_HOST_INIT(mc_host_vm_restore_options_v1);
   restore.snapshot = (mc_host_bytes_v1){delta, delta_info.length};
   restore.baseline = (mc_host_bytes_v1){full, full_info.length};
-  restore.mode = MC_HOST_RESTORE_DETACHED;
+  restore.mode = MC_HOST_RESTORE_STRICT;
   mc_host_handle_t restored = 0;
-  check(vm_api.vm_restore(runtime, kernel_handle, 0, &restore, &restored, NULL),
-        "restore real incremental snapshot");
+  need(vm_api.vm_restore(runtime, kernel_handle, 0, &restore, &restored, NULL) ==
+           MC_HOST_INVALID_STATE && restored == 0,
+       "strict restore rejects missing catalog handler");
+  mc_host_handle_t wrong_plan = 0;
+  check(attachment_api.plan_create(runtime, &wrong_plan, NULL),
+        "create mismatched restore plan");
+  check(attachment_api.plan_add(runtime, wrong_plan,
+                                (mc_host_bytes_v1){tool_definition.bytes,
+                                                   tool_definition.length}, NULL),
+        "attach handler to mismatched plan");
+  host_tool_spec.description = (mc_host_wire_bytes){
+      (const uint8_t *)"Changed definition", strlen("Changed definition")};
+  need(mc_host_wire_encode_host_tool_attachment(&host_tool_spec, host_tool.bytes,
+           sizeof(host_tool.bytes), &host_tool.length) == MC_HOST_WIRE_OK,
+       "encode mismatched host tool definition");
+  host_tool_entry.payload = (mc_host_wire_bytes){host_tool.bytes, host_tool.length};
+  need(mc_host_wire_encode_attachment_definition(&host_tool_entry,
+           host_tool_definition.bytes, sizeof(host_tool_definition.bytes),
+           &host_tool_definition.length) == MC_HOST_WIRE_OK,
+       "encode mismatched host tool attachment");
+  check(attachment_api.plan_add(runtime, wrong_plan,
+                                (mc_host_bytes_v1){host_tool_definition.bytes,
+                                                   host_tool_definition.length}, NULL),
+        "attach mismatched host tool");
+  check(attachment_api.plan_seal(runtime, wrong_plan, NULL),
+        "seal mismatched restore plan");
+  need(vm_api.vm_restore(runtime, kernel_handle, wrong_plan, &restore,
+                         &restored, NULL) == MC_HOST_INVALID_STATE && restored == 0,
+       "strict restore rejects changed host tool definition");
+  check(attachment_api.plan_close(runtime, wrong_plan, NULL),
+        "close mismatched restore plan");
+  check(vm_api.vm_restore(runtime, kernel_handle, plan, &restore, &restored, NULL),
+        "strict restore real incremental snapshot with matching attachments");
   mc_host_handle_t over_limit_vm = 0;
   need(vm_api.vm_restore(runtime, kernel_handle, 0, &restore, &over_limit_vm, NULL) ==
            MC_HOST_RESOURCE_LIMIT && over_limit_vm == 0,

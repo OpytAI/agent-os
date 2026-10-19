@@ -341,6 +341,7 @@
 #define MC_HOST_ATTACHMENT_HOST_CALL UINT32_C(1)
 #define MC_HOST_ATTACHMENT_PERSIST UINT32_C(2)
 #define MC_HOST_ATTACHMENT_HTTP_APPLICATION UINT32_C(3)
+#define MC_HOST_ATTACHMENT_HOST_TOOL UINT32_C(4)
 #define MC_HOST_EVENT_HTTP_REQUEST UINT32_C(1)
 #define MC_HOST_EVENT_HTTP_CANCEL UINT32_C(2)
 #define MC_HOST_EVENT_WS_CONNECT UINT32_C(3)
@@ -1462,6 +1463,74 @@ static inline mc_host_wire_result mc_host_wire_encode_catalog_apply_request(cons
             if (list_reader.error != MC_HOST_WIRE_OK || list_reader.off != value->records.len) return list_reader.error == MC_HOST_WIRE_OK ? MC_HOST_WIRE_TRAILING_BYTES : list_reader.error;
             mc_host_wire_put_u32(&w, value->records.count);
             mc_host_wire_put(&w, value->records.data, value->records.len);
+        if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
+    }
+    return MC_HOST_WIRE_OK;
+}
+
+typedef struct mc_host_wire_host_tool_attachment {
+    mc_host_wire_bytes address;
+    mc_host_wire_bytes description;
+    mc_host_wire_bytes binding_name;
+    mc_host_wire_bytes args_mode;
+    uint8_t has_input_schema;
+    mc_host_wire_bytes input_schema;
+    uint8_t has_output_schema;
+    mc_host_wire_bytes output_schema;
+    uint8_t has_annotations;
+    mc_host_wire_bytes annotations;
+} mc_host_wire_host_tool_attachment;
+static inline mc_host_wire_result mc_host_wire_decode_host_tool_attachment(const uint8_t *data, size_t len, mc_host_wire_host_tool_attachment *out) {
+    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
+    if (mc_host_wire_get_u16(&r) != 47 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
+    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        out->address = mc_host_wire_get_bytes(&r, 1);
+        out->description = mc_host_wire_get_bytes(&r, 1);
+        out->binding_name = mc_host_wire_get_bytes(&r, 1);
+        out->args_mode = mc_host_wire_get_bytes(&r, 1);
+    out->has_input_schema = mc_host_wire_get_flag(&r);
+    if (out->has_input_schema) {
+        out->input_schema = mc_host_wire_get_bytes(&r, 1);
+    }
+    out->has_output_schema = mc_host_wire_get_flag(&r);
+    if (out->has_output_schema) {
+        out->output_schema = mc_host_wire_get_bytes(&r, 1);
+    }
+    out->has_annotations = mc_host_wire_get_flag(&r);
+    if (out->has_annotations) {
+        out->annotations = mc_host_wire_get_bytes(&r, 1);
+    }
+    if (r.error != MC_HOST_WIRE_OK) return r.error;
+    return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
+}
+static inline mc_host_wire_result mc_host_wire_encode_host_tool_attachment(const mc_host_wire_host_tool_attachment *value, uint8_t *data, size_t capacity, size_t *required) {
+    if (!value || !required || (capacity && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    for (int pass = 0; pass < 2; ++pass) {
+        mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
+        mc_host_wire_put_u16(&w, 47);
+        mc_host_wire_put_u8(&w, 1);
+            mc_host_wire_put_bytes(&w, value->address, 1);
+            mc_host_wire_put_bytes(&w, value->description, 1);
+            mc_host_wire_put_bytes(&w, value->binding_name, 1);
+            mc_host_wire_put_bytes(&w, value->args_mode, 1);
+        if (value->has_input_schema > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
+        mc_host_wire_put_u8(&w, value->has_input_schema);
+        if (value->has_input_schema) {
+            mc_host_wire_put_bytes(&w, value->input_schema, 1);
+        }
+        if (value->has_output_schema > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
+        mc_host_wire_put_u8(&w, value->has_output_schema);
+        if (value->has_output_schema) {
+            mc_host_wire_put_bytes(&w, value->output_schema, 1);
+        }
+        if (value->has_annotations > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
+        mc_host_wire_put_u8(&w, value->has_annotations);
+        if (value->has_annotations) {
+            mc_host_wire_put_bytes(&w, value->annotations, 1);
+        }
         if (w.error != MC_HOST_WIRE_OK) return w.error;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }

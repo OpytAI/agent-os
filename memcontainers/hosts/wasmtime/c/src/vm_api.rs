@@ -234,10 +234,11 @@ pub unsafe extern "C" fn vm_restore(
         ) {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
-        if plan != 0 || options.reserved != 0 {
-            return Err(contract::MC_HOST_UNSUPPORTED);
-        }
-        if options.mode != contract::MC_HOST_RESTORE_DETACHED {
+        if options.reserved != 0
+            || (options.mode != contract::MC_HOST_RESTORE_DETACHED
+                && options.mode != contract::MC_HOST_RESTORE_STRICT)
+            || (options.mode == contract::MC_HOST_RESTORE_DETACHED && plan != 0)
+        {
             return Err(contract::MC_HOST_UNSUPPORTED);
         }
         let snapshot = unsafe { bytes(options.snapshot, 512 * 1024 * 1024)? };
@@ -267,7 +268,9 @@ pub unsafe extern "C" fn vm_restore(
         }
         unsafe { *out_vm = 0 };
         let active = ActiveRuntime::acquire(runtime)?;
-        let vm = active.state.restore_vm(kernel, snapshot, baseline)?;
+        let vm = active
+            .state
+            .restore_vm(kernel, plan, options.mode, snapshot, baseline)?;
         unsafe { *out_vm = vm };
         Ok(())
     })

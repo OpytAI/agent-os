@@ -117,6 +117,7 @@ pub const MC_HOST_OP_CATALOG_INJECT: u32 = 17;
 pub const MC_HOST_ATTACHMENT_HOST_CALL: u32 = 1;
 pub const MC_HOST_ATTACHMENT_PERSIST: u32 = 2;
 pub const MC_HOST_ATTACHMENT_HTTP_APPLICATION: u32 = 3;
+pub const MC_HOST_ATTACHMENT_HOST_TOOL: u32 = 4;
 pub const MC_HOST_EVENT_HTTP_REQUEST: u32 = 1;
 pub const MC_HOST_EVENT_HTTP_CANCEL: u32 = 2;
 pub const MC_HOST_EVENT_WS_CONNECT: u32 = 3;
@@ -1119,6 +1120,89 @@ impl CatalogApplyRequest {
             index_json,
             base_digest,
             records,
+        })
+    }
+}
+
+/// Host tool definition supplied with a strict restore plan. Its shard must match the restored catalog exactly.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HostToolAttachment {
+    pub address: String,
+    pub description: String,
+    pub binding_name: String,
+    pub args_mode: String,
+    pub input_schema: Option<String>,
+    pub output_schema: Option<String>,
+    pub annotations: Option<String>,
+}
+
+pub const HOST_TOOL_ATTACHMENT_MSG_ID: u16 = 47;
+pub const HOST_TOOL_ATTACHMENT_VERSION: u8 = 1;
+impl HostToolAttachment {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, HOST_TOOL_ATTACHMENT_MSG_ID);
+        out.push(HOST_TOOL_ATTACHMENT_VERSION);
+        ctl_put_str(&mut out, &self.address);
+        ctl_put_str(&mut out, &self.description);
+        ctl_put_str(&mut out, &self.binding_name);
+        ctl_put_str(&mut out, &self.args_mode);
+        match &self.input_schema {
+            Some(v) => {
+                out.push(1);
+        ctl_put_str(&mut out, v);
+            }
+            None => out.push(0),
+        }
+        match &self.output_schema {
+            Some(v) => {
+                out.push(1);
+        ctl_put_str(&mut out, v);
+            }
+            None => out.push(0),
+        }
+        match &self.annotations {
+            Some(v) => {
+                out.push(1);
+        ctl_put_str(&mut out, v);
+            }
+            None => out.push(0),
+        }
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != HOST_TOOL_ATTACHMENT_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != HOST_TOOL_ATTACHMENT_VERSION { return Err(WireError::UnsupportedVersion); }
+        let address = ctl_read_str(bytes, &mut off)?;
+        let description = ctl_read_str(bytes, &mut off)?;
+        let binding_name = ctl_read_str(bytes, &mut off)?;
+        let args_mode = ctl_read_str(bytes, &mut off)?;
+        let input_schema = match ctl_read_u8(bytes, &mut off)? {
+            0 => None,
+            1 => Some(ctl_read_str(bytes, &mut off)?),
+            _ => return Err(WireError::InvalidPresence),
+        };
+        let output_schema = match ctl_read_u8(bytes, &mut off)? {
+            0 => None,
+            1 => Some(ctl_read_str(bytes, &mut off)?),
+            _ => return Err(WireError::InvalidPresence),
+        };
+        let annotations = match ctl_read_u8(bytes, &mut off)? {
+            0 => None,
+            1 => Some(ctl_read_str(bytes, &mut off)?),
+            _ => return Err(WireError::InvalidPresence),
+        };
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            address,
+            description,
+            binding_name,
+            args_mode,
+            input_schema,
+            output_schema,
+            annotations,
         })
     }
 }

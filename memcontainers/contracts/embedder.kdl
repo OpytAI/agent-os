@@ -348,6 +348,7 @@ constant "MC_HOST_OP_CATALOG_INJECT" value=17 type="u32"
 constant "MC_HOST_ATTACHMENT_HOST_CALL" value=1 type="u32"
 constant "MC_HOST_ATTACHMENT_PERSIST" value=2 type="u32"
 constant "MC_HOST_ATTACHMENT_HTTP_APPLICATION" value=3 type="u32"
+constant "MC_HOST_ATTACHMENT_HOST_TOOL" value=4 type="u32"
 
 constant "MC_HOST_EVENT_HTTP_REQUEST" value=1 type="u32"
 constant "MC_HOST_EVENT_HTTP_CANCEL" value=2 type="u32"
@@ -527,4 +528,15 @@ message "CatalogApplyRequest" id=46 version=1 {
   field "base_digest" type="str"
   field "records" type="list<CatalogRecord>"
   doc "Transactional live catalog update. Base digest is required; every indexed shard is supplied."
+}
+
+message "HostToolAttachment" id=47 version=1 {
+  field "address" type="str"
+  field "description" type="str"
+  field "binding_name" type="str"
+  field "args_mode" type="str"
+  field "input_schema" type="str" opt=1
+  field "output_schema" type="str" opt=1
+  field "annotations" type="str" opt=1
+  doc "Host tool definition supplied with a strict restore plan. Its shard must match the restored catalog exactly."
 }

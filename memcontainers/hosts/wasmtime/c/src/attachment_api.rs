@@ -3,8 +3,8 @@
 use std::mem::{align_of, size_of};
 
 use embedder_rust::{
-    self as contract, AttachmentDefinition, HostCallAttachment, HttpApplicationAttachment,
-    PersistAttachment,
+    self as contract, AttachmentDefinition, HostCallAttachment, HostToolAttachment,
+    HttpApplicationAttachment, PersistAttachment,
 };
 
 use super::vm_api::bytes;
@@ -55,6 +55,22 @@ unsafe extern "C" fn plan_add(
                 ActiveRuntime::acquire(runtime)?
                     .state
                     .add_http_application(plan, transport.identity)
+            }
+            contract::MC_HOST_ATTACHMENT_HOST_TOOL => {
+                let tool = HostToolAttachment::decode(&definition.payload)
+                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+                ActiveRuntime::acquire(runtime)?.state.add_host_tool(
+                    plan,
+                    host::HostToolDef {
+                        address: tool.address,
+                        description: tool.description,
+                        binding_name: tool.binding_name,
+                        args_mode: tool.args_mode,
+                        input_schema: tool.input_schema,
+                        output_schema: tool.output_schema,
+                        annotations: tool.annotations,
+                    },
+                )
             }
             _ => Err(contract::MC_HOST_UNSUPPORTED),
         }
