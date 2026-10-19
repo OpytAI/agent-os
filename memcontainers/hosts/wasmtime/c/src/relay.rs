@@ -299,6 +299,18 @@ impl Relay {
             .is_ok_and(|inner| inner.routes.contains(name))
     }
 
+    pub fn replace_routes(&self, routes: BTreeSet<String>) -> Result<(), u32> {
+        let mut inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if inner.closed {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        if !inner.events.is_empty() || !inner.slots.is_empty() {
+            return Err(contract::MC_HOST_NOT_QUIESCENT);
+        }
+        inner.routes = routes;
+        Ok(())
+    }
+
     pub fn above_high_water(&self) -> bool {
         self.inner
             .lock()

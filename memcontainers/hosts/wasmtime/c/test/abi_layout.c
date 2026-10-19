@@ -199,6 +199,8 @@ CHECK_FIELD(mc_host_attachment_api_v1, ATTACHMENT_API, plan_create, PLAN_CREATE)
 CHECK_FIELD(mc_host_attachment_api_v1, ATTACHMENT_API, plan_add, PLAN_ADD);
 CHECK_FIELD(mc_host_attachment_api_v1, ATTACHMENT_API, plan_seal, PLAN_SEAL);
 CHECK_FIELD(mc_host_attachment_api_v1, ATTACHMENT_API, plan_close, PLAN_CLOSE);
+CHECK_FIELD(mc_host_attachment_api_v1, ATTACHMENT_API, vm_attach_update, VM_ATTACH_UPDATE);
+CHECK_FIELD(mc_host_attachment_api_v1, ATTACHMENT_API, vm_attachment_manifest, VM_ATTACHMENT_MANIFEST);
 
 CHECK_LAYOUT(mc_host_effect_info_v1, EFFECT_INFO);
 CHECK_FIELD(mc_host_effect_info_v1, EFFECT_INFO, header, HEADER);

@@ -315,6 +315,11 @@ typedef struct mc_host_attachment_api_v1 {
       mc_host_runtime_t, mc_host_handle_t, mc_host_error_v1 *);
   mc_host_result_t (MC_HOST_CALL *plan_close)(
       mc_host_runtime_t, mc_host_handle_t, mc_host_error_v1 *);
+  /* Atomically replace host-call routes and host-tool definitions in a quiescent VM. */
+  mc_host_result_t (MC_HOST_CALL *vm_attach_update)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_handle_t, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *vm_attachment_manifest)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_buffer_v1 *, mc_host_error_v1 *);
 } mc_host_attachment_api_v1;
 
 typedef struct mc_host_effect_info_v1 {

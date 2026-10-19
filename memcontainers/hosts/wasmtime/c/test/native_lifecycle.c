@@ -2439,7 +2439,53 @@ int main(int argc, char **argv) {
   check(vm_api.vm_create(runtime, kernel_handle, live_plan, &create,
                          &live_vm, NULL), "boot VM for live catalog fork");
   drive_to_prompt(&vm_api, &output_api, runtime, live_vm, NULL);
+  mc_host_handle_t expanded_plan = 0;
+  check(attachment_api.plan_create(runtime, &expanded_plan, NULL),
+        "create replacement live attachment plan");
+  check(attachment_api.plan_add(runtime, expanded_plan,
+        (mc_host_bytes_v1){tool_definition.bytes, tool_definition.length}, NULL),
+        "retain native echo route in replacement plan");
+  wire added_route = {0}, added_definition = {0};
+  put_u16(&added_route, 29);
+  put_u8(&added_route, 1);
+  put_bytes(&added_route, (const uint8_t *)"/mnt/live", 9);
+  put_bytes(&added_route, (const uint8_t *)"live-mount-driver", 17);
+  put_u16(&added_definition, 20);
+  put_u8(&added_definition, 1);
+  put_u32(&added_definition, MC_HOST_ATTACHMENT_HOST_CALL);
+  put_bytes(&added_definition, added_route.bytes, added_route.length);
+  check(attachment_api.plan_add(runtime, expanded_plan,
+        (mc_host_bytes_v1){added_definition.bytes, added_definition.length}, NULL),
+        "add live mount route");
+  check(attachment_api.plan_seal(runtime, expanded_plan, NULL),
+        "seal replacement attachment plan");
+  check(attachment_api.vm_attach_update(runtime, live_vm, expanded_plan, NULL),
+        "apply live host-call route replacement");
+  uint8_t live_manifest_data[512];
+  mc_host_buffer_v1 live_manifest_buffer = {live_manifest_data, sizeof(live_manifest_data), 0};
+  check(attachment_api.vm_attachment_manifest(runtime, live_vm, &live_manifest_buffer, NULL),
+        "read live attachment manifest");
+  mc_host_wire_live_attachment_manifest live_manifest;
+  need(mc_host_wire_decode_live_attachment_manifest(live_manifest_data,
+        live_manifest_buffer.required, &live_manifest) == MC_HOST_WIRE_OK &&
+       live_manifest.routes.count == 2,
+       "live manifest includes both registered routes");
+  wire live_mount = mount_request(MC_HOST_OP_MOUNT, "/mnt/live");
+  mc_host_handle_t live_mount_op = 0;
+  check(op_api.start(runtime, live_vm,
+        (mc_host_bytes_v1){live_mount.bytes, live_mount.length}, &live_mount_op, NULL),
+        "mount newly attached route");
+  check(op_api.close(runtime, live_mount_op, NULL), "close live mount operation");
+  need(attachment_api.vm_attach_update(runtime, live_vm, 0, NULL) == MC_HOST_INVALID_STATE,
+       "live update cannot remove mounted driver");
+  wire live_unmount = mount_request(MC_HOST_OP_UNMOUNT, "/mnt/live");
+  check(op_api.start(runtime, live_vm,
+        (mc_host_bytes_v1){live_unmount.bytes, live_unmount.length}, &live_mount_op, NULL),
+        "unmount live driver");
+  check(op_api.close(runtime, live_mount_op, NULL), "close live unmount operation");
   run_catalog_apply(&vm_api, &op_api, runtime, live_vm);
+  need(attachment_api.vm_attach_update(runtime, live_vm, 0, NULL) == MC_HOST_INVALID_STATE,
+       "live update cannot remove catalog handler");
   check(vm_api.vm_fork(runtime, live_vm, &live_child, NULL),
         "fork VM with catalog added after creation");
   need(live_child != 0 && live_child != live_vm,
@@ -2448,6 +2494,8 @@ int main(int argc, char **argv) {
   check(vm_api.vm_close(runtime, live_vm, NULL), "close live catalog fork source");
   check(attachment_api.plan_close(runtime, live_plan, NULL),
         "close live catalog fork plan");
+  check(attachment_api.plan_close(runtime, expanded_plan, NULL),
+        "close replacement attachment plan");
   check(vm_api.kernel_close(runtime, kernel_handle, NULL), "close kernel");
   check(attachment_api.plan_close(runtime, plan, NULL), "close attachment plan");
   check(api.runtime_close(runtime, NULL), "close runtime");

@@ -202,13 +202,15 @@
 #define MC_HOST_LAYOUT_OPERATION_API_PEEK_OFFSET 32
 #define MC_HOST_LAYOUT_OPERATION_API_CANCEL_OFFSET 40
 #define MC_HOST_LAYOUT_OPERATION_API_CLOSE_OFFSET 48
-#define MC_HOST_LAYOUT_ATTACHMENT_API_SIZE 40
+#define MC_HOST_LAYOUT_ATTACHMENT_API_SIZE 56
 #define MC_HOST_LAYOUT_ATTACHMENT_API_ALIGN 8
 #define MC_HOST_LAYOUT_ATTACHMENT_API_HEADER_OFFSET 0
 #define MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_CREATE_OFFSET 8
 #define MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_ADD_OFFSET 16
 #define MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_SEAL_OFFSET 24
 #define MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_CLOSE_OFFSET 32
+#define MC_HOST_LAYOUT_ATTACHMENT_API_VM_ATTACH_UPDATE_OFFSET 40
+#define MC_HOST_LAYOUT_ATTACHMENT_API_VM_ATTACHMENT_MANIFEST_OFFSET 48
 #define MC_HOST_LAYOUT_EFFECT_INFO_SIZE 24
 #define MC_HOST_LAYOUT_EFFECT_INFO_ALIGN 8
 #define MC_HOST_LAYOUT_EFFECT_INFO_HEADER_OFFSET 0
@@ -273,6 +275,7 @@
 #define MC_HOST_FEATURE_HTTP_EFFECT UINT64_C(4096)
 #define MC_HOST_FEATURE_WS_EFFECT UINT64_C(8192)
 #define MC_HOST_FEATURE_NATIVE_CONNECTION UINT64_C(16384)
+#define MC_HOST_FEATURE_LIVE_ATTACHMENT UINT64_C(32768)
 #define MC_HOST_DEFAULT_MAX_VMS UINT32_C(16)
 #define MC_HOST_HARD_MAX_VMS UINT32_C(16)
 #define MC_HOST_DEFAULT_MAX_DRIVE_TICKS UINT32_C(1000)
@@ -1896,6 +1899,112 @@ static inline mc_host_wire_result mc_host_wire_encode_tool_approval_response(con
             mc_host_wire_put_u8(&w, value->allow);
             if (value->remember_session > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
             mc_host_wire_put_u8(&w, value->remember_session);
+        if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
+    }
+    return MC_HOST_WIRE_OK;
+}
+
+typedef struct mc_host_wire_live_attachment_manifest {
+    mc_host_wire_list routes;
+    uint8_t has_persist_identity;
+    mc_host_wire_bytes persist_identity;
+    uint8_t has_http_identity;
+    mc_host_wire_bytes http_identity;
+    mc_host_wire_list connections;
+    uint8_t has_policy_digest;
+    mc_host_wire_bytes policy_digest;
+    uint8_t native_net;
+} mc_host_wire_live_attachment_manifest;
+static inline mc_host_wire_result mc_host_wire_decode_live_attachment_manifest(const uint8_t *data, size_t len, mc_host_wire_live_attachment_manifest *out) {
+    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
+    if (mc_host_wire_get_u16(&r) != 55 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
+    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        {
+        out->routes.count = mc_host_wire_get_u32(&r);
+        out->routes.data = r.data + r.off;
+        size_t list_start = r.off;
+        for (uint32_t i = 0; i < out->routes.count && r.error == MC_HOST_WIRE_OK; ++i) {
+            mc_host_wire_bytes item = mc_host_wire_get_bytes(&r, 0);
+            mc_host_wire_host_call_attachment nested;
+            if (r.error == MC_HOST_WIRE_OK) r.error = mc_host_wire_decode_host_call_attachment(item.data, item.len, &nested);
+        }
+        out->routes.len = r.off - list_start;
+        }
+    out->has_persist_identity = mc_host_wire_get_flag(&r);
+    if (out->has_persist_identity) {
+        out->persist_identity = mc_host_wire_get_bytes(&r, 1);
+    }
+    out->has_http_identity = mc_host_wire_get_flag(&r);
+    if (out->has_http_identity) {
+        out->http_identity = mc_host_wire_get_bytes(&r, 1);
+    }
+        {
+        out->connections.count = mc_host_wire_get_u32(&r);
+        out->connections.data = r.data + r.off;
+        size_t list_start = r.off;
+        for (uint32_t i = 0; i < out->connections.count && r.error == MC_HOST_WIRE_OK; ++i) {
+            mc_host_wire_bytes item = mc_host_wire_get_bytes(&r, 0);
+            mc_host_wire_connection_identity nested;
+            if (r.error == MC_HOST_WIRE_OK) r.error = mc_host_wire_decode_connection_identity(item.data, item.len, &nested);
+        }
+        out->connections.len = r.off - list_start;
+        }
+    out->has_policy_digest = mc_host_wire_get_flag(&r);
+    if (out->has_policy_digest) {
+        out->policy_digest = mc_host_wire_get_bytes(&r, 0);
+    }
+        out->native_net = mc_host_wire_get_flag(&r);
+    if (r.error != MC_HOST_WIRE_OK) return r.error;
+    return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
+}
+static inline mc_host_wire_result mc_host_wire_encode_live_attachment_manifest(const mc_host_wire_live_attachment_manifest *value, uint8_t *data, size_t capacity, size_t *required) {
+    if (!value || !required || (capacity && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    for (int pass = 0; pass < 2; ++pass) {
+        mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
+        mc_host_wire_put_u16(&w, 55);
+        mc_host_wire_put_u8(&w, 1);
+            {
+            mc_host_wire_reader list_reader = {value->routes.data, value->routes.len, 0, MC_HOST_WIRE_OK};
+            for (uint32_t i = 0; i < value->routes.count; ++i) {
+                mc_host_wire_bytes item = mc_host_wire_get_bytes(&list_reader, 0);
+                mc_host_wire_host_call_attachment nested;
+                if (list_reader.error == MC_HOST_WIRE_OK) list_reader.error = mc_host_wire_decode_host_call_attachment(item.data, item.len, &nested);
+            }
+            if (list_reader.error != MC_HOST_WIRE_OK || list_reader.off != value->routes.len) return list_reader.error == MC_HOST_WIRE_OK ? MC_HOST_WIRE_TRAILING_BYTES : list_reader.error;
+            mc_host_wire_put_u32(&w, value->routes.count);
+            mc_host_wire_put(&w, value->routes.data, value->routes.len);
+            }
+        if (value->has_persist_identity > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
+        mc_host_wire_put_u8(&w, value->has_persist_identity);
+        if (value->has_persist_identity) {
+            mc_host_wire_put_bytes(&w, value->persist_identity, 1);
+        }
+        if (value->has_http_identity > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
+        mc_host_wire_put_u8(&w, value->has_http_identity);
+        if (value->has_http_identity) {
+            mc_host_wire_put_bytes(&w, value->http_identity, 1);
+        }
+            {
+            mc_host_wire_reader list_reader = {value->connections.data, value->connections.len, 0, MC_HOST_WIRE_OK};
+            for (uint32_t i = 0; i < value->connections.count; ++i) {
+                mc_host_wire_bytes item = mc_host_wire_get_bytes(&list_reader, 0);
+                mc_host_wire_connection_identity nested;
+                if (list_reader.error == MC_HOST_WIRE_OK) list_reader.error = mc_host_wire_decode_connection_identity(item.data, item.len, &nested);
+            }
+            if (list_reader.error != MC_HOST_WIRE_OK || list_reader.off != value->connections.len) return list_reader.error == MC_HOST_WIRE_OK ? MC_HOST_WIRE_TRAILING_BYTES : list_reader.error;
+            mc_host_wire_put_u32(&w, value->connections.count);
+            mc_host_wire_put(&w, value->connections.data, value->connections.len);
+            }
+        if (value->has_policy_digest > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
+        mc_host_wire_put_u8(&w, value->has_policy_digest);
+        if (value->has_policy_digest) {
+            mc_host_wire_put_bytes(&w, value->policy_digest, 0);
+        }
+            if (value->native_net > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
+            mc_host_wire_put_u8(&w, value->native_net);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }

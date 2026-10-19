@@ -46,7 +46,8 @@ const FEATURE_BITS: u64 = contract::MC_HOST_FEATURE_VM_BASIC
     | contract::MC_HOST_FEATURE_PERSIST_EFFECT
     | contract::MC_HOST_FEATURE_HTTP_EFFECT
     | contract::MC_HOST_FEATURE_WS_EFFECT
-    | contract::MC_HOST_FEATURE_NATIVE_CONNECTION;
+    | contract::MC_HOST_FEATURE_NATIVE_CONNECTION
+    | contract::MC_HOST_FEATURE_LIVE_ATTACHMENT;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -356,6 +357,8 @@ struct AttachmentApi {
     plan_add: unsafe extern "C" fn(u64, u64, Bytes, *mut Error) -> ResultCode,
     plan_seal: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
     plan_close: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
+    vm_attach_update: unsafe extern "C" fn(u64, u64, u64, *mut Error) -> ResultCode,
+    vm_attachment_manifest: unsafe extern "C" fn(u64, u64, *mut Buffer, *mut Error) -> ResultCode,
 }
 
 #[repr(C)]
@@ -882,6 +885,10 @@ const _: () = {
         offset_of!(AttachmentApi, plan_close)
             == contract::MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_CLOSE_OFFSET
     );
+    assert!(offset_of!(AttachmentApi, vm_attach_update)
+        == contract::MC_HOST_LAYOUT_ATTACHMENT_API_VM_ATTACH_UPDATE_OFFSET);
+    assert!(offset_of!(AttachmentApi, vm_attachment_manifest)
+        == contract::MC_HOST_LAYOUT_ATTACHMENT_API_VM_ATTACHMENT_MANIFEST_OFFSET);
     assert!(size_of::<EffectInfo>() == contract::MC_HOST_LAYOUT_EFFECT_INFO_SIZE);
     assert!(align_of::<EffectInfo>() == contract::MC_HOST_LAYOUT_EFFECT_INFO_ALIGN);
     assert!(offset_of!(EffectInfo, header) == contract::MC_HOST_LAYOUT_EFFECT_INFO_HEADER_OFFSET);

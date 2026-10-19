@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex, Weak};
 
 use embedder_rust::{
     self as contract, ConnectionAttachment, ConnectionIdentity, ConnectionOrigin,
-    ConnectionPolicyAttachment, EffectEvent, HostCallAttachment, SnapshotAttachmentManifest,
+    ConnectionPolicyAttachment, EffectEvent, HostCallAttachment, LiveAttachmentManifest,
+    SnapshotAttachmentManifest,
 };
 use host::output_queue::{OutputQueue, OutputRecord, OutputStats, LOG, STDERR, STDOUT};
 use host::{
@@ -153,6 +154,37 @@ fn policy_digest(policies: &[ConnectionPolicyRule]) -> Option<Vec<u8>> {
     Some(hasher.finalize().to_vec())
 }
 
+fn live_manifest(plan: Option<&PlanRecord>) -> LiveAttachmentManifest {
+    LiveAttachmentManifest {
+        routes: plan.map_or_else(Vec::new, |plan| {
+            plan.routes
+                .iter()
+                .map(|(name, identity)| HostCallAttachment {
+                    name: name.clone(),
+                    identity: identity.clone(),
+                })
+                .collect()
+        }),
+        persist_identity: plan.and_then(|plan| plan.persist_identity.clone()),
+        http_identity: plan.and_then(|plan| plan.http_identity.clone()),
+        native_net: plan.is_some_and(|plan| plan.native_net),
+        policy_digest: plan.and_then(|plan| policy_digest(&plan.policies)),
+        connections: plan.map_or_else(Vec::new, |plan| {
+            plan.connection_identities
+                .iter()
+                .map(|(reference, origins)| ConnectionIdentity {
+                    reference: reference.clone(),
+                    origins: origins
+                        .iter()
+                        .cloned()
+                        .map(|value| ConnectionOrigin { value })
+                        .collect(),
+                })
+                .collect()
+        }),
+    }
+}
+
 struct EffectRecord {
     vm: u64,
     event_id: u64,
@@ -275,7 +307,7 @@ pub struct VmRecord {
     observed: Mutex<VmObserved>,
     operations: Mutex<Vec<Weak<OperationRecord>>>,
     relay: Option<Arc<Relay>>,
-    attachments: Option<PlanRecord>,
+    attachments: Mutex<Option<PlanRecord>>,
     max_drive_ticks: u32,
     // The Rust host memoizes baseline integrity by buffer address. Keep the
     // immutable full MCSN bytes at that address until this VM is closed.
@@ -993,6 +1025,105 @@ impl RuntimeState {
         Ok(Some(plan.clone()))
     }
 
+    pub fn vm_attachment_manifest(&self, vm_handle: u64) -> Result<Vec<u8>, u32> {
+        let vm = self.vm(vm_handle)?;
+        let attachments = vm
+            .attachments
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        Ok(live_manifest(attachments.as_ref()).encode())
+    }
+
+    pub fn vm_attach_update(&self, vm_handle: u64, plan_handle: u64) -> Result<(), u32> {
+        let candidate = self.plan_capabilities(plan_handle)?;
+        let vm = self.vm(vm_handle)?;
+        let mut attachments = vm
+            .attachments
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let same_fixed = |current: Option<&PlanRecord>| {
+            current.and_then(|plan| plan.persist_identity.as_ref())
+                == candidate
+                    .as_ref()
+                    .and_then(|plan| plan.persist_identity.as_ref())
+                && current.and_then(|plan| plan.http_identity.as_ref())
+                    == candidate
+                        .as_ref()
+                        .and_then(|plan| plan.http_identity.as_ref())
+                && current.is_some_and(|plan| plan.native_net)
+                    == candidate.as_ref().is_some_and(|plan| plan.native_net)
+                && current.map_or_else(ConnectionRegistry::new, |plan| plan.connections.clone())
+                    == candidate
+                        .as_ref()
+                        .map_or_else(ConnectionRegistry::new, |plan| plan.connections.clone())
+                && current.map_or(&[][..], |plan| plan.policies.as_slice())
+                    == candidate
+                        .as_ref()
+                        .map_or(&[][..], |plan| plan.policies.as_slice())
+        };
+        if !same_fixed(attachments.as_ref()) {
+            return Err(contract::MC_HOST_UNSUPPORTED);
+        }
+        if candidate.as_ref().is_some_and(|plan| {
+            plan.host_tools
+                .iter()
+                .any(|tool| !plan.routes.contains_key(&tool.binding_name))
+        }) {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        let mut host = vm.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
+        let host = host.as_mut().ok_or(contract::MC_HOST_INVALID_STATE)?;
+        let observed = vm.observed.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if observed.closing || observed.poisoned {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        drop(observed);
+        let pending_operation = vm
+            .live_operations()?
+            .iter()
+            .try_fold(false, |pending, operation| {
+                operation.pending().map(|is_pending| pending || is_pending)
+            })?;
+        if host
+            .inflight_egress()
+            .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?
+            != 0
+            || host
+                .pending_commits()
+                .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?
+                != 0
+            || pending_operation
+            || vm
+                .relay
+                .as_ref()
+                .is_some_and(|relay| relay.has_snapshot_blockers())
+        {
+            return Err(contract::MC_HOST_NOT_QUIESCENT);
+        }
+        let routes = candidate.as_ref().map_or_else(Default::default, |plan| {
+            plan.routes.keys().cloned().collect()
+        });
+        let connections = candidate.as_ref().map_or_else(Default::default, |plan| {
+            plan.connection_identities.keys().cloned().collect()
+        });
+        host::validate_native_restored_catalog(
+            host,
+            candidate
+                .as_ref()
+                .map_or(&[], |plan| plan.host_tools.as_slice()),
+            &connections,
+        )
+        .map_err(|_| contract::MC_HOST_INVALID_STATE)?;
+        host::validate_native_restored_mounts(host, &routes, true)
+            .map_err(|_| contract::MC_HOST_INVALID_STATE)?;
+        vm.relay
+            .as_ref()
+            .ok_or(contract::MC_HOST_INTERNAL)?
+            .replace_routes(routes)?;
+        *attachments = candidate;
+        Ok(())
+    }
+
     pub fn effect_next(&self, vm_handle: u64, mask: u64) -> Result<(u64, u32, u64), u32> {
         let vm = self.vm(vm_handle)?;
         let relay = vm.relay.as_ref().ok_or(contract::MC_HOST_UNSUPPORTED)?;
@@ -1358,11 +1489,17 @@ impl RuntimeState {
             .with_stdout(Box::new(output.sink(STDOUT)))
             .with_stderr(Box::new(output.sink(STDERR)))
             .with_log(Box::new(output.sink(LOG)));
-        let relay = capabilities.as_ref().map(|plan| {
+        let relay = Some({
             Relay::new(
-                plan.routes.keys().cloned().collect(),
-                plan.persist_identity.is_some(),
-                plan.http_identity.is_some(),
+                capabilities.as_ref().map_or_else(Default::default, |plan| {
+                    plan.routes.keys().cloned().collect()
+                }),
+                capabilities
+                    .as_ref()
+                    .is_some_and(|plan| plan.persist_identity.is_some()),
+                capabilities
+                    .as_ref()
+                    .is_some_and(|plan| plan.http_identity.is_some()),
             )
         });
         if let Some(relay) = &relay {
@@ -1418,7 +1555,7 @@ impl RuntimeState {
             }),
             operations: Mutex::new(Vec::new()),
             relay,
-            attachments: capabilities,
+            attachments: Mutex::new(capabilities),
             max_drive_ticks: self.limits.max_drive_ticks,
             _snapshot_anchor: None,
         });
@@ -1585,11 +1722,17 @@ impl RuntimeState {
             .with_stdout(Box::new(output.sink(STDOUT)))
             .with_stderr(Box::new(output.sink(STDERR)))
             .with_log(Box::new(output.sink(LOG)));
-        let relay = capabilities.as_ref().map(|plan| {
+        let relay = Some({
             Relay::new(
-                plan.routes.keys().cloned().collect(),
-                plan.persist_identity.is_some(),
-                plan.http_identity.is_some(),
+                capabilities.as_ref().map_or_else(Default::default, |plan| {
+                    plan.routes.keys().cloned().collect()
+                }),
+                capabilities
+                    .as_ref()
+                    .is_some_and(|plan| plan.persist_identity.is_some()),
+                capabilities
+                    .as_ref()
+                    .is_some_and(|plan| plan.http_identity.is_some()),
             )
         });
         if let Some(relay) = &relay {
@@ -1671,7 +1814,7 @@ impl RuntimeState {
             }),
             operations: Mutex::new(Vec::new()),
             relay,
-            attachments: capabilities,
+            attachments: Mutex::new(capabilities),
             max_drive_ticks: self.limits.max_drive_ticks,
             _snapshot_anchor: Some(baseline.unwrap_or(snapshot)),
         });
@@ -1700,10 +1843,11 @@ impl RuntimeState {
     /// native attachment registry.
     pub fn fork_vm(&self, source_handle: u64) -> Result<u64, u32> {
         let source = self.vm(source_handle)?;
-        let (snapshot_handle, _) = self.begin_snapshot(source_handle, None)?;
+        let (snapshot_handle, _, source_attachments) =
+            self.begin_snapshot_inner(source_handle, None)?;
         let result = (|| {
             let snapshot = self.snapshot_record(snapshot_handle)?;
-            let plan_handle = if let Some(mut plan) = source.attachments.clone() {
+            let plan_handle = if let Some(mut plan) = source_attachments {
                 plan.sealed = true;
                 let mut resources = self
                     .resources
@@ -1841,6 +1985,15 @@ impl RuntimeState {
         vm_handle: u64,
         baseline_handle: Option<u64>,
     ) -> Result<(u64, SnapshotDescription), u32> {
+        let (handle, description, _) = self.begin_snapshot_inner(vm_handle, baseline_handle)?;
+        Ok((handle, description))
+    }
+
+    fn begin_snapshot_inner(
+        &self,
+        vm_handle: u64,
+        baseline_handle: Option<u64>,
+    ) -> Result<(u64, SnapshotDescription, Option<PlanRecord>), u32> {
         let vm = self.vm(vm_handle)?;
         let baseline = match baseline_handle {
             Some(handle) => {
@@ -1871,6 +2024,11 @@ impl RuntimeState {
                 reserved: available,
             }
         };
+        let attachments = vm
+            .attachments
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let live_manifest = live_manifest(attachments.as_ref());
         let bytes = vm.snapshot(
             baseline.as_ref().map(|record| record.bytes.as_slice()),
             self.limits.max_snapshot_bytes.min(reservation.reserved),
@@ -1889,41 +2047,12 @@ impl RuntimeState {
             bytes,
             attachment_manifest: SnapshotAttachmentManifest {
                 content_digest: description.content_digest.to_vec(),
-                routes: vm.attachments.as_ref().map_or_else(Vec::new, |plan| {
-                    plan.routes
-                        .iter()
-                        .map(|(name, identity)| HostCallAttachment {
-                            name: name.clone(),
-                            identity: identity.clone(),
-                        })
-                        .collect()
-                }),
-                persist_identity: vm
-                    .attachments
-                    .as_ref()
-                    .and_then(|plan| plan.persist_identity.clone()),
-                http_identity: vm
-                    .attachments
-                    .as_ref()
-                    .and_then(|plan| plan.http_identity.clone()),
-                native_net: vm.attachments.as_ref().is_some_and(|plan| plan.native_net),
-                policy_digest: vm
-                    .attachments
-                    .as_ref()
-                    .and_then(|plan| policy_digest(&plan.policies)),
-                connections: vm.attachments.as_ref().map_or_else(Vec::new, |plan| {
-                    plan.connection_identities
-                        .iter()
-                        .map(|(reference, origins)| ConnectionIdentity {
-                            reference: reference.clone(),
-                            origins: origins
-                                .iter()
-                                .cloned()
-                                .map(|value| ConnectionOrigin { value })
-                                .collect(),
-                        })
-                        .collect()
-                }),
+                routes: live_manifest.routes,
+                persist_identity: live_manifest.persist_identity,
+                http_identity: live_manifest.http_identity,
+                native_net: live_manifest.native_net,
+                policy_digest: live_manifest.policy_digest,
+                connections: live_manifest.connections,
             }
             .encode(),
             kernel_handle: vm.kernel_handle,
@@ -1931,7 +2060,7 @@ impl RuntimeState {
         let handle = resources.snapshots.insert(self.namespace, record)?;
         resources.snapshot_bytes -= reservation.reserved - length;
         reservation.reserved = 0;
-        Ok((handle, description))
+        Ok((handle, description, attachments.clone()))
     }
 
     pub fn snapshot_record(&self, handle: u64) -> Result<Arc<SnapshotRecord>, u32> {
@@ -2243,6 +2372,10 @@ impl RuntimeState {
 
     pub fn start_catalog(&self, vm_handle: u64, update: NativeCatalogUpdate) -> Result<u64, u32> {
         let vm = self.vm(vm_handle)?;
+        let attachments = vm
+            .attachments
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
         let host = vm.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
         if host.is_none() {
             return Err(contract::MC_HOST_INVALID_STATE);
@@ -2260,7 +2393,7 @@ impl RuntimeState {
             .iter()
             .any(|name| !vm.relay.as_ref().is_some_and(|relay| relay.has_route(name)))
             || update.connection_refs.iter().any(|reference| {
-                !vm.attachments
+                !attachments
                     .as_ref()
                     .is_some_and(|plan| plan.connection_identities.contains_key(reference))
             })

@@ -54,7 +54,7 @@ fn origin_of(url: &str) -> Option<String> {
     Some(format!("{}://{}", &url[..scheme_end], &after[..host_end]))
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConnectionRegistry {
     entries: HashMap<String, ConnectionEntry>,
 }

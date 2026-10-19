@@ -46,6 +46,7 @@ pub const MC_HOST_FEATURE_PERSIST_EFFECT: u64 = 2048;
 pub const MC_HOST_FEATURE_HTTP_EFFECT: u64 = 4096;
 pub const MC_HOST_FEATURE_WS_EFFECT: u64 = 8192;
 pub const MC_HOST_FEATURE_NATIVE_CONNECTION: u64 = 16384;
+pub const MC_HOST_FEATURE_LIVE_ATTACHMENT: u64 = 32768;
 pub const MC_HOST_DEFAULT_MAX_VMS: u32 = 16;
 pub const MC_HOST_HARD_MAX_VMS: u32 = 16;
 pub const MC_HOST_DEFAULT_MAX_DRIVE_TICKS: u32 = 1000;
@@ -1524,6 +1525,85 @@ impl ToolApprovalResponse {
     }
 }
 
+/// Current non-secret VM attachment identities, including live route changes.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LiveAttachmentManifest {
+    pub routes: Vec<HostCallAttachment>,
+    pub persist_identity: Option<String>,
+    pub http_identity: Option<String>,
+    pub connections: Vec<ConnectionIdentity>,
+    pub policy_digest: Option<Vec<u8>>,
+    pub native_net: bool,
+}
+
+pub const LIVE_ATTACHMENT_MANIFEST_MSG_ID: u16 = 55;
+pub const LIVE_ATTACHMENT_MANIFEST_VERSION: u8 = 1;
+impl LiveAttachmentManifest {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, LIVE_ATTACHMENT_MANIFEST_MSG_ID);
+        out.push(LIVE_ATTACHMENT_MANIFEST_VERSION);
+        ctl_put_message_list(&mut out, &self.routes, |v| v.encode());
+        match &self.persist_identity {
+            Some(v) => {
+                out.push(1);
+        ctl_put_str(&mut out, v);
+            }
+            None => out.push(0),
+        }
+        match &self.http_identity {
+            Some(v) => {
+                out.push(1);
+        ctl_put_str(&mut out, v);
+            }
+            None => out.push(0),
+        }
+        ctl_put_message_list(&mut out, &self.connections, |v| v.encode());
+        match &self.policy_digest {
+            Some(v) => {
+                out.push(1);
+        ctl_put_bytes(&mut out, v);
+            }
+            None => out.push(0),
+        }
+        ctl_put_bool(&mut out, self.native_net);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != LIVE_ATTACHMENT_MANIFEST_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != LIVE_ATTACHMENT_MANIFEST_VERSION { return Err(WireError::UnsupportedVersion); }
+        let routes = ctl_read_message_list(bytes, &mut off, HostCallAttachment::decode)?;
+        let persist_identity = match ctl_read_u8(bytes, &mut off)? {
+            0 => None,
+            1 => Some(ctl_read_str(bytes, &mut off)?),
+            _ => return Err(WireError::InvalidPresence),
+        };
+        let http_identity = match ctl_read_u8(bytes, &mut off)? {
+            0 => None,
+            1 => Some(ctl_read_str(bytes, &mut off)?),
+            _ => return Err(WireError::InvalidPresence),
+        };
+        let connections = ctl_read_message_list(bytes, &mut off, ConnectionIdentity::decode)?;
+        let policy_digest = match ctl_read_u8(bytes, &mut off)? {
+            0 => None,
+            1 => Some(ctl_read_bytes(bytes, &mut off)?),
+            _ => return Err(WireError::InvalidPresence),
+        };
+        let native_net = ctl_read_bool(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            routes,
+            persist_identity,
+            http_identity,
+            connections,
+            policy_digest,
+            native_net,
+        })
+    }
+}
+
 // Native embedder ABI constants.
 pub const MC_HOST_ABI_MAJOR: u16 = 1;
 pub const MC_HOST_ABI_MINOR: u16 = 0;
@@ -1723,13 +1803,15 @@ pub const MC_HOST_LAYOUT_OPERATION_API_RESULT_OFFSET: usize = 24;
 pub const MC_HOST_LAYOUT_OPERATION_API_PEEK_OFFSET: usize = 32;
 pub const MC_HOST_LAYOUT_OPERATION_API_CANCEL_OFFSET: usize = 40;
 pub const MC_HOST_LAYOUT_OPERATION_API_CLOSE_OFFSET: usize = 48;
-pub const MC_HOST_LAYOUT_ATTACHMENT_API_SIZE: usize = 40;
+pub const MC_HOST_LAYOUT_ATTACHMENT_API_SIZE: usize = 56;
 pub const MC_HOST_LAYOUT_ATTACHMENT_API_ALIGN: usize = 8;
 pub const MC_HOST_LAYOUT_ATTACHMENT_API_HEADER_OFFSET: usize = 0;
 pub const MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_CREATE_OFFSET: usize = 8;
 pub const MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_ADD_OFFSET: usize = 16;
 pub const MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_SEAL_OFFSET: usize = 24;
 pub const MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_CLOSE_OFFSET: usize = 32;
+pub const MC_HOST_LAYOUT_ATTACHMENT_API_VM_ATTACH_UPDATE_OFFSET: usize = 40;
+pub const MC_HOST_LAYOUT_ATTACHMENT_API_VM_ATTACHMENT_MANIFEST_OFFSET: usize = 48;
 pub const MC_HOST_LAYOUT_EFFECT_INFO_SIZE: usize = 24;
 pub const MC_HOST_LAYOUT_EFFECT_INFO_ALIGN: usize = 8;
 pub const MC_HOST_LAYOUT_EFFECT_INFO_HEADER_OFFSET: usize = 0;

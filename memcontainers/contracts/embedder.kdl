@@ -204,12 +204,14 @@ layout "OPERATION_API" size=56 align=8 {
   offset "cancel" value=40
   offset "close" value=48
 }
-layout "ATTACHMENT_API" size=40 align=8 {
+layout "ATTACHMENT_API" size=56 align=8 {
   offset "header" value=0
   offset "plan_create" value=8
   offset "plan_add" value=16
   offset "plan_seal" value=24
   offset "plan_close" value=32
+  offset "vm_attach_update" value=40
+  offset "vm_attachment_manifest" value=48
 }
 layout "EFFECT_INFO" size=24 align=8 {
   offset "header" value=0
@@ -277,6 +279,7 @@ constant "MC_HOST_FEATURE_PERSIST_EFFECT" value=2048 type="u64"
 constant "MC_HOST_FEATURE_HTTP_EFFECT" value=4096 type="u64"
 constant "MC_HOST_FEATURE_WS_EFFECT" value=8192 type="u64"
 constant "MC_HOST_FEATURE_NATIVE_CONNECTION" value=16384 type="u64"
+constant "MC_HOST_FEATURE_LIVE_ATTACHMENT" value=32768 type="u64"
 constant "MC_HOST_DEFAULT_MAX_VMS" value=16 type="u32"
 constant "MC_HOST_HARD_MAX_VMS" value=16 type="u32"
 constant "MC_HOST_DEFAULT_MAX_DRIVE_TICKS" value=1000 type="u32"
@@ -597,4 +600,14 @@ message "ToolApprovalResponse" id=52 version=1 {
   field "allow" type="bool"
   field "remember_session" type="bool"
   doc "One approval decision for the waiting native HTTP request."
+}
+
+message "LiveAttachmentManifest" id=55 version=1 {
+  field "routes" type="list<HostCallAttachment>"
+  field "persist_identity" type="str" opt=1
+  field "http_identity" type="str" opt=1
+  field "connections" type="list<ConnectionIdentity>"
+  field "policy_digest" type="bytes" opt=1
+  field "native_net" type="bool"
+  doc "Current non-secret VM attachment identities, including live route changes."
 }
