@@ -1,4 +1,5 @@
-load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 load("@rules_rust//rust:defs.bzl", "rust_shared_library")
 load("//memcontainers/hosts/wasmtime:defs.bzl", "host_release_shared_library")
 
@@ -43,6 +44,26 @@ cc_library(
         "//memcontainers/contracts:ctl_c",
         "//memcontainers/contracts:embedder_c",
     ],
+)
+
+cc_binary(
+    name = "mc_host_example",
+    srcs = ["examples/hello.c"],
+    linkopts = ["-ldl"],
+    deps = [":headers"],
+)
+
+pkg_tar(
+    name = "mc_host_sdk",
+    files = {
+        ":mc_host_release": "lib/libmc_host.so",
+        ":mc_host_example": "bin/mc_host_example",
+        "include/mc_host.h": "include/mc_host.h",
+        "//memcontainers/contracts:gen/ctl.gen.h": "include/memcontainers/contracts/ctl.gen.h",
+        "//memcontainers/contracts:gen/embedder.gen.h": "include/memcontainers/contracts/embedder.gen.h",
+    },
+    owner = "0.0",
+    visibility = ["//visibility:public"],
 )
 
 cc_test(
