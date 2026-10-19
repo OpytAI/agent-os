@@ -5,7 +5,7 @@ use std::ptr;
 
 use embedder_rust::{
     self as contract, EffectResponse, HostCallResponse, HttpEffectResponse, PersistEffectResponse,
-    WsConnectResponse, WsSendResponse,
+    ToolApprovalResponse, WsConnectResponse, WsSendResponse,
 };
 
 use super::relay::EffectBody;
@@ -152,6 +152,18 @@ fn decode_response(event: u64, frame: &[u8]) -> Result<(u32, EffectBody), u32> {
                 failed: body.failed,
                 head: Vec::new(),
                 body: Vec::new(),
+            }
+        }
+        contract::MC_HOST_EVENT_TOOL_APPROVAL => {
+            let body = ToolApprovalResponse::decode(&response.payload)
+                .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+            if !body.allow && body.remember_session {
+                return Err(contract::MC_HOST_INVALID_ARGUMENT);
+            }
+            EffectBody {
+                failed: !body.allow,
+                head: Vec::new(),
+                body: vec![u8::from(body.remember_session)],
             }
         }
         _ => return Err(contract::MC_HOST_UNSUPPORTED),

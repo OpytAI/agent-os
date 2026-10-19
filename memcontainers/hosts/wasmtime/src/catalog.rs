@@ -103,6 +103,7 @@ pub struct NativeCatalogUpdate {
     pub records: Vec<(String, Vec<u8>)>,
     pub service_request: Vec<u8>,
     pub binding_names: Vec<String>,
+    pub connection_refs: Vec<String>,
 }
 
 pub fn prepare_native_catalog_update(
@@ -157,6 +158,7 @@ pub fn prepare_native_catalog_update(
     let mut seen_addresses = std::collections::BTreeSet::new();
     let mut used_shas = std::collections::BTreeSet::new();
     let mut binding_names = Vec::new();
+    let mut connection_refs = Vec::new();
     for tool in tools {
         let address = tool
             .get("address")
@@ -177,17 +179,20 @@ pub fn prepare_native_catalog_update(
         let binding = shard
             .get("binding")
             .ok_or_else(|| anyhow!("native catalog shard has no binding"))?;
-        if binding.get("type").and_then(Value::as_str) != Some("host_call") {
-            return Err(anyhow!("native catalog requires an unsupported binding"));
+        match binding.get("type").and_then(Value::as_str) {
+            Some("host_call") => {
+                let name = binding
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow!("native catalog host call has no name"))?;
+                if !toolcore::valid_binding_name(name) {
+                    return Err(anyhow!("native catalog host call has invalid name"));
+                }
+                binding_names.push(name.to_owned());
+            }
+            Some("service") => connection_refs.push(connection_ref_for_address(address)?),
+            _ => return Err(anyhow!("native catalog requires an unsupported binding")),
         }
-        let name = binding
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("native catalog host call has no name"))?;
-        if !toolcore::valid_binding_name(name) {
-            return Err(anyhow!("native catalog host call has invalid name"));
-        }
-        binding_names.push(name.to_owned());
     }
     if used_shas.len() != by_sha.len() {
         return Err(anyhow!("native catalog includes unreferenced shards"));
@@ -203,7 +208,14 @@ pub fn prepare_native_catalog_update(
         records: by_sha.into_iter().collect(),
         service_request: serde_json::to_vec(&request)?,
         binding_names,
+        connection_refs,
     })
+}
+
+fn connection_ref_for_address(address: &str) -> Result<String> {
+    let (integration, owner, connection, _) =
+        toolcore::parse_address(address).map_err(|_| anyhow!("invalid catalog address"))?;
+    Ok(format!("{integration}.{owner}.{connection}"))
 }
 
 /// Compare the restored guest catalog with the host tool definitions in a fresh
@@ -211,6 +223,7 @@ pub fn prepare_native_catalog_update(
 pub fn validate_native_restored_catalog(
     host: &mut KernelHost,
     host_tools: &[HostToolDef],
+    connection_refs: &std::collections::BTreeSet<String>,
 ) -> Result<()> {
     let index_bytes = match host.read_file("/etc/tools/catalog/index.json") {
         Ok(bytes) => bytes,
@@ -233,26 +246,39 @@ pub fn validate_native_restored_catalog(
         .map(|record| (record.sha.as_str(), record.bytes.as_slice()))
         .collect::<BTreeMap<_, _>>();
     for entry in index.entries() {
-        let tool = expected_tools.get(entry.address.as_str()).ok_or_else(|| {
-            anyhow!(
-                "restored tool {} has no matching host attachment",
-                entry.address
-            )
-        })?;
-        if entry.description != tool.description || entry.sha != tool.sha {
-            return Err(anyhow!(
-                "restored tool {} differs from host attachment",
-                entry.address
-            ));
-        }
         let bytes = host.read_file(&format!("/etc/tools/catalog/records/{}", entry.sha))?;
-        if sha256_hex(&bytes) != entry.sha
-            || expected_records.get(entry.sha.as_str()).copied() != Some(bytes.as_slice())
-        {
-            return Err(anyhow!(
-                "restored shard {} differs from host attachment",
-                entry.sha
-            ));
+        if sha256_hex(&bytes) != entry.sha {
+            return Err(anyhow!("restored shard {} is corrupt", entry.sha));
+        }
+        let record = toolcore::hydrate_record(entry, std::str::from_utf8(&bytes)?)
+            .map_err(|error| anyhow!("invalid restored shard: {error:?}"))?;
+        match record.binding {
+            toolcore::Binding::HostCall { .. } => {
+                let tool = expected_tools.get(entry.address.as_str()).ok_or_else(|| {
+                    anyhow!(
+                        "restored tool {} has no matching host attachment",
+                        entry.address
+                    )
+                })?;
+                if entry.description != tool.description
+                    || entry.sha != tool.sha
+                    || expected_records.get(entry.sha.as_str()).copied() != Some(bytes.as_slice())
+                {
+                    return Err(anyhow!(
+                        "restored tool {} differs from host attachment",
+                        entry.address
+                    ));
+                }
+            }
+            toolcore::Binding::Service { .. } => {
+                let reference = connection_ref_for_address(&entry.address)?;
+                if !connection_refs.contains(&reference) {
+                    return Err(anyhow!(
+                        "restored tool {} has no connection {reference}",
+                        entry.address
+                    ));
+                }
+            }
         }
     }
     Ok(())
@@ -264,6 +290,7 @@ pub fn validate_native_restored_catalog(
 pub fn validate_native_fork_catalog(
     host: &mut KernelHost,
     route_names: &std::collections::BTreeSet<String>,
+    connection_refs: &std::collections::BTreeSet<String>,
 ) -> Result<()> {
     let index_bytes = match host.read_file("/etc/tools/catalog/index.json") {
         Ok(bytes) => bytes,
@@ -282,6 +309,8 @@ pub fn validate_native_fork_catalog(
             .map_err(|error| anyhow!("invalid fork catalog shard: {error:?}"))?;
         match record.binding {
             toolcore::Binding::HostCall { name, .. } if route_names.contains(&name) => {}
+            toolcore::Binding::Service { .. }
+                if connection_refs.contains(&connection_ref_for_address(&entry.address)?) => {}
             _ => return Err(anyhow!("fork catalog has an unavailable native binding")),
         }
     }

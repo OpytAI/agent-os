@@ -2,16 +2,19 @@
 //! answers later without running application code under the Wasmtime store lock.
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 
 use constants_rust::{
     EAGAIN, EMSGSIZE, PERSIST_OP_DELETE, PERSIST_OP_GET, PERSIST_OP_LIST, PERSIST_OP_PUT,
 };
 use embedder_rust::{
     self as contract, EffectCancel, HostCallEvent, HttpEffectRequest, PersistEffectRequest,
-    WsCloseEvent, WsConnectRequest, WsSendRequest,
+    ToolApprovalRequest, WsCloseEvent, WsConnectRequest, WsSendRequest,
 };
-use host::{HostCallCapability, NetCapability, PersistCapability};
+use host::{
+    HostCallCapability, NetCapability, PersistCapability, ToolApprovalDecision, ToolApprovalFacts,
+    ToolApprover,
+};
 
 const MAX_EVENTS: usize = 256;
 const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
@@ -72,6 +75,7 @@ pub struct EffectBody {
 }
 
 struct Inner {
+    closed: bool,
     routes: BTreeSet<String>,
     persist_enabled: bool,
     http_enabled: bool,
@@ -83,6 +87,7 @@ struct Inner {
     sockets: HashMap<i32, WsSocket>,
     queued_bytes: usize,
     response_bytes: usize,
+    approvals: HashMap<i32, mpsc::Sender<ToolApprovalDecision>>,
 }
 
 impl Inner {
@@ -247,6 +252,7 @@ impl Relay {
     pub fn new(routes: BTreeSet<String>, persist_enabled: bool, http_enabled: bool) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(Inner {
+                closed: false,
                 routes,
                 persist_enabled,
                 http_enabled,
@@ -258,6 +264,7 @@ impl Relay {
                 sockets: HashMap::new(),
                 queued_bytes: 0,
                 response_bytes: 0,
+                approvals: HashMap::new(),
             }),
         })
     }
@@ -280,6 +287,10 @@ impl Relay {
 
     pub fn net_adapter(self: &Arc<Self>) -> Box<dyn NetCapability> {
         Box::new(RelayNet(Arc::clone(self)))
+    }
+
+    pub fn approver(self: &Arc<Self>) -> Arc<dyn ToolApprover> {
+        Arc::new(RelayApprover(Arc::clone(self)))
     }
 
     pub fn has_route(&self, name: &str) -> bool {
@@ -543,6 +554,28 @@ impl Relay {
         {
             return Err(contract::MC_HOST_INVALID_STATE);
         }
+        if kind == contract::MC_HOST_EVENT_TOOL_APPROVAL {
+            if !response.head.is_empty() || response.body.len() != 1 || response.body[0] > 1 {
+                return Err(contract::MC_HOST_INVALID_ARGUMENT);
+            }
+            let slot_handle = inner
+                .slots
+                .iter()
+                .find_map(|(slot_handle, slot)| (slot.event_id == id).then_some(*slot_handle))
+                .ok_or(contract::MC_HOST_CANCELLED)?;
+            let sender = inner
+                .approvals
+                .remove(&slot_handle)
+                .ok_or(contract::MC_HOST_CANCELLED)?;
+            inner.slots.remove(&slot_handle);
+            let event = inner.events.remove(&id).ok_or(contract::MC_HOST_INTERNAL)?;
+            inner.queued_bytes -= event.payload.len();
+            let _ = sender.send(ToolApprovalDecision {
+                allow: !response.failed,
+                remember_session: !response.failed && response.body[0] == 1,
+            });
+            return Ok(());
+        }
         if kind == contract::MC_HOST_EVENT_WS_CONNECT || kind == contract::MC_HOST_EVENT_WS_SEND {
             if !response.head.is_empty() || !response.body.is_empty() {
                 return Err(contract::MC_HOST_INVALID_ARGUMENT);
@@ -604,7 +637,10 @@ impl Relay {
         response: EffectBody,
         declared_body_len: usize,
     ) -> Result<(), u32> {
-        if kind == contract::MC_HOST_EVENT_WS_CONNECT || kind == contract::MC_HOST_EVENT_WS_SEND {
+        if kind == contract::MC_HOST_EVENT_WS_CONNECT
+            || kind == contract::MC_HOST_EVENT_WS_SEND
+            || kind == contract::MC_HOST_EVENT_TOOL_APPROVAL
+        {
             return Err(contract::MC_HOST_UNSUPPORTED);
         }
         if !response.body.is_empty()
@@ -752,6 +788,8 @@ impl Relay {
 
     pub fn cancel_all(&self) {
         if let Ok(mut inner) = self.inner.lock() {
+            inner.closed = true;
+            inner.approvals.clear();
             let closing = inner
                 .sockets
                 .iter_mut()
@@ -978,6 +1016,40 @@ fn is_persist_kind(kind: u32) -> bool {
             | contract::MC_HOST_EVENT_PERSIST_DELETE
             | contract::MC_HOST_EVENT_PERSIST_LIST
     )
+}
+
+struct RelayApprover(Arc<Relay>);
+
+impl ToolApprover for RelayApprover {
+    fn approve(&self, facts: ToolApprovalFacts) -> ToolApprovalDecision {
+        let denied = ToolApprovalDecision {
+            allow: false,
+            remember_session: false,
+        };
+        let payload = ToolApprovalRequest {
+            connection: facts.connection,
+            method: facts.method,
+            url: facts.url,
+            origin: facts.origin,
+            args_digest: facts.args_digest,
+        }
+        .encode();
+        let receiver = {
+            let Ok(mut inner) = self.0.inner.lock() else {
+                return denied;
+            };
+            if inner.closed {
+                return denied;
+            }
+            let Some(handle) = inner.enqueue(contract::MC_HOST_EVENT_TOOL_APPROVAL, payload) else {
+                return denied;
+            };
+            let (sender, receiver) = mpsc::channel();
+            inner.approvals.insert(handle, sender);
+            receiver
+        };
+        receiver.recv().unwrap_or(denied)
+    }
 }
 
 struct RelayNet(Arc<Relay>);

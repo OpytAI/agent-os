@@ -23,6 +23,7 @@ rust_shared_library(
         "//memcontainers/contracts:constants_rust",
         "//memcontainers/contracts:snapshot_rust",
         "//memcontainers/hosts/wasmtime:lib",
+        "@host_crates//:sha2",
     ],
 )
 

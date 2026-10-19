@@ -276,6 +276,7 @@ constant "MC_HOST_FEATURE_MOUNT_OPERATION" value=1024 type="u64"
 constant "MC_HOST_FEATURE_PERSIST_EFFECT" value=2048 type="u64"
 constant "MC_HOST_FEATURE_HTTP_EFFECT" value=4096 type="u64"
 constant "MC_HOST_FEATURE_WS_EFFECT" value=8192 type="u64"
+constant "MC_HOST_FEATURE_NATIVE_CONNECTION" value=16384 type="u64"
 constant "MC_HOST_DEFAULT_MAX_VMS" value=16 type="u32"
 constant "MC_HOST_HARD_MAX_VMS" value=16 type="u32"
 constant "MC_HOST_DEFAULT_MAX_DRIVE_TICKS" value=1000 type="u32"
@@ -352,6 +353,8 @@ constant "MC_HOST_ATTACHMENT_HOST_CALL" value=1 type="u32"
 constant "MC_HOST_ATTACHMENT_PERSIST" value=2 type="u32"
 constant "MC_HOST_ATTACHMENT_HTTP_APPLICATION" value=3 type="u32"
 constant "MC_HOST_ATTACHMENT_HOST_TOOL" value=4 type="u32"
+constant "MC_HOST_ATTACHMENT_CONNECTION" value=5 type="u32"
+constant "MC_HOST_ATTACHMENT_CONNECTION_POLICY" value=6 type="u32"
 
 constant "MC_HOST_EVENT_HTTP_REQUEST" value=1 type="u32"
 constant "MC_HOST_EVENT_HTTP_CANCEL" value=2 type="u32"
@@ -544,10 +547,54 @@ message "HostToolAttachment" id=47 version=1 {
   doc "Host tool definition supplied with a strict restore plan. Its shard must match the restored catalog exactly."
 }
 
-message "SnapshotAttachmentManifest" id=48 version=1 {
+message "ConnectionOrigin" id=54 version=1 {
+  field "value" type="str"
+}
+
+message "ConnectionIdentity" id=53 version=1 {
+  field "reference" type="str"
+  field "origins" type="list<ConnectionOrigin>"
+  doc "The non-secret connection authority that strict restore must reattach."
+}
+
+message "SnapshotAttachmentManifest" id=48 version=2 {
   field "content_digest" type="bytes"
   field "routes" type="list<HostCallAttachment>"
   field "persist_identity" type="str" opt=1
   field "http_identity" type="str" opt=1
+  field "connections" type="list<ConnectionIdentity>"
+  field "policy_digest" type="bytes" opt=1
+  field "native_net" type="bool"
   doc "Non-secret companion metadata for an exact MCSN and its native attachment identities."
+}
+
+message "ConnectionAttachment" id=49 version=1 {
+  field "reference" type="str"
+  field "credential_kind" type="str"
+  field "credential_a" type="str"
+  field "credential_b" type="str"
+  field "origins" type="list<ConnectionOrigin>"
+  doc "A private credential and its explicit allowed origins. Secret fields never enter snapshot metadata."
+}
+
+message "ConnectionPolicyAttachment" id=50 version=1 {
+  field "owner" type="str"
+  field "pattern" type="str"
+  field "action" type="str"
+  doc "One rule for the shared host connection policy engine."
+}
+
+message "ToolApprovalRequest" id=51 version=1 {
+  field "connection" type="str"
+  field "method" type="str"
+  field "url" type="str"
+  field "origin" type="str"
+  field "args_digest" type="str" opt=1
+  doc "Host-computed non-secret facts for one pending native HTTP request."
+}
+
+message "ToolApprovalResponse" id=52 version=1 {
+  field "allow" type="bool"
+  field "remember_session" type="bool"
+  doc "One approval decision for the waiting native HTTP request."
 }

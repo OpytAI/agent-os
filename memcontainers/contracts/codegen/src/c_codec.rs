@@ -361,6 +361,7 @@ fn emit_decode_field(out: &mut String, field: &MessageField, prefix: &str) {
     let dest = format!("{prefix}{}", field.name);
     if let Some(inner) = list_inner(&field.ty) {
         let inner_name = snake(inner);
+        out.push_str("        {\n");
         writeln!(out, "        {dest}.count = mc_host_wire_get_u32(&r);").unwrap();
         writeln!(out, "        {dest}.data = r.data + r.off;").unwrap();
         out.push_str("        size_t list_start = r.off;\n");
@@ -374,6 +375,7 @@ fn emit_decode_field(out: &mut String, field: &MessageField, prefix: &str) {
         writeln!(out, "            if (r.error == MC_HOST_WIRE_OK) r.error = mc_host_wire_decode_{inner_name}(item.data, item.len, &nested);").unwrap();
         out.push_str("        }\n");
         writeln!(out, "        {dest}.len = r.off - list_start;").unwrap();
+        out.push_str("        }\n");
         return;
     }
     let expr = match field.ty.as_str() {
@@ -393,6 +395,7 @@ fn emit_encode_field(out: &mut String, field: &MessageField) {
     let value = format!("value->{}", field.name);
     if let Some(inner) = list_inner(&field.ty) {
         let inner_name = snake(inner);
+        out.push_str("            {\n");
         writeln!(out, "            mc_host_wire_reader list_reader = {{{value}.data, {value}.len, 0, MC_HOST_WIRE_OK}};").unwrap();
         writeln!(
             out,
@@ -412,6 +415,7 @@ fn emit_encode_field(out: &mut String, field: &MessageField) {
             "            mc_host_wire_put(&w, {value}.data, {value}.len);"
         )
         .unwrap();
+        out.push_str("            }\n");
         return;
     }
     let call = match field.ty.as_str() {

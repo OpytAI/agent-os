@@ -272,6 +272,7 @@
 #define MC_HOST_FEATURE_PERSIST_EFFECT UINT64_C(2048)
 #define MC_HOST_FEATURE_HTTP_EFFECT UINT64_C(4096)
 #define MC_HOST_FEATURE_WS_EFFECT UINT64_C(8192)
+#define MC_HOST_FEATURE_NATIVE_CONNECTION UINT64_C(16384)
 #define MC_HOST_DEFAULT_MAX_VMS UINT32_C(16)
 #define MC_HOST_HARD_MAX_VMS UINT32_C(16)
 #define MC_HOST_DEFAULT_MAX_DRIVE_TICKS UINT32_C(1000)
@@ -345,6 +346,8 @@
 #define MC_HOST_ATTACHMENT_PERSIST UINT32_C(2)
 #define MC_HOST_ATTACHMENT_HTTP_APPLICATION UINT32_C(3)
 #define MC_HOST_ATTACHMENT_HOST_TOOL UINT32_C(4)
+#define MC_HOST_ATTACHMENT_CONNECTION UINT32_C(5)
+#define MC_HOST_ATTACHMENT_CONNECTION_POLICY UINT32_C(6)
 #define MC_HOST_EVENT_HTTP_REQUEST UINT32_C(1)
 #define MC_HOST_EVENT_HTTP_CANCEL UINT32_C(2)
 #define MC_HOST_EVENT_WS_CONNECT UINT32_C(3)
@@ -820,6 +823,7 @@ static inline mc_host_wire_result mc_host_wire_decode_attachment_manifest(const 
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 26 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
     if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        {
         out->entries.count = mc_host_wire_get_u32(&r);
         out->entries.data = r.data + r.off;
         size_t list_start = r.off;
@@ -829,6 +833,7 @@ static inline mc_host_wire_result mc_host_wire_decode_attachment_manifest(const 
             if (r.error == MC_HOST_WIRE_OK) r.error = mc_host_wire_decode_attachment_manifest_entry(item.data, item.len, &nested);
         }
         out->entries.len = r.off - list_start;
+        }
     if (r.error != MC_HOST_WIRE_OK) return r.error;
     return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
 }
@@ -838,6 +843,7 @@ static inline mc_host_wire_result mc_host_wire_encode_attachment_manifest(const 
         mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
         mc_host_wire_put_u16(&w, 26);
         mc_host_wire_put_u8(&w, 1);
+            {
             mc_host_wire_reader list_reader = {value->entries.data, value->entries.len, 0, MC_HOST_WIRE_OK};
             for (uint32_t i = 0; i < value->entries.count; ++i) {
                 mc_host_wire_bytes item = mc_host_wire_get_bytes(&list_reader, 0);
@@ -847,6 +853,7 @@ static inline mc_host_wire_result mc_host_wire_encode_attachment_manifest(const 
             if (list_reader.error != MC_HOST_WIRE_OK || list_reader.off != value->entries.len) return list_reader.error == MC_HOST_WIRE_OK ? MC_HOST_WIRE_TRAILING_BYTES : list_reader.error;
             mc_host_wire_put_u32(&w, value->entries.count);
             mc_host_wire_put(&w, value->entries.data, value->entries.len);
+            }
         if (w.error != MC_HOST_WIRE_OK) return w.error;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
@@ -1437,6 +1444,7 @@ static inline mc_host_wire_result mc_host_wire_decode_catalog_apply_request(cons
     if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
         out->index_json = mc_host_wire_get_bytes(&r, 0);
         out->base_digest = mc_host_wire_get_bytes(&r, 1);
+        {
         out->records.count = mc_host_wire_get_u32(&r);
         out->records.data = r.data + r.off;
         size_t list_start = r.off;
@@ -1446,6 +1454,7 @@ static inline mc_host_wire_result mc_host_wire_decode_catalog_apply_request(cons
             if (r.error == MC_HOST_WIRE_OK) r.error = mc_host_wire_decode_catalog_record(item.data, item.len, &nested);
         }
         out->records.len = r.off - list_start;
+        }
     if (r.error != MC_HOST_WIRE_OK) return r.error;
     return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
 }
@@ -1457,6 +1466,7 @@ static inline mc_host_wire_result mc_host_wire_encode_catalog_apply_request(cons
         mc_host_wire_put_u8(&w, 1);
             mc_host_wire_put_bytes(&w, value->index_json, 0);
             mc_host_wire_put_bytes(&w, value->base_digest, 1);
+            {
             mc_host_wire_reader list_reader = {value->records.data, value->records.len, 0, MC_HOST_WIRE_OK};
             for (uint32_t i = 0; i < value->records.count; ++i) {
                 mc_host_wire_bytes item = mc_host_wire_get_bytes(&list_reader, 0);
@@ -1466,6 +1476,7 @@ static inline mc_host_wire_result mc_host_wire_encode_catalog_apply_request(cons
             if (list_reader.error != MC_HOST_WIRE_OK || list_reader.off != value->records.len) return list_reader.error == MC_HOST_WIRE_OK ? MC_HOST_WIRE_TRAILING_BYTES : list_reader.error;
             mc_host_wire_put_u32(&w, value->records.count);
             mc_host_wire_put(&w, value->records.data, value->records.len);
+            }
         if (w.error != MC_HOST_WIRE_OK) return w.error;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
@@ -1540,6 +1551,81 @@ static inline mc_host_wire_result mc_host_wire_encode_host_tool_attachment(const
     return MC_HOST_WIRE_OK;
 }
 
+typedef struct mc_host_wire_connection_origin {
+    mc_host_wire_bytes value;
+} mc_host_wire_connection_origin;
+static inline mc_host_wire_result mc_host_wire_decode_connection_origin(const uint8_t *data, size_t len, mc_host_wire_connection_origin *out) {
+    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
+    if (mc_host_wire_get_u16(&r) != 54 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
+    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        out->value = mc_host_wire_get_bytes(&r, 1);
+    if (r.error != MC_HOST_WIRE_OK) return r.error;
+    return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
+}
+static inline mc_host_wire_result mc_host_wire_encode_connection_origin(const mc_host_wire_connection_origin *value, uint8_t *data, size_t capacity, size_t *required) {
+    if (!value || !required || (capacity && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    for (int pass = 0; pass < 2; ++pass) {
+        mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
+        mc_host_wire_put_u16(&w, 54);
+        mc_host_wire_put_u8(&w, 1);
+            mc_host_wire_put_bytes(&w, value->value, 1);
+        if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
+    }
+    return MC_HOST_WIRE_OK;
+}
+
+typedef struct mc_host_wire_connection_identity {
+    mc_host_wire_bytes reference;
+    mc_host_wire_list origins;
+} mc_host_wire_connection_identity;
+static inline mc_host_wire_result mc_host_wire_decode_connection_identity(const uint8_t *data, size_t len, mc_host_wire_connection_identity *out) {
+    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
+    if (mc_host_wire_get_u16(&r) != 53 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
+    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        out->reference = mc_host_wire_get_bytes(&r, 1);
+        {
+        out->origins.count = mc_host_wire_get_u32(&r);
+        out->origins.data = r.data + r.off;
+        size_t list_start = r.off;
+        for (uint32_t i = 0; i < out->origins.count && r.error == MC_HOST_WIRE_OK; ++i) {
+            mc_host_wire_bytes item = mc_host_wire_get_bytes(&r, 0);
+            mc_host_wire_connection_origin nested;
+            if (r.error == MC_HOST_WIRE_OK) r.error = mc_host_wire_decode_connection_origin(item.data, item.len, &nested);
+        }
+        out->origins.len = r.off - list_start;
+        }
+    if (r.error != MC_HOST_WIRE_OK) return r.error;
+    return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
+}
+static inline mc_host_wire_result mc_host_wire_encode_connection_identity(const mc_host_wire_connection_identity *value, uint8_t *data, size_t capacity, size_t *required) {
+    if (!value || !required || (capacity && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    for (int pass = 0; pass < 2; ++pass) {
+        mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
+        mc_host_wire_put_u16(&w, 53);
+        mc_host_wire_put_u8(&w, 1);
+            mc_host_wire_put_bytes(&w, value->reference, 1);
+            {
+            mc_host_wire_reader list_reader = {value->origins.data, value->origins.len, 0, MC_HOST_WIRE_OK};
+            for (uint32_t i = 0; i < value->origins.count; ++i) {
+                mc_host_wire_bytes item = mc_host_wire_get_bytes(&list_reader, 0);
+                mc_host_wire_connection_origin nested;
+                if (list_reader.error == MC_HOST_WIRE_OK) list_reader.error = mc_host_wire_decode_connection_origin(item.data, item.len, &nested);
+            }
+            if (list_reader.error != MC_HOST_WIRE_OK || list_reader.off != value->origins.len) return list_reader.error == MC_HOST_WIRE_OK ? MC_HOST_WIRE_TRAILING_BYTES : list_reader.error;
+            mc_host_wire_put_u32(&w, value->origins.count);
+            mc_host_wire_put(&w, value->origins.data, value->origins.len);
+            }
+        if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
+    }
+    return MC_HOST_WIRE_OK;
+}
+
 typedef struct mc_host_wire_snapshot_attachment_manifest {
     mc_host_wire_bytes content_digest;
     mc_host_wire_list routes;
@@ -1547,14 +1633,19 @@ typedef struct mc_host_wire_snapshot_attachment_manifest {
     mc_host_wire_bytes persist_identity;
     uint8_t has_http_identity;
     mc_host_wire_bytes http_identity;
+    mc_host_wire_list connections;
+    uint8_t has_policy_digest;
+    mc_host_wire_bytes policy_digest;
+    uint8_t native_net;
 } mc_host_wire_snapshot_attachment_manifest;
 static inline mc_host_wire_result mc_host_wire_decode_snapshot_attachment_manifest(const uint8_t *data, size_t len, mc_host_wire_snapshot_attachment_manifest *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 48 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
-    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+    if (mc_host_wire_get_u8(&r) != 2 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
         out->content_digest = mc_host_wire_get_bytes(&r, 0);
+        {
         out->routes.count = mc_host_wire_get_u32(&r);
         out->routes.data = r.data + r.off;
         size_t list_start = r.off;
@@ -1564,6 +1655,7 @@ static inline mc_host_wire_result mc_host_wire_decode_snapshot_attachment_manife
             if (r.error == MC_HOST_WIRE_OK) r.error = mc_host_wire_decode_host_call_attachment(item.data, item.len, &nested);
         }
         out->routes.len = r.off - list_start;
+        }
     out->has_persist_identity = mc_host_wire_get_flag(&r);
     if (out->has_persist_identity) {
         out->persist_identity = mc_host_wire_get_bytes(&r, 1);
@@ -1572,6 +1664,22 @@ static inline mc_host_wire_result mc_host_wire_decode_snapshot_attachment_manife
     if (out->has_http_identity) {
         out->http_identity = mc_host_wire_get_bytes(&r, 1);
     }
+        {
+        out->connections.count = mc_host_wire_get_u32(&r);
+        out->connections.data = r.data + r.off;
+        size_t list_start = r.off;
+        for (uint32_t i = 0; i < out->connections.count && r.error == MC_HOST_WIRE_OK; ++i) {
+            mc_host_wire_bytes item = mc_host_wire_get_bytes(&r, 0);
+            mc_host_wire_connection_identity nested;
+            if (r.error == MC_HOST_WIRE_OK) r.error = mc_host_wire_decode_connection_identity(item.data, item.len, &nested);
+        }
+        out->connections.len = r.off - list_start;
+        }
+    out->has_policy_digest = mc_host_wire_get_flag(&r);
+    if (out->has_policy_digest) {
+        out->policy_digest = mc_host_wire_get_bytes(&r, 0);
+    }
+        out->native_net = mc_host_wire_get_flag(&r);
     if (r.error != MC_HOST_WIRE_OK) return r.error;
     return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
 }
@@ -1580,8 +1688,9 @@ static inline mc_host_wire_result mc_host_wire_encode_snapshot_attachment_manife
     for (int pass = 0; pass < 2; ++pass) {
         mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
         mc_host_wire_put_u16(&w, 48);
-        mc_host_wire_put_u8(&w, 1);
+        mc_host_wire_put_u8(&w, 2);
             mc_host_wire_put_bytes(&w, value->content_digest, 0);
+            {
             mc_host_wire_reader list_reader = {value->routes.data, value->routes.len, 0, MC_HOST_WIRE_OK};
             for (uint32_t i = 0; i < value->routes.count; ++i) {
                 mc_host_wire_bytes item = mc_host_wire_get_bytes(&list_reader, 0);
@@ -1591,6 +1700,7 @@ static inline mc_host_wire_result mc_host_wire_encode_snapshot_attachment_manife
             if (list_reader.error != MC_HOST_WIRE_OK || list_reader.off != value->routes.len) return list_reader.error == MC_HOST_WIRE_OK ? MC_HOST_WIRE_TRAILING_BYTES : list_reader.error;
             mc_host_wire_put_u32(&w, value->routes.count);
             mc_host_wire_put(&w, value->routes.data, value->routes.len);
+            }
         if (value->has_persist_identity > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
         mc_host_wire_put_u8(&w, value->has_persist_identity);
         if (value->has_persist_identity) {
@@ -1601,6 +1711,191 @@ static inline mc_host_wire_result mc_host_wire_encode_snapshot_attachment_manife
         if (value->has_http_identity) {
             mc_host_wire_put_bytes(&w, value->http_identity, 1);
         }
+            {
+            mc_host_wire_reader list_reader = {value->connections.data, value->connections.len, 0, MC_HOST_WIRE_OK};
+            for (uint32_t i = 0; i < value->connections.count; ++i) {
+                mc_host_wire_bytes item = mc_host_wire_get_bytes(&list_reader, 0);
+                mc_host_wire_connection_identity nested;
+                if (list_reader.error == MC_HOST_WIRE_OK) list_reader.error = mc_host_wire_decode_connection_identity(item.data, item.len, &nested);
+            }
+            if (list_reader.error != MC_HOST_WIRE_OK || list_reader.off != value->connections.len) return list_reader.error == MC_HOST_WIRE_OK ? MC_HOST_WIRE_TRAILING_BYTES : list_reader.error;
+            mc_host_wire_put_u32(&w, value->connections.count);
+            mc_host_wire_put(&w, value->connections.data, value->connections.len);
+            }
+        if (value->has_policy_digest > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
+        mc_host_wire_put_u8(&w, value->has_policy_digest);
+        if (value->has_policy_digest) {
+            mc_host_wire_put_bytes(&w, value->policy_digest, 0);
+        }
+            if (value->native_net > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
+            mc_host_wire_put_u8(&w, value->native_net);
+        if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
+    }
+    return MC_HOST_WIRE_OK;
+}
+
+typedef struct mc_host_wire_connection_attachment {
+    mc_host_wire_bytes reference;
+    mc_host_wire_bytes credential_kind;
+    mc_host_wire_bytes credential_a;
+    mc_host_wire_bytes credential_b;
+    mc_host_wire_list origins;
+} mc_host_wire_connection_attachment;
+static inline mc_host_wire_result mc_host_wire_decode_connection_attachment(const uint8_t *data, size_t len, mc_host_wire_connection_attachment *out) {
+    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
+    if (mc_host_wire_get_u16(&r) != 49 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
+    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        out->reference = mc_host_wire_get_bytes(&r, 1);
+        out->credential_kind = mc_host_wire_get_bytes(&r, 1);
+        out->credential_a = mc_host_wire_get_bytes(&r, 1);
+        out->credential_b = mc_host_wire_get_bytes(&r, 1);
+        {
+        out->origins.count = mc_host_wire_get_u32(&r);
+        out->origins.data = r.data + r.off;
+        size_t list_start = r.off;
+        for (uint32_t i = 0; i < out->origins.count && r.error == MC_HOST_WIRE_OK; ++i) {
+            mc_host_wire_bytes item = mc_host_wire_get_bytes(&r, 0);
+            mc_host_wire_connection_origin nested;
+            if (r.error == MC_HOST_WIRE_OK) r.error = mc_host_wire_decode_connection_origin(item.data, item.len, &nested);
+        }
+        out->origins.len = r.off - list_start;
+        }
+    if (r.error != MC_HOST_WIRE_OK) return r.error;
+    return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
+}
+static inline mc_host_wire_result mc_host_wire_encode_connection_attachment(const mc_host_wire_connection_attachment *value, uint8_t *data, size_t capacity, size_t *required) {
+    if (!value || !required || (capacity && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    for (int pass = 0; pass < 2; ++pass) {
+        mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
+        mc_host_wire_put_u16(&w, 49);
+        mc_host_wire_put_u8(&w, 1);
+            mc_host_wire_put_bytes(&w, value->reference, 1);
+            mc_host_wire_put_bytes(&w, value->credential_kind, 1);
+            mc_host_wire_put_bytes(&w, value->credential_a, 1);
+            mc_host_wire_put_bytes(&w, value->credential_b, 1);
+            {
+            mc_host_wire_reader list_reader = {value->origins.data, value->origins.len, 0, MC_HOST_WIRE_OK};
+            for (uint32_t i = 0; i < value->origins.count; ++i) {
+                mc_host_wire_bytes item = mc_host_wire_get_bytes(&list_reader, 0);
+                mc_host_wire_connection_origin nested;
+                if (list_reader.error == MC_HOST_WIRE_OK) list_reader.error = mc_host_wire_decode_connection_origin(item.data, item.len, &nested);
+            }
+            if (list_reader.error != MC_HOST_WIRE_OK || list_reader.off != value->origins.len) return list_reader.error == MC_HOST_WIRE_OK ? MC_HOST_WIRE_TRAILING_BYTES : list_reader.error;
+            mc_host_wire_put_u32(&w, value->origins.count);
+            mc_host_wire_put(&w, value->origins.data, value->origins.len);
+            }
+        if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
+    }
+    return MC_HOST_WIRE_OK;
+}
+
+typedef struct mc_host_wire_connection_policy_attachment {
+    mc_host_wire_bytes owner;
+    mc_host_wire_bytes pattern;
+    mc_host_wire_bytes action;
+} mc_host_wire_connection_policy_attachment;
+static inline mc_host_wire_result mc_host_wire_decode_connection_policy_attachment(const uint8_t *data, size_t len, mc_host_wire_connection_policy_attachment *out) {
+    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
+    if (mc_host_wire_get_u16(&r) != 50 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
+    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        out->owner = mc_host_wire_get_bytes(&r, 1);
+        out->pattern = mc_host_wire_get_bytes(&r, 1);
+        out->action = mc_host_wire_get_bytes(&r, 1);
+    if (r.error != MC_HOST_WIRE_OK) return r.error;
+    return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
+}
+static inline mc_host_wire_result mc_host_wire_encode_connection_policy_attachment(const mc_host_wire_connection_policy_attachment *value, uint8_t *data, size_t capacity, size_t *required) {
+    if (!value || !required || (capacity && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    for (int pass = 0; pass < 2; ++pass) {
+        mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
+        mc_host_wire_put_u16(&w, 50);
+        mc_host_wire_put_u8(&w, 1);
+            mc_host_wire_put_bytes(&w, value->owner, 1);
+            mc_host_wire_put_bytes(&w, value->pattern, 1);
+            mc_host_wire_put_bytes(&w, value->action, 1);
+        if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
+    }
+    return MC_HOST_WIRE_OK;
+}
+
+typedef struct mc_host_wire_tool_approval_request {
+    mc_host_wire_bytes connection;
+    mc_host_wire_bytes method;
+    mc_host_wire_bytes url;
+    mc_host_wire_bytes origin;
+    uint8_t has_args_digest;
+    mc_host_wire_bytes args_digest;
+} mc_host_wire_tool_approval_request;
+static inline mc_host_wire_result mc_host_wire_decode_tool_approval_request(const uint8_t *data, size_t len, mc_host_wire_tool_approval_request *out) {
+    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
+    if (mc_host_wire_get_u16(&r) != 51 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
+    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        out->connection = mc_host_wire_get_bytes(&r, 1);
+        out->method = mc_host_wire_get_bytes(&r, 1);
+        out->url = mc_host_wire_get_bytes(&r, 1);
+        out->origin = mc_host_wire_get_bytes(&r, 1);
+    out->has_args_digest = mc_host_wire_get_flag(&r);
+    if (out->has_args_digest) {
+        out->args_digest = mc_host_wire_get_bytes(&r, 1);
+    }
+    if (r.error != MC_HOST_WIRE_OK) return r.error;
+    return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
+}
+static inline mc_host_wire_result mc_host_wire_encode_tool_approval_request(const mc_host_wire_tool_approval_request *value, uint8_t *data, size_t capacity, size_t *required) {
+    if (!value || !required || (capacity && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    for (int pass = 0; pass < 2; ++pass) {
+        mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
+        mc_host_wire_put_u16(&w, 51);
+        mc_host_wire_put_u8(&w, 1);
+            mc_host_wire_put_bytes(&w, value->connection, 1);
+            mc_host_wire_put_bytes(&w, value->method, 1);
+            mc_host_wire_put_bytes(&w, value->url, 1);
+            mc_host_wire_put_bytes(&w, value->origin, 1);
+        if (value->has_args_digest > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
+        mc_host_wire_put_u8(&w, value->has_args_digest);
+        if (value->has_args_digest) {
+            mc_host_wire_put_bytes(&w, value->args_digest, 1);
+        }
+        if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
+    }
+    return MC_HOST_WIRE_OK;
+}
+
+typedef struct mc_host_wire_tool_approval_response {
+    uint8_t allow;
+    uint8_t remember_session;
+} mc_host_wire_tool_approval_response;
+static inline mc_host_wire_result mc_host_wire_decode_tool_approval_response(const uint8_t *data, size_t len, mc_host_wire_tool_approval_response *out) {
+    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
+    if (mc_host_wire_get_u16(&r) != 52 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
+    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        out->allow = mc_host_wire_get_flag(&r);
+        out->remember_session = mc_host_wire_get_flag(&r);
+    if (r.error != MC_HOST_WIRE_OK) return r.error;
+    return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
+}
+static inline mc_host_wire_result mc_host_wire_encode_tool_approval_response(const mc_host_wire_tool_approval_response *value, uint8_t *data, size_t capacity, size_t *required) {
+    if (!value || !required || (capacity && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    for (int pass = 0; pass < 2; ++pass) {
+        mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
+        mc_host_wire_put_u16(&w, 52);
+        mc_host_wire_put_u8(&w, 1);
+            if (value->allow > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
+            mc_host_wire_put_u8(&w, value->allow);
+            if (value->remember_session > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
+            mc_host_wire_put_u8(&w, value->remember_session);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }

@@ -5,14 +5,17 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 
 use embedder_rust::{
-    self as contract, EffectEvent, HostCallAttachment, SnapshotAttachmentManifest,
+    self as contract, ConnectionAttachment, ConnectionIdentity, ConnectionOrigin,
+    ConnectionPolicyAttachment, EffectEvent, HostCallAttachment, SnapshotAttachmentManifest,
 };
 use host::output_queue::{OutputQueue, OutputRecord, OutputStats, LOG, STDERR, STDOUT};
 use host::{
-    inspect_snapshot_bytes, ControlRetryAction, ExecOptions, HostToolDef, KernelCacheLimit,
-    KernelHost, KernelHostBuilder, KernelModuleCache, NativeCatalogUpdate, SnapshotDescription,
-    TickState,
+    inspect_snapshot_bytes, ConnectionCredential, ConnectionPolicyAction, ConnectionPolicyOwner,
+    ConnectionPolicyRule, ConnectionPolicySet, ConnectionRegistry, ControlRetryAction, ExecOptions,
+    HostToolDef, KernelCacheLimit, KernelHost, KernelHostBuilder, KernelModuleCache,
+    NativeCatalogUpdate, RealNet, SnapshotDescription, TickState,
 };
+use sha2::{Digest, Sha256};
 
 use super::operations::OperationRecord;
 use super::relay::{EffectBody, Relay};
@@ -116,7 +119,38 @@ struct PlanRecord {
     host_tools: Vec<HostToolDef>,
     persist_identity: Option<String>,
     http_identity: Option<String>,
+    native_net: bool,
+    connections: ConnectionRegistry,
+    connection_identities: BTreeMap<String, Vec<String>>,
+    policies: Vec<ConnectionPolicyRule>,
     sealed: bool,
+}
+
+fn policy_digest(policies: &[ConnectionPolicyRule]) -> Option<Vec<u8>> {
+    if policies.is_empty() {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    for rule in policies {
+        let frame = ConnectionPolicyAttachment {
+            owner: match rule.owner {
+                ConnectionPolicyOwner::Org => "org",
+                ConnectionPolicyOwner::User => "user",
+            }
+            .into(),
+            pattern: rule.pattern.clone(),
+            action: match rule.action {
+                ConnectionPolicyAction::Approve => "approve",
+                ConnectionPolicyAction::RequireApproval => "require_approval",
+                ConnectionPolicyAction::Block => "block",
+            }
+            .into(),
+        }
+        .encode();
+        hasher.update((frame.len() as u64).to_le_bytes());
+        hasher.update(frame);
+    }
+    Some(hasher.finalize().to_vec())
 }
 
 struct EffectRecord {
@@ -838,10 +872,91 @@ impl RuntimeState {
         if plan.sealed {
             return Err(contract::MC_HOST_INVALID_STATE);
         }
-        if plan.http_identity.is_some() {
+        if plan.http_identity.is_some() || plan.native_net {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
         plan.http_identity = Some(identity);
+        Ok(())
+    }
+
+    pub fn add_connection(&self, handle: u64, definition: ConnectionAttachment) -> Result<(), u32> {
+        let credential = match definition.credential_kind.as_str() {
+            "none" if definition.credential_a.is_empty() && definition.credential_b.is_empty() => {
+                ConnectionCredential::None
+            }
+            "bearer" if definition.credential_b.is_empty() => ConnectionCredential::Bearer {
+                token: definition.credential_a,
+            },
+            "header" => ConnectionCredential::Header {
+                name: definition.credential_a,
+                value: definition.credential_b,
+            },
+            "query" => ConnectionCredential::Query {
+                name: definition.credential_a,
+                value: definition.credential_b,
+            },
+            _ => return Err(contract::MC_HOST_INVALID_ARGUMENT),
+        };
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let plan = resources.plans.get_mut(self.namespace, handle)?;
+        if plan.sealed || plan.http_identity.is_some() || plan.connection_identities.len() >= 128 {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        let mut registry = plan.connections.clone();
+        registry
+            .insert(
+                definition.reference.clone(),
+                credential,
+                definition.origins.into_iter().map(|origin| origin.value),
+            )
+            .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+        let (_, origins) = registry
+            .egress(&definition.reference)
+            .ok_or(contract::MC_HOST_INTERNAL)?;
+        plan.connection_identities
+            .insert(definition.reference, origins);
+        plan.connections = registry;
+        plan.native_net = true;
+        Ok(())
+    }
+
+    pub fn add_connection_policy(
+        &self,
+        handle: u64,
+        definition: ConnectionPolicyAttachment,
+    ) -> Result<(), u32> {
+        let owner = match definition.owner.as_str() {
+            "org" => ConnectionPolicyOwner::Org,
+            "user" => ConnectionPolicyOwner::User,
+            _ => return Err(contract::MC_HOST_INVALID_ARGUMENT),
+        };
+        let action = match definition.action.as_str() {
+            "approve" => ConnectionPolicyAction::Approve,
+            "require_approval" => ConnectionPolicyAction::RequireApproval,
+            "block" => ConnectionPolicyAction::Block,
+            _ => return Err(contract::MC_HOST_INVALID_ARGUMENT),
+        };
+        let mut resources = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let plan = resources.plans.get_mut(self.namespace, handle)?;
+        if plan.sealed || plan.http_identity.is_some() || plan.policies.len() >= 128 {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        let mut policies = plan.policies.clone();
+        policies.push(ConnectionPolicyRule {
+            owner,
+            pattern: definition.pattern,
+            action,
+        });
+        ConnectionPolicySet::new(policies.clone())
+            .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+        plan.policies = policies;
+        plan.native_net = true;
         Ok(())
     }
 
@@ -1257,6 +1372,14 @@ impl RuntimeState {
             }
             if relay.http_enabled() {
                 builder = builder.with_net(relay.net_adapter());
+            } else if capabilities.as_ref().is_some_and(|plan| plan.native_net) {
+                let plan = capabilities.as_ref().expect("native net plan");
+                let net = RealNet::new()
+                    .with_connections(plan.connections.clone())
+                    .with_connection_policies(plan.policies.clone())
+                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?
+                    .with_tool_approver(relay.approver());
+                builder = builder.with_net(Box::new(net));
             }
         }
         if config.deterministic {
@@ -1386,13 +1509,31 @@ impl RuntimeState {
                             .and_then(|p| p.persist_identity.clone())
                     || manifest.http_identity
                         != capabilities.as_ref().and_then(|p| p.http_identity.clone())
+                    || manifest.native_net != capabilities.as_ref().is_some_and(|p| p.native_net)
+                    || manifest.policy_digest
+                        != capabilities
+                            .as_ref()
+                            .and_then(|p| policy_digest(&p.policies))
+                    || manifest.connections
+                        != capabilities.as_ref().map_or_else(Vec::new, |p| {
+                            p.connection_identities
+                                .iter()
+                                .map(|(reference, origins)| ConnectionIdentity {
+                                    reference: reference.clone(),
+                                    origins: origins
+                                        .iter()
+                                        .cloned()
+                                        .map(|value| ConnectionOrigin { value })
+                                        .collect(),
+                                })
+                                .collect()
+                        })
                 {
                     return Err(contract::MC_HOST_INVALID_STATE);
                 }
-            } else if capabilities
-                .as_ref()
-                .is_some_and(|p| p.persist_identity.is_some() || p.http_identity.is_some())
-            {
+            } else if capabilities.as_ref().is_some_and(|p| {
+                p.persist_identity.is_some() || p.http_identity.is_some() || p.native_net
+            }) {
                 return Err(contract::MC_HOST_INVALID_STATE);
             }
         }
@@ -1458,6 +1599,14 @@ impl RuntimeState {
             }
             if relay.http_enabled() {
                 builder = builder.with_net(relay.net_adapter());
+            } else if capabilities.as_ref().is_some_and(|plan| plan.native_net) {
+                let plan = capabilities.as_ref().expect("native net plan");
+                let net = RealNet::new()
+                    .with_connections(plan.connections.clone())
+                    .with_connection_policies(plan.policies.clone())
+                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?
+                    .with_tool_approver(relay.approver());
+                builder = builder.with_net(Box::new(net));
             }
         }
         let restored = match baseline.as_deref() {
@@ -1475,16 +1624,20 @@ impl RuntimeState {
         let routes = capabilities.as_ref().map_or_else(Default::default, |plan| {
             plan.routes.keys().cloned().collect()
         });
+        let connections = capabilities.as_ref().map_or_else(Default::default, |plan| {
+            plan.connection_identities.keys().cloned().collect()
+        });
         let catalog_valid = if mode != contract::MC_HOST_RESTORE_STRICT {
             true
         } else if fork_catalog {
-            host::validate_native_fork_catalog(&mut host, &routes).is_ok()
+            host::validate_native_fork_catalog(&mut host, &routes, &connections).is_ok()
         } else {
             host::validate_native_restored_catalog(
                 &mut host,
                 capabilities
                     .as_ref()
                     .map_or(&[], |plan| plan.host_tools.as_slice()),
+                &connections,
             )
             .is_ok()
         };
@@ -1753,6 +1906,24 @@ impl RuntimeState {
                     .attachments
                     .as_ref()
                     .and_then(|plan| plan.http_identity.clone()),
+                native_net: vm.attachments.as_ref().is_some_and(|plan| plan.native_net),
+                policy_digest: vm
+                    .attachments
+                    .as_ref()
+                    .and_then(|plan| policy_digest(&plan.policies)),
+                connections: vm.attachments.as_ref().map_or_else(Vec::new, |plan| {
+                    plan.connection_identities
+                        .iter()
+                        .map(|(reference, origins)| ConnectionIdentity {
+                            reference: reference.clone(),
+                            origins: origins
+                                .iter()
+                                .cloned()
+                                .map(|value| ConnectionOrigin { value })
+                                .collect(),
+                        })
+                        .collect()
+                }),
             }
             .encode(),
             kernel_handle: vm.kernel_handle,
@@ -2088,6 +2259,11 @@ impl RuntimeState {
             .binding_names
             .iter()
             .any(|name| !vm.relay.as_ref().is_some_and(|relay| relay.has_route(name)))
+            || update.connection_refs.iter().any(|reference| {
+                !vm.attachments
+                    .as_ref()
+                    .is_some_and(|plan| plan.connection_identities.contains_key(reference))
+            })
         {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }

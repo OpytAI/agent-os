@@ -45,6 +45,7 @@ pub const MC_HOST_FEATURE_MOUNT_OPERATION: u64 = 1024;
 pub const MC_HOST_FEATURE_PERSIST_EFFECT: u64 = 2048;
 pub const MC_HOST_FEATURE_HTTP_EFFECT: u64 = 4096;
 pub const MC_HOST_FEATURE_WS_EFFECT: u64 = 8192;
+pub const MC_HOST_FEATURE_NATIVE_CONNECTION: u64 = 16384;
 pub const MC_HOST_DEFAULT_MAX_VMS: u32 = 16;
 pub const MC_HOST_HARD_MAX_VMS: u32 = 16;
 pub const MC_HOST_DEFAULT_MAX_DRIVE_TICKS: u32 = 1000;
@@ -118,6 +119,8 @@ pub const MC_HOST_ATTACHMENT_HOST_CALL: u32 = 1;
 pub const MC_HOST_ATTACHMENT_PERSIST: u32 = 2;
 pub const MC_HOST_ATTACHMENT_HTTP_APPLICATION: u32 = 3;
 pub const MC_HOST_ATTACHMENT_HOST_TOOL: u32 = 4;
+pub const MC_HOST_ATTACHMENT_CONNECTION: u32 = 5;
+pub const MC_HOST_ATTACHMENT_CONNECTION_POLICY: u32 = 6;
 pub const MC_HOST_EVENT_HTTP_REQUEST: u32 = 1;
 pub const MC_HOST_EVENT_HTTP_CANCEL: u32 = 2;
 pub const MC_HOST_EVENT_WS_CONNECT: u32 = 3;
@@ -1207,6 +1210,67 @@ impl HostToolAttachment {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ConnectionOrigin {
+    pub value: String,
+}
+
+pub const CONNECTION_ORIGIN_MSG_ID: u16 = 54;
+pub const CONNECTION_ORIGIN_VERSION: u8 = 1;
+impl ConnectionOrigin {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, CONNECTION_ORIGIN_MSG_ID);
+        out.push(CONNECTION_ORIGIN_VERSION);
+        ctl_put_str(&mut out, &self.value);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != CONNECTION_ORIGIN_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != CONNECTION_ORIGIN_VERSION { return Err(WireError::UnsupportedVersion); }
+        let value = ctl_read_str(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            value,
+        })
+    }
+}
+
+/// The non-secret connection authority that strict restore must reattach.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ConnectionIdentity {
+    pub reference: String,
+    pub origins: Vec<ConnectionOrigin>,
+}
+
+pub const CONNECTION_IDENTITY_MSG_ID: u16 = 53;
+pub const CONNECTION_IDENTITY_VERSION: u8 = 1;
+impl ConnectionIdentity {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, CONNECTION_IDENTITY_MSG_ID);
+        out.push(CONNECTION_IDENTITY_VERSION);
+        ctl_put_str(&mut out, &self.reference);
+        ctl_put_message_list(&mut out, &self.origins, |v| v.encode());
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != CONNECTION_IDENTITY_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != CONNECTION_IDENTITY_VERSION { return Err(WireError::UnsupportedVersion); }
+        let reference = ctl_read_str(bytes, &mut off)?;
+        let origins = ctl_read_message_list(bytes, &mut off, ConnectionOrigin::decode)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            reference,
+            origins,
+        })
+    }
+}
+
 /// Non-secret companion metadata for an exact MCSN and its native attachment identities.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SnapshotAttachmentManifest {
@@ -1214,10 +1278,13 @@ pub struct SnapshotAttachmentManifest {
     pub routes: Vec<HostCallAttachment>,
     pub persist_identity: Option<String>,
     pub http_identity: Option<String>,
+    pub connections: Vec<ConnectionIdentity>,
+    pub policy_digest: Option<Vec<u8>>,
+    pub native_net: bool,
 }
 
 pub const SNAPSHOT_ATTACHMENT_MANIFEST_MSG_ID: u16 = 48;
-pub const SNAPSHOT_ATTACHMENT_MANIFEST_VERSION: u8 = 1;
+pub const SNAPSHOT_ATTACHMENT_MANIFEST_VERSION: u8 = 2;
 impl SnapshotAttachmentManifest {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1239,6 +1306,15 @@ impl SnapshotAttachmentManifest {
             }
             None => out.push(0),
         }
+        ctl_put_message_list(&mut out, &self.connections, |v| v.encode());
+        match &self.policy_digest {
+            Some(v) => {
+                out.push(1);
+        ctl_put_bytes(&mut out, v);
+            }
+            None => out.push(0),
+        }
+        ctl_put_bool(&mut out, self.native_net);
         out
     }
 
@@ -1258,12 +1334,192 @@ impl SnapshotAttachmentManifest {
             1 => Some(ctl_read_str(bytes, &mut off)?),
             _ => return Err(WireError::InvalidPresence),
         };
+        let connections = ctl_read_message_list(bytes, &mut off, ConnectionIdentity::decode)?;
+        let policy_digest = match ctl_read_u8(bytes, &mut off)? {
+            0 => None,
+            1 => Some(ctl_read_bytes(bytes, &mut off)?),
+            _ => return Err(WireError::InvalidPresence),
+        };
+        let native_net = ctl_read_bool(bytes, &mut off)?;
         if off != bytes.len() { return Err(WireError::TrailingBytes); }
         Ok(Self {
             content_digest,
             routes,
             persist_identity,
             http_identity,
+            connections,
+            policy_digest,
+            native_net,
+        })
+    }
+}
+
+/// A private credential and its explicit allowed origins. Secret fields never enter snapshot metadata.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ConnectionAttachment {
+    pub reference: String,
+    pub credential_kind: String,
+    pub credential_a: String,
+    pub credential_b: String,
+    pub origins: Vec<ConnectionOrigin>,
+}
+
+pub const CONNECTION_ATTACHMENT_MSG_ID: u16 = 49;
+pub const CONNECTION_ATTACHMENT_VERSION: u8 = 1;
+impl ConnectionAttachment {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, CONNECTION_ATTACHMENT_MSG_ID);
+        out.push(CONNECTION_ATTACHMENT_VERSION);
+        ctl_put_str(&mut out, &self.reference);
+        ctl_put_str(&mut out, &self.credential_kind);
+        ctl_put_str(&mut out, &self.credential_a);
+        ctl_put_str(&mut out, &self.credential_b);
+        ctl_put_message_list(&mut out, &self.origins, |v| v.encode());
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != CONNECTION_ATTACHMENT_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != CONNECTION_ATTACHMENT_VERSION { return Err(WireError::UnsupportedVersion); }
+        let reference = ctl_read_str(bytes, &mut off)?;
+        let credential_kind = ctl_read_str(bytes, &mut off)?;
+        let credential_a = ctl_read_str(bytes, &mut off)?;
+        let credential_b = ctl_read_str(bytes, &mut off)?;
+        let origins = ctl_read_message_list(bytes, &mut off, ConnectionOrigin::decode)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            reference,
+            credential_kind,
+            credential_a,
+            credential_b,
+            origins,
+        })
+    }
+}
+
+/// One rule for the shared host connection policy engine.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ConnectionPolicyAttachment {
+    pub owner: String,
+    pub pattern: String,
+    pub action: String,
+}
+
+pub const CONNECTION_POLICY_ATTACHMENT_MSG_ID: u16 = 50;
+pub const CONNECTION_POLICY_ATTACHMENT_VERSION: u8 = 1;
+impl ConnectionPolicyAttachment {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, CONNECTION_POLICY_ATTACHMENT_MSG_ID);
+        out.push(CONNECTION_POLICY_ATTACHMENT_VERSION);
+        ctl_put_str(&mut out, &self.owner);
+        ctl_put_str(&mut out, &self.pattern);
+        ctl_put_str(&mut out, &self.action);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != CONNECTION_POLICY_ATTACHMENT_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != CONNECTION_POLICY_ATTACHMENT_VERSION { return Err(WireError::UnsupportedVersion); }
+        let owner = ctl_read_str(bytes, &mut off)?;
+        let pattern = ctl_read_str(bytes, &mut off)?;
+        let action = ctl_read_str(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            owner,
+            pattern,
+            action,
+        })
+    }
+}
+
+/// Host-computed non-secret facts for one pending native HTTP request.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ToolApprovalRequest {
+    pub connection: String,
+    pub method: String,
+    pub url: String,
+    pub origin: String,
+    pub args_digest: Option<String>,
+}
+
+pub const TOOL_APPROVAL_REQUEST_MSG_ID: u16 = 51;
+pub const TOOL_APPROVAL_REQUEST_VERSION: u8 = 1;
+impl ToolApprovalRequest {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, TOOL_APPROVAL_REQUEST_MSG_ID);
+        out.push(TOOL_APPROVAL_REQUEST_VERSION);
+        ctl_put_str(&mut out, &self.connection);
+        ctl_put_str(&mut out, &self.method);
+        ctl_put_str(&mut out, &self.url);
+        ctl_put_str(&mut out, &self.origin);
+        match &self.args_digest {
+            Some(v) => {
+                out.push(1);
+        ctl_put_str(&mut out, v);
+            }
+            None => out.push(0),
+        }
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != TOOL_APPROVAL_REQUEST_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != TOOL_APPROVAL_REQUEST_VERSION { return Err(WireError::UnsupportedVersion); }
+        let connection = ctl_read_str(bytes, &mut off)?;
+        let method = ctl_read_str(bytes, &mut off)?;
+        let url = ctl_read_str(bytes, &mut off)?;
+        let origin = ctl_read_str(bytes, &mut off)?;
+        let args_digest = match ctl_read_u8(bytes, &mut off)? {
+            0 => None,
+            1 => Some(ctl_read_str(bytes, &mut off)?),
+            _ => return Err(WireError::InvalidPresence),
+        };
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            connection,
+            method,
+            url,
+            origin,
+            args_digest,
+        })
+    }
+}
+
+/// One approval decision for the waiting native HTTP request.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ToolApprovalResponse {
+    pub allow: bool,
+    pub remember_session: bool,
+}
+
+pub const TOOL_APPROVAL_RESPONSE_MSG_ID: u16 = 52;
+pub const TOOL_APPROVAL_RESPONSE_VERSION: u8 = 1;
+impl ToolApprovalResponse {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, TOOL_APPROVAL_RESPONSE_MSG_ID);
+        out.push(TOOL_APPROVAL_RESPONSE_VERSION);
+        ctl_put_bool(&mut out, self.allow);
+        ctl_put_bool(&mut out, self.remember_session);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != TOOL_APPROVAL_RESPONSE_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != TOOL_APPROVAL_RESPONSE_VERSION { return Err(WireError::UnsupportedVersion); }
+        let allow = ctl_read_bool(bytes, &mut off)?;
+        let remember_session = ctl_read_bool(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            allow,
+            remember_session,
         })
     }
 }

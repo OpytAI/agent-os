@@ -27,6 +27,13 @@ static void check(mc_host_result_t result, const char *step) {
 
 static int contains_bytes(const uint8_t *haystack, size_t length,
                           const char *needle, size_t needle_length);
+static void drive_to_prompt(const mc_host_vm_api_v1 *vm_api,
+                            const mc_host_output_api_v1 *output_api,
+                            mc_host_runtime_t runtime, mc_host_handle_t vm,
+                            const char *expected);
+static uint8_t *snapshot_bytes(const mc_host_snapshot_api_v1 *snap_api,
+                               mc_host_runtime_t runtime, mc_host_handle_t snapshot,
+                               uint64_t length);
 
 static uint8_t *read_artifact(const char *path, size_t *length) {
   FILE *file = fopen(path, "rb");
@@ -67,6 +74,29 @@ static void *serve_http_once(void *argument) {
   need(send(peer, response, sizeof(response) - 1, 0) == sizeof(response) - 1,
        "send real HTTP response");
   need(close(peer) == 0 && close(listener) == 0, "close HTTP sockets");
+  return NULL;
+}
+
+static void *serve_native_connection_once(void *argument) {
+  int listener = *(int *)argument;
+  int peer = accept(listener, NULL, NULL);
+  need(peer >= 0, "accept native connection request");
+  uint8_t request[2048];
+  size_t length = 0;
+  while (!contains_bytes(request, length, "\r\n\r\n", 4)) {
+    ssize_t count = recv(peer, request + length, sizeof(request) - length, 0);
+    need(count > 0 && length + (size_t)count < sizeof(request),
+         "read native connection request");
+    length += (size_t)count;
+  }
+  need(contains_bytes(request, length, "GET /native-connection", 22) &&
+       contains_bytes(request, length, "Bearer fixture-token", 20) &&
+       !contains_bytes(request, length, "X-MC-Connection", 15),
+       "credential is spliced after approval and marker is stripped");
+  const char response[] = "HTTP/1.0 200 OK\r\nContent-Length: 6\r\n\r\nC-NET!";
+  need(send(peer, response, sizeof(response) - 1, 0) == sizeof(response) - 1,
+       "send native connection response");
+  need(close(peer) == 0 && close(listener) == 0, "close native connection sockets");
   return NULL;
 }
 
@@ -811,6 +841,273 @@ static void run_http_relay(const mc_host_vm_api_v1 *vm_api,
        "real guest saw HTTP status");
   check(op_api->close(runtime, operation, NULL), "close guest HTTP fetch");
   need(pthread_join(server, NULL) == 0, "join real HTTP server");
+}
+
+static void run_native_connection(const mc_host_vm_api_v1 *vm_api,
+                                  const mc_host_operation_api_v1 *op_api,
+                                  const mc_host_effect_api_v1 *effect_api,
+                                  const mc_host_snapshot_api_v1 *snap_api,
+                                  const mc_host_output_api_v1 *output_api,
+                                  const mc_host_attachment_api_v1 *attachment_api,
+                                  mc_host_runtime_t runtime, mc_host_handle_t kernel,
+                                  mc_host_vm_create_options_v1 *create) {
+  int listener = socket(AF_INET, SOCK_STREAM, 0);
+  need(listener >= 0, "create native connection listener");
+  struct sockaddr_in address = {0};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  need(bind(listener, (struct sockaddr *)&address, sizeof(address)) == 0 &&
+       listen(listener, 1) == 0, "listen for native connection");
+  socklen_t address_length = sizeof(address);
+  need(getsockname(listener, (struct sockaddr *)&address, &address_length) == 0,
+       "read native connection port");
+  pthread_t server;
+  need(pthread_create(&server, NULL, serve_native_connection_once, &listener) == 0,
+       "start native connection server");
+  char origin_text[96];
+  int origin_len = snprintf(origin_text, sizeof(origin_text), "http://127.0.0.1:%u",
+                            (unsigned)ntohs(address.sin_port));
+  need(origin_len > 0 && (size_t)origin_len < sizeof(origin_text), "native origin");
+
+  mc_host_handle_t plan = 0;
+  check(attachment_api->plan_create(runtime, &plan, NULL), "create native connection plan");
+  wire origin = {0}, origins = {0}, payload = {0}, definition = {0};
+  mc_host_wire_connection_origin origin_record = {
+      .value = {(const uint8_t *)origin_text, (size_t)origin_len}};
+  need(mc_host_wire_encode_connection_origin(&origin_record, origin.bytes,
+           sizeof(origin.bytes), &origin.length) == MC_HOST_WIRE_OK,
+       "encode allowed origin");
+  put_bytes(&origins, origin.bytes, origin.length);
+  const char reference[] = "test.org.main";
+  const char bearer[] = "bearer";
+  const char secret[] = "fixture-token";
+  mc_host_wire_connection_attachment connection = {
+      .reference = {(const uint8_t *)reference, sizeof(reference) - 1},
+      .credential_kind = {(const uint8_t *)bearer, sizeof(bearer) - 1},
+      .credential_a = {(const uint8_t *)secret, sizeof(secret) - 1},
+      .credential_b = {NULL, 0},
+      .origins = {origins.bytes, origins.length, 1}};
+  need(mc_host_wire_encode_connection_attachment(&connection, payload.bytes,
+           sizeof(payload.bytes), &payload.length) == MC_HOST_WIRE_OK,
+       "encode native connection");
+  mc_host_wire_attachment_definition entry = {
+      .kind = MC_HOST_ATTACHMENT_CONNECTION,
+      .payload = {payload.bytes, payload.length}};
+  need(mc_host_wire_encode_attachment_definition(&entry, definition.bytes,
+           sizeof(definition.bytes), &definition.length) == MC_HOST_WIRE_OK,
+       "encode native connection attachment");
+  check(attachment_api->plan_add(runtime, plan,
+        (mc_host_bytes_v1){definition.bytes, definition.length}, NULL),
+        "add native connection");
+  const char owner[] = "org", pattern[] = "test.org.main.*";
+  const char action[] = "require_approval";
+  mc_host_wire_connection_policy_attachment policy = {
+      .owner = {(const uint8_t *)owner, sizeof(owner) - 1},
+      .pattern = {(const uint8_t *)pattern, sizeof(pattern) - 1},
+      .action = {(const uint8_t *)action, sizeof(action) - 1}};
+  payload.length = definition.length = 0;
+  need(mc_host_wire_encode_connection_policy_attachment(&policy, payload.bytes,
+           sizeof(payload.bytes), &payload.length) == MC_HOST_WIRE_OK,
+       "encode native connection policy");
+  entry.kind = MC_HOST_ATTACHMENT_CONNECTION_POLICY;
+  entry.payload = (mc_host_wire_bytes){payload.bytes, payload.length};
+  need(mc_host_wire_encode_attachment_definition(&entry, definition.bytes,
+           sizeof(definition.bytes), &definition.length) == MC_HOST_WIRE_OK,
+       "encode connection policy attachment");
+  check(attachment_api->plan_add(runtime, plan,
+        (mc_host_bytes_v1){definition.bytes, definition.length}, NULL),
+        "add native connection policy");
+  check(attachment_api->plan_seal(runtime, plan, NULL), "seal native connection plan");
+
+  mc_host_handle_t vm = 0;
+  check(vm_api->vm_create(runtime, kernel, plan, create, &vm, NULL),
+        "boot native connection VM");
+  drive_to_prompt(vm_api, output_api, runtime, vm, NULL);
+  char script[512];
+  int script_len = snprintf(script, sizeof(script),
+      "local s=require('sys'); local u='%s/native-connection'; "
+      "local o={headers={['X-MC-Connection']='test.org.main'}}; "
+      "local a=assert(s.net.fetch(u,o)); assert(a.status==200); "
+      "local b=assert(s.net.fetch(u,o)); assert(b.status==403); "
+      "print('native-connection-ok')", origin_text);
+  need(script_len > 0 && (size_t)script_len < sizeof(script), "native connection script");
+  wire write = filesystem_request(MC_HOST_OP_FS_WRITE, "/tmp/native-connection.luau",
+                                  (const uint8_t *)script, (size_t)script_len);
+  mc_host_handle_t operation = 0;
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){write.bytes, write.length},
+                      &operation, NULL), "write native connection script");
+  mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
+  for (int attempt = 0; attempt < 2048; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "drive native script write");
+    check(op_api->poll(runtime, operation, &status, NULL), "poll native script write");
+    if (status.state == MC_HOST_OP_READY) break;
+  }
+  need(status.state == MC_HOST_OP_READY, "native connection script written");
+  check(op_api->close(runtime, operation, NULL), "close native script write");
+  wire exec = shell_request("luau /tmp/native-connection.luau");
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){exec.bytes, exec.length},
+                      &operation, NULL), "start native connection guest fetches");
+  int approvals = 0;
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    options.stop_mask = MC_HOST_DRIVE_ON_EFFECT;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "drive native connection fetch");
+    mc_host_handle_t event = 0;
+    mc_host_effect_info_v1 info = MC_HOST_INIT(mc_host_effect_info_v1);
+    mc_host_result_t next = effect_api->next(runtime, vm, 0, &event, &info, NULL);
+    if (next == MC_HOST_OK) {
+      need(approvals < 2 && info.kind == MC_HOST_EVENT_TOOL_APPROVAL,
+           "native transport emits only approval facts");
+      uint8_t frame[1024];
+      mc_host_buffer_v1 buffer = {frame, sizeof(frame), 0};
+      check(effect_api->read(runtime, event, &buffer, NULL), "read approval event");
+      mc_host_wire_effect_event envelope;
+      need(mc_host_wire_decode_effect_event(frame, buffer.required, &envelope) == MC_HOST_WIRE_OK,
+           "decode approval envelope");
+      mc_host_wire_tool_approval_request facts;
+      need(mc_host_wire_decode_tool_approval_request(envelope.payload.data,
+                 envelope.payload.len, &facts) == MC_HOST_WIRE_OK &&
+           facts.connection.len == sizeof(reference) - 1 &&
+           memcmp(facts.connection.data, reference, facts.connection.len) == 0 &&
+           facts.origin.len == (size_t)origin_len &&
+           memcmp(facts.origin.data, origin_text, facts.origin.len) == 0 &&
+           !contains_bytes(frame, buffer.required, secret, sizeof(secret) - 1),
+           "approval carries host facts without a credential");
+      mc_host_snapshot_readiness_v1 readiness = MC_HOST_INIT(mc_host_snapshot_readiness_v1);
+      check(snap_api->readiness(runtime, vm, &readiness, NULL),
+            "readiness while approval unanswered");
+      need(readiness.inflight_egress && readiness.pending_effects,
+           "unanswered approval blocks snapshot");
+      mc_host_wire_tool_approval_response decision = {
+          .allow = (uint8_t)(approvals == 0), .remember_session = 0};
+      wire answer = {0}, result = {0};
+      need(mc_host_wire_encode_tool_approval_response(&decision, answer.bytes,
+               sizeof(answer.bytes), &answer.length) == MC_HOST_WIRE_OK,
+           "encode approval decision");
+      mc_host_wire_effect_response response = {
+          .kind = MC_HOST_EVENT_TOOL_APPROVAL, .event_id = (int64_t)event,
+          .payload = {answer.bytes, answer.length}};
+      need(mc_host_wire_encode_effect_response(&response, result.bytes,
+               sizeof(result.bytes), &result.length) == MC_HOST_WIRE_OK,
+           "encode approval effect response");
+      check(effect_api->respond(runtime, event,
+            (mc_host_bytes_v1){result.bytes, result.length}, NULL),
+            "answer native connection approval");
+      ++approvals;
+    } else {
+      need(next == MC_HOST_WOULD_BLOCK, "native approval queue");
+    }
+    check(op_api->poll(runtime, operation, &status, NULL), "poll native connection guest");
+    if (status.state == MC_HOST_OP_READY) break;
+  }
+  need(approvals == 2 && status.state == MC_HOST_OP_READY && status.result_length < 4096,
+       "native connection guest completes after allow and deny");
+  uint8_t output[4096];
+  mc_host_buffer_v1 result = {output, sizeof(output), 0};
+  check(op_api->result(runtime, operation, &result, NULL), "read native connection guest result");
+  need(contains_bytes(output, result.required, "native-connection-ok", 20),
+       "guest observes native HTTP allow and decline");
+  check(op_api->close(runtime, operation, NULL), "close native connection operation");
+  need(pthread_join(server, NULL) == 0, "join native connection server");
+  const char service_shard[] =
+      "{\"annotations\":{},\"binding\":{\"adapter\":\"openapi\",\"args\":\"json\",\"op\":\"invoke\",\"request\":{\"method\":\"GET\",\"url_template\":\"http://example.test/native\"},\"service\":\"adapters\",\"type\":\"service\"}}";
+  const char service_sha[] = "d8968bb007726cddf72264a09289584ceda7e2eb4d2aa0eeb30ae79341eaa5b9";
+  const char service_index[] =
+      "{\"generation\":1,\"tools\":[{\"address\":\"test.org.main.native\",\"description\":\"Native service\",\"integration\":\"test\",\"sha\":\"d8968bb007726cddf72264a09289584ceda7e2eb4d2aa0eeb30ae79341eaa5b9\"}]}";
+  uint8_t record_bytes[512], list_bytes[600], apply_bytes[1200], request_bytes[1400];
+  size_t record_len = 0, apply_len = 0, request_len = 0;
+  mc_host_wire_catalog_record service_record = {
+      .sha = {(const uint8_t *)service_sha, sizeof(service_sha) - 1},
+      .bytes = {(const uint8_t *)service_shard, sizeof(service_shard) - 1}};
+  need(mc_host_wire_encode_catalog_record(&service_record, record_bytes,
+           sizeof(record_bytes), &record_len) == MC_HOST_WIRE_OK,
+       "encode real service shard");
+  mc_host_wire_list records = {0};
+  need(mc_host_wire_list_append(&records, list_bytes, sizeof(list_bytes),
+           (mc_host_wire_bytes){record_bytes, record_len}) == MC_HOST_WIRE_OK,
+       "encode service catalog record list");
+  mc_host_wire_catalog_apply_request apply = {
+      .index_json = {(const uint8_t *)service_index, sizeof(service_index) - 1},
+      .base_digest = {NULL, 0}, .records = records};
+  need(mc_host_wire_encode_catalog_apply_request(&apply, apply_bytes,
+           sizeof(apply_bytes), &apply_len) == MC_HOST_WIRE_OK,
+       "encode service catalog transaction");
+  mc_host_wire_operation_request catalog_request = {
+      .kind = MC_HOST_OP_CATALOG_INJECT, .payload = {apply_bytes, apply_len}};
+  need(mc_host_wire_encode_operation_request(&catalog_request, request_bytes,
+           sizeof(request_bytes), &request_len) == MC_HOST_WIRE_OK,
+       "encode service catalog operation");
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){request_bytes, request_len},
+                      &operation, NULL), "start service catalog transaction");
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL),
+          "drive service catalog transaction");
+    check(op_api->poll(runtime, operation, &status, NULL),
+          "poll service catalog transaction");
+    if (status.state == MC_HOST_OP_READY) break;
+  }
+  need(status.state == MC_HOST_OP_READY, "real service catalog applies with connection");
+  uint8_t catalog_output[4096];
+  mc_host_buffer_v1 catalog_result = {catalog_output, sizeof(catalog_output), 0};
+  check(op_api->result(runtime, operation, &catalog_result, NULL),
+        "read service catalog result");
+  need(contains_bytes(catalog_output, catalog_result.required, "\"ok\":true", 9),
+       "service catalog committed in guest");
+  check(op_api->close(runtime, operation, NULL), "close service catalog operation");
+  mc_host_snapshot_begin_options_v1 capture = MC_HOST_INIT(mc_host_snapshot_begin_options_v1);
+  capture.mode = MC_HOST_SNAPSHOT_FULL;
+  mc_host_handle_t snapshot = 0;
+  mc_host_snapshot_info_v1 snapshot_info = MC_HOST_INIT(mc_host_snapshot_info_v1);
+  check(snap_api->begin(runtime, vm, &capture, &snapshot, &snapshot_info, NULL),
+        "capture native connection VM");
+  uint8_t *snapshot_data = snapshot_bytes(snap_api, runtime, snapshot, snapshot_info.length);
+  mc_host_buffer_v1 manifest_probe = {NULL, 0, 0};
+  need(snap_api->attachment_manifest(runtime, snapshot, &manifest_probe, NULL) ==
+           MC_HOST_BUFFER_TOO_SMALL && manifest_probe.required > 0,
+       "probe native connection manifest");
+  uint8_t *manifest = malloc(manifest_probe.required);
+  need(manifest != NULL, "allocate native connection manifest");
+  mc_host_buffer_v1 manifest_buffer = {manifest, manifest_probe.required, 0};
+  check(snap_api->attachment_manifest(runtime, snapshot, &manifest_buffer, NULL),
+        "read native connection manifest");
+  need(!contains_bytes(snapshot_data, snapshot_info.length, secret, sizeof(secret) - 1) &&
+       !contains_bytes(manifest, manifest_buffer.required, secret, sizeof(secret) - 1),
+       "snapshot and manifest omit connection credential");
+  check(snap_api->finish(runtime, snapshot, NULL), "finish native connection snapshot");
+  mc_host_vm_restore_options_v1 restore = MC_HOST_INIT(mc_host_vm_restore_options_v1);
+  restore.snapshot = (mc_host_bytes_v1){snapshot_data, snapshot_info.length};
+  restore.mode = MC_HOST_RESTORE_STRICT;
+  mc_host_handle_t missing_plan = 0, rejected = 0;
+  check(attachment_api->plan_create(runtime, &missing_plan, NULL),
+        "create plan without service connection");
+  check(attachment_api->plan_seal(runtime, missing_plan, NULL),
+        "seal plan without service connection");
+  need(vm_api->vm_restore_attached(runtime, kernel, missing_plan, &restore,
+        (mc_host_bytes_v1){NULL, 0}, &rejected, NULL) == MC_HOST_INVALID_STATE &&
+       rejected == 0, "strict restore refuses service catalog without connection");
+  check(attachment_api->plan_close(runtime, missing_plan, NULL),
+        "close missing connection plan");
+  mc_host_handle_t restored = 0;
+  check(vm_api->vm_restore_attached(runtime, kernel, plan, &restore,
+        (mc_host_bytes_v1){manifest, manifest_buffer.required}, &restored, NULL),
+        "strict restore reattaches native connection policy");
+  check(vm_api->vm_close(runtime, restored, NULL), "close restored native connection VM");
+  mc_host_handle_t child = 0;
+  check(vm_api->vm_fork(runtime, vm, &child, NULL),
+        "fork VM with native connection capability");
+  check(vm_api->vm_close(runtime, child, NULL), "close native connection fork");
+  free(snapshot_data);
+  free(manifest);
+  check(vm_api->vm_close(runtime, vm, NULL), "close native connection VM");
+  check(attachment_api->plan_close(runtime, plan, NULL), "close native connection plan");
 }
 
 static void answer_ws(const mc_host_effect_api_v1 *effect_api,
@@ -2085,6 +2382,8 @@ int main(int argc, char **argv) {
   check(op_api.close(runtime, snapshot_unmount_op, NULL),
         "close snapshot unmount operation");
   cancel_mount_relay(&vm_api, &op_api, &effect_api, runtime, vm);
+  run_native_connection(&vm_api, &op_api, &effect_api, &snap_api,
+                        &output_api, &attachment_api, runtime, kernel_handle, &create);
   size_t rust_full_length = 0, rust_bundle_length = 0;
   uint8_t *rust_full = read_artifact(argv[5], &rust_full_length);
   uint8_t *rust_bundle = read_artifact(argv[6], &rust_bundle_length);
