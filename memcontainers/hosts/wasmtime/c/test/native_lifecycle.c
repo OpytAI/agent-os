@@ -459,6 +459,10 @@ static void cancel_mount_relay(const mc_host_vm_api_v1 *vm_api,
   }
   need(event != 0 && info.kind == MC_HOST_EVENT_HOST_CALL,
        "lease cancellable host call");
+  mc_host_handle_t refused_fork = 0;
+  need(vm_api->vm_fork(runtime, vm, &refused_fork, NULL) ==
+           MC_HOST_NOT_QUIESCENT && refused_fork == 0,
+       "fork refuses an unanswered host call");
   mc_host_wire_host_call_response pending_reply = {0};
   wire reply_frame = {0}, response_frame = {0};
   need(mc_host_wire_encode_host_call_response(&pending_reply, reply_frame.bytes,
@@ -2063,6 +2067,16 @@ int main(int argc, char **argv) {
   drive_to_prompt(&vm_api, &output_api, runtime, restored, "agentos-git");
 
   cancel_vm_with_operation(&vm_api, &op_api, runtime, restored);
+  mc_host_handle_t forked = 0;
+  check(vm_api.vm_fork(runtime, vm, &forked, NULL),
+        "fork quiescent VM through full snapshot and strict restore");
+  need(forked != 0 && forked != vm, "fork has independent VM identity");
+  const uint8_t fork_command[] = "echo fork-child\n";
+  check(vm_api.terminal_input(runtime, forked,
+                              (mc_host_bytes_v1){fork_command, sizeof(fork_command) - 1}, NULL),
+        "send terminal input to fork child");
+  drive_to_prompt(&vm_api, &output_api, runtime, forked, "fork-child");
+  check(vm_api.vm_close(runtime, forked, NULL), "close fork child");
   wire snapshot_unmount = mount_request(MC_HOST_OP_UNMOUNT, "/mnt/capi");
   mc_host_handle_t snapshot_unmount_op = 0;
   check(op_api.start(runtime, vm,
@@ -2114,6 +2128,27 @@ int main(int argc, char **argv) {
   free(rust_bundle);
   free(rust_full);
   check(snap_api.baseline_close(runtime, baseline, NULL), "close baseline");
+  mc_host_handle_t live_plan = 0, live_vm = 0, live_child = 0;
+  check(attachment_api.plan_create(runtime, &live_plan, NULL),
+        "create plan for live catalog fork");
+  check(attachment_api.plan_add(runtime, live_plan,
+                                (mc_host_bytes_v1){tool_definition.bytes,
+                                                   tool_definition.length}, NULL),
+        "register live catalog route without create-time tool definition");
+  check(attachment_api.plan_seal(runtime, live_plan, NULL),
+        "seal live catalog fork plan");
+  check(vm_api.vm_create(runtime, kernel_handle, live_plan, &create,
+                         &live_vm, NULL), "boot VM for live catalog fork");
+  drive_to_prompt(&vm_api, &output_api, runtime, live_vm, NULL);
+  run_catalog_apply(&vm_api, &op_api, runtime, live_vm);
+  check(vm_api.vm_fork(runtime, live_vm, &live_child, NULL),
+        "fork VM with catalog added after creation");
+  need(live_child != 0 && live_child != live_vm,
+       "live catalog fork publishes independent child");
+  check(vm_api.vm_close(runtime, live_child, NULL), "close live catalog fork child");
+  check(vm_api.vm_close(runtime, live_vm, NULL), "close live catalog fork source");
+  check(attachment_api.plan_close(runtime, live_plan, NULL),
+        "close live catalog fork plan");
   check(vm_api.kernel_close(runtime, kernel_handle, NULL), "close kernel");
   check(attachment_api.plan_close(runtime, plan, NULL), "close attachment plan");
   check(api.runtime_close(runtime, NULL), "close runtime");

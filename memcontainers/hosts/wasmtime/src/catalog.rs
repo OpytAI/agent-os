@@ -258,6 +258,36 @@ pub fn validate_native_restored_catalog(
     Ok(())
 }
 
+/// A fork keeps the source VM's live catalog bytes and reattaches its live
+/// native routes. Validate the restored catalog against those routes, rather
+/// than against the source plan's create-time tool definitions.
+pub fn validate_native_fork_catalog(
+    host: &mut KernelHost,
+    route_names: &std::collections::BTreeSet<String>,
+) -> Result<()> {
+    let index_bytes = match host.read_file("/etc/tools/catalog/index.json") {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(()),
+    };
+    let index_text = std::str::from_utf8(&index_bytes)?;
+    let index = toolcore::CatalogIndex::parse(index_text)
+        .map_err(|error| anyhow!("invalid fork catalog index: {error:?}"))?;
+    for entry in index.entries() {
+        let bytes = host.read_file(&format!("/etc/tools/catalog/records/{}", entry.sha))?;
+        if sha256_hex(&bytes) != entry.sha {
+            return Err(anyhow!("fork catalog shard {} is corrupt", entry.sha));
+        }
+        let text = std::str::from_utf8(&bytes)?;
+        let record = toolcore::hydrate_record(entry, text)
+            .map_err(|error| anyhow!("invalid fork catalog shard: {error:?}"))?;
+        match record.binding {
+            toolcore::Binding::HostCall { name, .. } if route_names.contains(&name) => {}
+            _ => return Err(anyhow!("fork catalog has an unavailable native binding")),
+        }
+    }
+    Ok(())
+}
+
 /// `/proc/mounts` is generated from the restored root namespace. Every
 /// host-backed mount must have a route in the new attachment plan.
 pub fn validate_native_restored_mounts(

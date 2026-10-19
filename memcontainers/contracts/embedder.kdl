@@ -107,7 +107,7 @@ layout "DRIVE_RESULT" size=80 align=8 {
   offset "stop_reason" value=12
   offset "status" value=16
 }
-layout "VM_API" size=96 align=8 {
+layout "VM_API" size=104 align=8 {
   offset "header" value=0
   offset "kernel_load" value=8
   offset "kernel_close" value=16
@@ -120,6 +120,7 @@ layout "VM_API" size=96 align=8 {
   offset "terminal_input" value=72
   offset "terminal_resize" value=80
   offset "vm_restore_attached" value=88
+  offset "vm_fork" value=96
 }
 layout "OUTPUT_RECORD" size=64 align=8 {
   offset "header" value=0

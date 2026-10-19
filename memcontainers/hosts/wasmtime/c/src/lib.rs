@@ -230,6 +230,7 @@ struct VmApi {
         *mut u64,
         *mut Error,
     ) -> ResultCode,
+    vm_fork: unsafe extern "C" fn(RuntimeHandle, u64, *mut u64, *mut Error) -> ResultCode,
 }
 
 #[repr(C)]
@@ -632,6 +633,7 @@ const _: () = {
         offset_of!(VmApi, vm_restore_attached)
             == contract::MC_HOST_LAYOUT_VM_API_VM_RESTORE_ATTACHED_OFFSET
     );
+    assert!(offset_of!(VmApi, vm_fork) == contract::MC_HOST_LAYOUT_VM_API_VM_FORK_OFFSET);
     assert!(size_of::<OutputRecordInfo>() == contract::MC_HOST_LAYOUT_OUTPUT_RECORD_SIZE);
     assert!(align_of::<OutputRecordInfo>() == contract::MC_HOST_LAYOUT_OUTPUT_RECORD_ALIGN);
     assert!(

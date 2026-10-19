@@ -176,6 +176,8 @@ typedef struct mc_host_vm_api_v1 {
       mc_host_runtime_t, mc_host_handle_t, mc_host_handle_t,
       const mc_host_vm_restore_options_v1 *, mc_host_bytes_v1,
       mc_host_handle_t *, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *vm_fork)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_handle_t *, mc_host_error_v1 *);
 } mc_host_vm_api_v1;
 
 typedef struct mc_host_output_record_v1 {

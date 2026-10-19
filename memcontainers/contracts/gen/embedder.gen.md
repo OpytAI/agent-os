@@ -151,7 +151,7 @@ ABI **1.0**.
 | `DRIVE_OPTIONS` | 24 | 8 |
 | `VM_STATUS` | 64 | 8 |
 | `DRIVE_RESULT` | 80 | 8 |
-| `VM_API` | 96 | 8 |
+| `VM_API` | 104 | 8 |
 | `OUTPUT_RECORD` | 64 | 8 |
 | `OUTPUT_STATS` | 48 | 8 |
 | `OUTPUT_API` | 48 | 8 |

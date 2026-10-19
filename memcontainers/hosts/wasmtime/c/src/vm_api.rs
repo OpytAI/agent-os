@@ -327,6 +327,23 @@ fn vm_restore_common(
     })
 }
 
+pub unsafe extern "C" fn vm_fork(
+    runtime: u64,
+    source: u64,
+    out_vm: *mut u64,
+    error: *mut Error,
+) -> ResultCode {
+    guard(error, || {
+        if out_vm.is_null() || (out_vm as usize) % align_of::<u64>() != 0 {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        unsafe { *out_vm = 0 };
+        let child = ActiveRuntime::acquire(runtime)?.state.fork_vm(source)?;
+        unsafe { *out_vm = child };
+        Ok(())
+    })
+}
+
 fn status_value(report: VmReport, size: usize) -> VmStatus {
     let observed = report.observed;
     let output = report.output;
@@ -482,4 +499,5 @@ pub static VM_API: VmApi = VmApi {
     terminal_input,
     terminal_resize,
     vm_restore_attached,
+    vm_fork,
 };

@@ -1325,6 +1325,27 @@ impl RuntimeState {
         baseline: Option<&[u8]>,
         manifest_bytes: Option<&[u8]>,
     ) -> Result<u64, u32> {
+        self.restore_vm_inner(
+            kernel_handle,
+            plan_handle,
+            mode,
+            snapshot,
+            baseline,
+            manifest_bytes,
+            false,
+        )
+    }
+
+    fn restore_vm_inner(
+        &self,
+        kernel_handle: u64,
+        plan_handle: u64,
+        mode: u32,
+        snapshot: &[u8],
+        baseline: Option<&[u8]>,
+        manifest_bytes: Option<&[u8]>,
+        fork_catalog: bool,
+    ) -> Result<u64, u32> {
         if snapshot.is_empty()
             || snapshot.len() > self.limits.max_snapshot_bytes
             || baseline
@@ -1451,19 +1472,27 @@ impl RuntimeState {
                 return Err(contract::MC_HOST_SNAPSHOT_ERROR);
             }
         };
-        let strict_valid = mode != contract::MC_HOST_RESTORE_STRICT
-            || (host::validate_native_restored_catalog(
+        let routes = capabilities.as_ref().map_or_else(Default::default, |plan| {
+            plan.routes.keys().cloned().collect()
+        });
+        let catalog_valid = if mode != contract::MC_HOST_RESTORE_STRICT {
+            true
+        } else if fork_catalog {
+            host::validate_native_fork_catalog(&mut host, &routes).is_ok()
+        } else {
+            host::validate_native_restored_catalog(
                 &mut host,
                 capabilities
                     .as_ref()
                     .map_or(&[], |plan| plan.host_tools.as_slice()),
             )
             .is_ok()
+        };
+        let strict_valid = mode != contract::MC_HOST_RESTORE_STRICT
+            || (catalog_valid
                 && host::validate_native_restored_mounts(
                     &mut host,
-                    &capabilities.as_ref().map_or_else(Default::default, |plan| {
-                        plan.routes.keys().cloned().collect()
-                    }),
+                    &routes,
                     manifest_bytes.is_some(),
                 )
                 .is_ok());
@@ -1511,6 +1540,61 @@ impl RuntimeState {
             self.release_snapshot_charge(transient_bytes - retained_bytes)?;
         }
         inserted
+    }
+
+    /// Fork through the same full-MCSN and strict-restore path as an external
+    /// caller. The temporary plan is a private copy of the source VM's live
+    /// native attachment registry.
+    pub fn fork_vm(&self, source_handle: u64) -> Result<u64, u32> {
+        let source = self.vm(source_handle)?;
+        let (snapshot_handle, _) = self.begin_snapshot(source_handle, None)?;
+        let result = (|| {
+            let snapshot = self.snapshot_record(snapshot_handle)?;
+            let plan_handle = if let Some(mut plan) = source.attachments.clone() {
+                plan.sealed = true;
+                let mut resources = self
+                    .resources
+                    .lock()
+                    .map_err(|_| contract::MC_HOST_INTERNAL)?;
+                if resources.plans.live >= MAX_PLANS {
+                    return Err(contract::MC_HOST_RESOURCE_LIMIT);
+                }
+                resources.plans.insert(self.namespace, plan)?
+            } else {
+                0
+            };
+            let restored = self.restore_vm_inner(
+                source.kernel_handle,
+                plan_handle,
+                contract::MC_HOST_RESTORE_STRICT,
+                &snapshot.bytes,
+                None,
+                Some(&snapshot.attachment_manifest),
+                true,
+            );
+            let closed_plan = if plan_handle == 0 {
+                Ok(())
+            } else {
+                self.close_plan(plan_handle)
+            };
+            match (restored, closed_plan) {
+                (Ok(child), Ok(())) => Ok(child),
+                (Ok(child), Err(error)) => {
+                    let _ = self.close_vm(child);
+                    Err(error)
+                }
+                (Err(error), _) => Err(error),
+            }
+        })();
+        let closed_snapshot = self.close_snapshot(snapshot_handle);
+        match (result, closed_snapshot) {
+            (Ok(child), Ok(())) => Ok(child),
+            (Ok(child), Err(error)) => {
+                let _ = self.close_vm(child);
+                Err(error)
+            }
+            (Err(error), _) => Err(error),
+        }
     }
 
     fn release_snapshot_charge(&self, amount: usize) -> Result<(), u32> {

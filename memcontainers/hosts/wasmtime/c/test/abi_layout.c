@@ -119,6 +119,7 @@ CHECK_FIELD(mc_host_vm_api_v1, VM_API, vm_cancel_and_close, VM_CANCEL_AND_CLOSE)
 CHECK_FIELD(mc_host_vm_api_v1, VM_API, terminal_input, TERMINAL_INPUT);
 CHECK_FIELD(mc_host_vm_api_v1, VM_API, terminal_resize, TERMINAL_RESIZE);
 CHECK_FIELD(mc_host_vm_api_v1, VM_API, vm_restore_attached, VM_RESTORE_ATTACHED);
+CHECK_FIELD(mc_host_vm_api_v1, VM_API, vm_fork, VM_FORK);
 CHECK_LAYOUT(mc_host_output_record_v1, OUTPUT_RECORD);
 CHECK_FIELD(mc_host_output_record_v1, OUTPUT_RECORD, header, HEADER);
 CHECK_FIELD(mc_host_output_record_v1, OUTPUT_RECORD, kind, KIND);
