@@ -1207,6 +1207,67 @@ impl HostToolAttachment {
     }
 }
 
+/// Non-secret companion metadata for an exact MCSN and its native attachment identities.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SnapshotAttachmentManifest {
+    pub content_digest: Vec<u8>,
+    pub routes: Vec<HostCallAttachment>,
+    pub persist_identity: Option<String>,
+    pub http_identity: Option<String>,
+}
+
+pub const SNAPSHOT_ATTACHMENT_MANIFEST_MSG_ID: u16 = 48;
+pub const SNAPSHOT_ATTACHMENT_MANIFEST_VERSION: u8 = 1;
+impl SnapshotAttachmentManifest {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, SNAPSHOT_ATTACHMENT_MANIFEST_MSG_ID);
+        out.push(SNAPSHOT_ATTACHMENT_MANIFEST_VERSION);
+        ctl_put_bytes(&mut out, &self.content_digest);
+        ctl_put_message_list(&mut out, &self.routes, |v| v.encode());
+        match &self.persist_identity {
+            Some(v) => {
+                out.push(1);
+        ctl_put_str(&mut out, v);
+            }
+            None => out.push(0),
+        }
+        match &self.http_identity {
+            Some(v) => {
+                out.push(1);
+        ctl_put_str(&mut out, v);
+            }
+            None => out.push(0),
+        }
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != SNAPSHOT_ATTACHMENT_MANIFEST_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != SNAPSHOT_ATTACHMENT_MANIFEST_VERSION { return Err(WireError::UnsupportedVersion); }
+        let content_digest = ctl_read_bytes(bytes, &mut off)?;
+        let routes = ctl_read_message_list(bytes, &mut off, HostCallAttachment::decode)?;
+        let persist_identity = match ctl_read_u8(bytes, &mut off)? {
+            0 => None,
+            1 => Some(ctl_read_str(bytes, &mut off)?),
+            _ => return Err(WireError::InvalidPresence),
+        };
+        let http_identity = match ctl_read_u8(bytes, &mut off)? {
+            0 => None,
+            1 => Some(ctl_read_str(bytes, &mut off)?),
+            _ => return Err(WireError::InvalidPresence),
+        };
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            content_digest,
+            routes,
+            persist_identity,
+            http_identity,
+        })
+    }
+}
+
 // Native embedder ABI constants.
 pub const MC_HOST_ABI_MAJOR: u16 = 1;
 pub const MC_HOST_ABI_MINOR: u16 = 0;
@@ -1309,7 +1370,7 @@ pub const MC_HOST_LAYOUT_DRIVE_RESULT_HEADER_OFFSET: usize = 0;
 pub const MC_HOST_LAYOUT_DRIVE_RESULT_TICKS_OFFSET: usize = 8;
 pub const MC_HOST_LAYOUT_DRIVE_RESULT_STOP_REASON_OFFSET: usize = 12;
 pub const MC_HOST_LAYOUT_DRIVE_RESULT_STATUS_OFFSET: usize = 16;
-pub const MC_HOST_LAYOUT_VM_API_SIZE: usize = 88;
+pub const MC_HOST_LAYOUT_VM_API_SIZE: usize = 96;
 pub const MC_HOST_LAYOUT_VM_API_ALIGN: usize = 8;
 pub const MC_HOST_LAYOUT_VM_API_HEADER_OFFSET: usize = 0;
 pub const MC_HOST_LAYOUT_VM_API_KERNEL_LOAD_OFFSET: usize = 8;
@@ -1322,6 +1383,7 @@ pub const MC_HOST_LAYOUT_VM_API_VM_CLOSE_OFFSET: usize = 56;
 pub const MC_HOST_LAYOUT_VM_API_VM_CANCEL_AND_CLOSE_OFFSET: usize = 64;
 pub const MC_HOST_LAYOUT_VM_API_TERMINAL_INPUT_OFFSET: usize = 72;
 pub const MC_HOST_LAYOUT_VM_API_TERMINAL_RESIZE_OFFSET: usize = 80;
+pub const MC_HOST_LAYOUT_VM_API_VM_RESTORE_ATTACHED_OFFSET: usize = 88;
 pub const MC_HOST_LAYOUT_OUTPUT_RECORD_SIZE: usize = 64;
 pub const MC_HOST_LAYOUT_OUTPUT_RECORD_ALIGN: usize = 8;
 pub const MC_HOST_LAYOUT_OUTPUT_RECORD_HEADER_OFFSET: usize = 0;
@@ -1375,7 +1437,7 @@ pub const MC_HOST_LAYOUT_SNAPSHOT_READINESS_PENDING_OPERATIONS_OFFSET: usize = 1
 pub const MC_HOST_LAYOUT_SNAPSHOT_READINESS_PENDING_EFFECTS_OFFSET: usize = 20;
 pub const MC_HOST_LAYOUT_SNAPSHOT_READINESS_PENDING_TRANSACTIONS_OFFSET: usize = 24;
 pub const MC_HOST_LAYOUT_SNAPSHOT_READINESS_RESERVED_OFFSET: usize = 28;
-pub const MC_HOST_LAYOUT_SNAPSHOT_API_SIZE: usize = 72;
+pub const MC_HOST_LAYOUT_SNAPSHOT_API_SIZE: usize = 80;
 pub const MC_HOST_LAYOUT_SNAPSHOT_API_ALIGN: usize = 8;
 pub const MC_HOST_LAYOUT_SNAPSHOT_API_HEADER_OFFSET: usize = 0;
 pub const MC_HOST_LAYOUT_SNAPSHOT_API_BASELINE_IMPORT_OFFSET: usize = 8;
@@ -1386,6 +1448,7 @@ pub const MC_HOST_LAYOUT_SNAPSHOT_API_FINISH_OFFSET: usize = 40;
 pub const MC_HOST_LAYOUT_SNAPSHOT_API_CANCEL_OFFSET: usize = 48;
 pub const MC_HOST_LAYOUT_SNAPSHOT_API_INSPECT_OFFSET: usize = 56;
 pub const MC_HOST_LAYOUT_SNAPSHOT_API_READINESS_OFFSET: usize = 64;
+pub const MC_HOST_LAYOUT_SNAPSHOT_API_ATTACHMENT_MANIFEST_OFFSET: usize = 72;
 pub const MC_HOST_LAYOUT_OPERATION_STATUS_SIZE: usize = 32;
 pub const MC_HOST_LAYOUT_OPERATION_STATUS_ALIGN: usize = 8;
 pub const MC_HOST_LAYOUT_OPERATION_STATUS_HEADER_OFFSET: usize = 0;

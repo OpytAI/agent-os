@@ -4,7 +4,9 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 
-use embedder_rust::{self as contract, EffectEvent};
+use embedder_rust::{
+    self as contract, EffectEvent, HostCallAttachment, SnapshotAttachmentManifest,
+};
 use host::output_queue::{OutputQueue, OutputRecord, OutputStats, LOG, STDERR, STDOUT};
 use host::{
     inspect_snapshot_bytes, ControlRetryAction, ExecOptions, HostToolDef, KernelCacheLimit,
@@ -239,6 +241,7 @@ pub struct VmRecord {
     observed: Mutex<VmObserved>,
     operations: Mutex<Vec<Weak<OperationRecord>>>,
     relay: Option<Arc<Relay>>,
+    attachments: Option<PlanRecord>,
     max_drive_ticks: u32,
     // The Rust host memoizes baseline integrity by buffer address. Keep the
     // immutable full MCSN bytes at that address until this VM is closed.
@@ -247,6 +250,7 @@ pub struct VmRecord {
 
 pub struct SnapshotRecord {
     pub bytes: Vec<u8>,
+    pub attachment_manifest: Vec<u8>,
     kernel_handle: u64,
 }
 
@@ -1239,9 +1243,9 @@ impl RuntimeState {
             .with_stdout(Box::new(output.sink(STDOUT)))
             .with_stderr(Box::new(output.sink(STDERR)))
             .with_log(Box::new(output.sink(LOG)));
-        let relay = capabilities.map(|plan| {
+        let relay = capabilities.as_ref().map(|plan| {
             Relay::new(
-                plan.routes.into_keys().collect(),
+                plan.routes.keys().cloned().collect(),
                 plan.persist_identity.is_some(),
                 plan.http_identity.is_some(),
             )
@@ -1291,6 +1295,7 @@ impl RuntimeState {
             }),
             operations: Mutex::new(Vec::new()),
             relay,
+            attachments: capabilities,
             max_drive_ticks: self.limits.max_drive_ticks,
             _snapshot_anchor: None,
         });
@@ -1318,6 +1323,7 @@ impl RuntimeState {
         mode: u32,
         snapshot: &[u8],
         baseline: Option<&[u8]>,
+        manifest_bytes: Option<&[u8]>,
     ) -> Result<u64, u32> {
         if snapshot.is_empty()
             || snapshot.len() > self.limits.max_snapshot_bytes
@@ -1331,6 +1337,44 @@ impl RuntimeState {
         } else {
             None
         };
+        if mode == contract::MC_HOST_RESTORE_STRICT {
+            if let Some(bytes) = manifest_bytes {
+                let manifest = SnapshotAttachmentManifest::decode(bytes)
+                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+                let description = inspect_snapshot_bytes(snapshot, baseline)
+                    .map_err(|_| contract::MC_HOST_SNAPSHOT_ERROR)?;
+                if manifest.content_digest != description.content_digest {
+                    return Err(contract::MC_HOST_SNAPSHOT_ERROR);
+                }
+                let mut routes = BTreeMap::new();
+                for route in manifest.routes {
+                    if route.name.is_empty()
+                        || route.identity.is_empty()
+                        || routes.insert(route.name, route.identity).is_some()
+                    {
+                        return Err(contract::MC_HOST_INVALID_ARGUMENT);
+                    }
+                }
+                if routes
+                    != capabilities
+                        .as_ref()
+                        .map_or_else(BTreeMap::new, |p| p.routes.clone())
+                    || manifest.persist_identity
+                        != capabilities
+                            .as_ref()
+                            .and_then(|p| p.persist_identity.clone())
+                    || manifest.http_identity
+                        != capabilities.as_ref().and_then(|p| p.http_identity.clone())
+                {
+                    return Err(contract::MC_HOST_INVALID_STATE);
+                }
+            } else if capabilities
+                .as_ref()
+                .is_some_and(|p| p.persist_identity.is_some() || p.http_identity.is_some())
+            {
+                return Err(contract::MC_HOST_INVALID_STATE);
+            }
+        }
         if capabilities.as_ref().is_some_and(|plan| {
             plan.host_tools
                 .iter()
@@ -1420,6 +1464,7 @@ impl RuntimeState {
                     &capabilities.as_ref().map_or_else(Default::default, |plan| {
                         plan.routes.keys().cloned().collect()
                     }),
+                    manifest_bytes.is_some(),
                 )
                 .is_ok());
         if !strict_valid {
@@ -1444,6 +1489,7 @@ impl RuntimeState {
             }),
             operations: Mutex::new(Vec::new()),
             relay,
+            attachments: capabilities,
             max_drive_ticks: self.limits.max_drive_ticks,
             _snapshot_anchor: Some(baseline.unwrap_or(snapshot)),
         });
@@ -1513,6 +1559,7 @@ impl RuntimeState {
             .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
         let record = Arc::new(SnapshotRecord {
             bytes: bytes.to_vec(),
+            attachment_manifest: Vec::new(),
             kernel_handle,
         });
         match resources.baselines.insert(self.namespace, record) {
@@ -1603,6 +1650,27 @@ impl RuntimeState {
         let length = bytes.len();
         let record = Arc::new(SnapshotRecord {
             bytes,
+            attachment_manifest: SnapshotAttachmentManifest {
+                content_digest: description.content_digest.to_vec(),
+                routes: vm.attachments.as_ref().map_or_else(Vec::new, |plan| {
+                    plan.routes
+                        .iter()
+                        .map(|(name, identity)| HostCallAttachment {
+                            name: name.clone(),
+                            identity: identity.clone(),
+                        })
+                        .collect()
+                }),
+                persist_identity: vm
+                    .attachments
+                    .as_ref()
+                    .and_then(|plan| plan.persist_identity.clone()),
+                http_identity: vm
+                    .attachments
+                    .as_ref()
+                    .and_then(|plan| plan.http_identity.clone()),
+            }
+            .encode(),
             kernel_handle: vm.kernel_handle,
         });
         let handle = resources.snapshots.insert(self.namespace, record)?;

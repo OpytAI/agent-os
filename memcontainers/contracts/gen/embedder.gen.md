@@ -151,14 +151,14 @@ ABI **1.0**.
 | `DRIVE_OPTIONS` | 24 | 8 |
 | `VM_STATUS` | 64 | 8 |
 | `DRIVE_RESULT` | 80 | 8 |
-| `VM_API` | 88 | 8 |
+| `VM_API` | 96 | 8 |
 | `OUTPUT_RECORD` | 64 | 8 |
 | `OUTPUT_STATS` | 48 | 8 |
 | `OUTPUT_API` | 48 | 8 |
 | `SNAPSHOT_BEGIN_OPTIONS` | 24 | 8 |
 | `SNAPSHOT_INFO` | 128 | 8 |
 | `SNAPSHOT_READINESS` | 32 | 4 |
-| `SNAPSHOT_API` | 72 | 8 |
+| `SNAPSHOT_API` | 80 | 8 |
 | `OPERATION_STATUS` | 32 | 8 |
 | `OPERATION_API` | 56 | 8 |
 | `ATTACHMENT_API` | 40 | 8 |

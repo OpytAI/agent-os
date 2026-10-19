@@ -301,4 +301,42 @@ pub static SNAPSHOT_API: SnapshotApi = SnapshotApi {
     cancel,
     inspect,
     readiness,
+    attachment_manifest,
 };
+
+unsafe extern "C" fn attachment_manifest(
+    runtime: u64,
+    snapshot: u64,
+    buffer: *mut Buffer,
+    error: *mut Error,
+) -> ResultCode {
+    guard(error, || {
+        if buffer.is_null() || (buffer as usize) % align_of::<Buffer>() != 0 {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        let caller = unsafe { ptr::read(buffer) };
+        if caller.capacity != 0 && caller.data.is_null() {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        let record = ActiveRuntime::acquire(runtime)?
+            .state
+            .snapshot_record(snapshot)?;
+        let frame = &record.attachment_manifest;
+        if !caller.data.is_null()
+            && ranges_overlap(
+                caller.data as usize,
+                caller.capacity.min(frame.len() as u64) as usize,
+                buffer as usize,
+                size_of::<Buffer>(),
+            )
+        {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        unsafe { (*buffer).required = frame.len() as u64 };
+        if caller.capacity < frame.len() as u64 {
+            return Err(contract::MC_HOST_BUFFER_TOO_SMALL);
+        }
+        unsafe { ptr::copy_nonoverlapping(frame.as_ptr(), caller.data, frame.len()) };
+        Ok(())
+    })
+}

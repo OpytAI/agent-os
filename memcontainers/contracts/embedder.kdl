@@ -107,7 +107,7 @@ layout "DRIVE_RESULT" size=80 align=8 {
   offset "stop_reason" value=12
   offset "status" value=16
 }
-layout "VM_API" size=88 align=8 {
+layout "VM_API" size=96 align=8 {
   offset "header" value=0
   offset "kernel_load" value=8
   offset "kernel_close" value=16
@@ -119,6 +119,7 @@ layout "VM_API" size=88 align=8 {
   offset "vm_cancel_and_close" value=64
   offset "terminal_input" value=72
   offset "terminal_resize" value=80
+  offset "vm_restore_attached" value=88
 }
 layout "OUTPUT_RECORD" size=64 align=8 {
   offset "header" value=0
@@ -173,7 +174,7 @@ layout "SNAPSHOT_READINESS" size=32 align=4 {
   offset "pending_transactions" value=24
   offset "reserved" value=28
 }
-layout "SNAPSHOT_API" size=72 align=8 {
+layout "SNAPSHOT_API" size=80 align=8 {
   offset "header" value=0
   offset "baseline_import" value=8
   offset "baseline_close" value=16
@@ -183,6 +184,7 @@ layout "SNAPSHOT_API" size=72 align=8 {
   offset "cancel" value=48
   offset "inspect" value=56
   offset "readiness" value=64
+  offset "attachment_manifest" value=72
 }
 layout "OPERATION_STATUS" size=32 align=8 {
   offset "header" value=0
@@ -539,4 +541,12 @@ message "HostToolAttachment" id=47 version=1 {
   field "output_schema" type="str" opt=1
   field "annotations" type="str" opt=1
   doc "Host tool definition supplied with a strict restore plan. Its shard must match the restored catalog exactly."
+}
+
+message "SnapshotAttachmentManifest" id=48 version=1 {
+  field "content_digest" type="bytes"
+  field "routes" type="list<HostCallAttachment>"
+  field "persist_identity" type="str" opt=1
+  field "http_identity" type="str" opt=1
+  doc "Non-secret companion metadata for an exact MCSN and its native attachment identities."
 }

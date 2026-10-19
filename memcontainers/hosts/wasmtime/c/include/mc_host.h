@@ -172,6 +172,10 @@ typedef struct mc_host_vm_api_v1 {
       mc_host_runtime_t, mc_host_handle_t, mc_host_bytes_v1, mc_host_error_v1 *);
   mc_host_result_t (MC_HOST_CALL *terminal_resize)(
       mc_host_runtime_t, mc_host_handle_t, uint32_t, uint32_t, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *vm_restore_attached)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_handle_t,
+      const mc_host_vm_restore_options_v1 *, mc_host_bytes_v1,
+      mc_host_handle_t *, mc_host_error_v1 *);
 } mc_host_vm_api_v1;
 
 typedef struct mc_host_output_record_v1 {
@@ -265,6 +269,9 @@ typedef struct mc_host_snapshot_api_v1 {
   mc_host_result_t (MC_HOST_CALL *readiness)(
       mc_host_runtime_t, mc_host_handle_t,
       mc_host_snapshot_readiness_v1 *, mc_host_error_v1 *);
+  /* Store this companion with the MCSN and authenticate both before restore. */
+  mc_host_result_t (MC_HOST_CALL *attachment_manifest)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_buffer_v1 *, mc_host_error_v1 *);
 } mc_host_snapshot_api_v1;
 
 typedef struct mc_host_operation_status_v1 {

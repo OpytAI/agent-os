@@ -105,7 +105,7 @@
 #define MC_HOST_LAYOUT_DRIVE_RESULT_TICKS_OFFSET 8
 #define MC_HOST_LAYOUT_DRIVE_RESULT_STOP_REASON_OFFSET 12
 #define MC_HOST_LAYOUT_DRIVE_RESULT_STATUS_OFFSET 16
-#define MC_HOST_LAYOUT_VM_API_SIZE 88
+#define MC_HOST_LAYOUT_VM_API_SIZE 96
 #define MC_HOST_LAYOUT_VM_API_ALIGN 8
 #define MC_HOST_LAYOUT_VM_API_HEADER_OFFSET 0
 #define MC_HOST_LAYOUT_VM_API_KERNEL_LOAD_OFFSET 8
@@ -118,6 +118,7 @@
 #define MC_HOST_LAYOUT_VM_API_VM_CANCEL_AND_CLOSE_OFFSET 64
 #define MC_HOST_LAYOUT_VM_API_TERMINAL_INPUT_OFFSET 72
 #define MC_HOST_LAYOUT_VM_API_TERMINAL_RESIZE_OFFSET 80
+#define MC_HOST_LAYOUT_VM_API_VM_RESTORE_ATTACHED_OFFSET 88
 #define MC_HOST_LAYOUT_OUTPUT_RECORD_SIZE 64
 #define MC_HOST_LAYOUT_OUTPUT_RECORD_ALIGN 8
 #define MC_HOST_LAYOUT_OUTPUT_RECORD_HEADER_OFFSET 0
@@ -171,7 +172,7 @@
 #define MC_HOST_LAYOUT_SNAPSHOT_READINESS_PENDING_EFFECTS_OFFSET 20
 #define MC_HOST_LAYOUT_SNAPSHOT_READINESS_PENDING_TRANSACTIONS_OFFSET 24
 #define MC_HOST_LAYOUT_SNAPSHOT_READINESS_RESERVED_OFFSET 28
-#define MC_HOST_LAYOUT_SNAPSHOT_API_SIZE 72
+#define MC_HOST_LAYOUT_SNAPSHOT_API_SIZE 80
 #define MC_HOST_LAYOUT_SNAPSHOT_API_ALIGN 8
 #define MC_HOST_LAYOUT_SNAPSHOT_API_HEADER_OFFSET 0
 #define MC_HOST_LAYOUT_SNAPSHOT_API_BASELINE_IMPORT_OFFSET 8
@@ -182,6 +183,7 @@
 #define MC_HOST_LAYOUT_SNAPSHOT_API_CANCEL_OFFSET 48
 #define MC_HOST_LAYOUT_SNAPSHOT_API_INSPECT_OFFSET 56
 #define MC_HOST_LAYOUT_SNAPSHOT_API_READINESS_OFFSET 64
+#define MC_HOST_LAYOUT_SNAPSHOT_API_ATTACHMENT_MANIFEST_OFFSET 72
 #define MC_HOST_LAYOUT_OPERATION_STATUS_SIZE 32
 #define MC_HOST_LAYOUT_OPERATION_STATUS_ALIGN 8
 #define MC_HOST_LAYOUT_OPERATION_STATUS_HEADER_OFFSET 0
@@ -1530,6 +1532,73 @@ static inline mc_host_wire_result mc_host_wire_encode_host_tool_attachment(const
         mc_host_wire_put_u8(&w, value->has_annotations);
         if (value->has_annotations) {
             mc_host_wire_put_bytes(&w, value->annotations, 1);
+        }
+        if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
+    }
+    return MC_HOST_WIRE_OK;
+}
+
+typedef struct mc_host_wire_snapshot_attachment_manifest {
+    mc_host_wire_bytes content_digest;
+    mc_host_wire_list routes;
+    uint8_t has_persist_identity;
+    mc_host_wire_bytes persist_identity;
+    uint8_t has_http_identity;
+    mc_host_wire_bytes http_identity;
+} mc_host_wire_snapshot_attachment_manifest;
+static inline mc_host_wire_result mc_host_wire_decode_snapshot_attachment_manifest(const uint8_t *data, size_t len, mc_host_wire_snapshot_attachment_manifest *out) {
+    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
+    if (mc_host_wire_get_u16(&r) != 48 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
+    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        out->content_digest = mc_host_wire_get_bytes(&r, 0);
+        out->routes.count = mc_host_wire_get_u32(&r);
+        out->routes.data = r.data + r.off;
+        size_t list_start = r.off;
+        for (uint32_t i = 0; i < out->routes.count && r.error == MC_HOST_WIRE_OK; ++i) {
+            mc_host_wire_bytes item = mc_host_wire_get_bytes(&r, 0);
+            mc_host_wire_host_call_attachment nested;
+            if (r.error == MC_HOST_WIRE_OK) r.error = mc_host_wire_decode_host_call_attachment(item.data, item.len, &nested);
+        }
+        out->routes.len = r.off - list_start;
+    out->has_persist_identity = mc_host_wire_get_flag(&r);
+    if (out->has_persist_identity) {
+        out->persist_identity = mc_host_wire_get_bytes(&r, 1);
+    }
+    out->has_http_identity = mc_host_wire_get_flag(&r);
+    if (out->has_http_identity) {
+        out->http_identity = mc_host_wire_get_bytes(&r, 1);
+    }
+    if (r.error != MC_HOST_WIRE_OK) return r.error;
+    return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
+}
+static inline mc_host_wire_result mc_host_wire_encode_snapshot_attachment_manifest(const mc_host_wire_snapshot_attachment_manifest *value, uint8_t *data, size_t capacity, size_t *required) {
+    if (!value || !required || (capacity && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    for (int pass = 0; pass < 2; ++pass) {
+        mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
+        mc_host_wire_put_u16(&w, 48);
+        mc_host_wire_put_u8(&w, 1);
+            mc_host_wire_put_bytes(&w, value->content_digest, 0);
+            mc_host_wire_reader list_reader = {value->routes.data, value->routes.len, 0, MC_HOST_WIRE_OK};
+            for (uint32_t i = 0; i < value->routes.count; ++i) {
+                mc_host_wire_bytes item = mc_host_wire_get_bytes(&list_reader, 0);
+                mc_host_wire_host_call_attachment nested;
+                if (list_reader.error == MC_HOST_WIRE_OK) list_reader.error = mc_host_wire_decode_host_call_attachment(item.data, item.len, &nested);
+            }
+            if (list_reader.error != MC_HOST_WIRE_OK || list_reader.off != value->routes.len) return list_reader.error == MC_HOST_WIRE_OK ? MC_HOST_WIRE_TRAILING_BYTES : list_reader.error;
+            mc_host_wire_put_u32(&w, value->routes.count);
+            mc_host_wire_put(&w, value->routes.data, value->routes.len);
+        if (value->has_persist_identity > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
+        mc_host_wire_put_u8(&w, value->has_persist_identity);
+        if (value->has_persist_identity) {
+            mc_host_wire_put_bytes(&w, value->persist_identity, 1);
+        }
+        if (value->has_http_identity > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
+        mc_host_wire_put_u8(&w, value->has_http_identity);
+        if (value->has_http_identity) {
+            mc_host_wire_put_bytes(&w, value->http_identity, 1);
         }
         if (w.error != MC_HOST_WIRE_OK) return w.error;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }

@@ -220,6 +220,41 @@ pub unsafe extern "C" fn vm_restore(
     out_vm: *mut u64,
     error: *mut Error,
 ) -> ResultCode {
+    vm_restore_common(
+        runtime,
+        kernel,
+        plan,
+        options,
+        Bytes {
+            data: std::ptr::null(),
+            len: 0,
+        },
+        out_vm,
+        error,
+    )
+}
+
+pub unsafe extern "C" fn vm_restore_attached(
+    runtime: u64,
+    kernel: u64,
+    plan: u64,
+    options: *const VmRestoreOptions,
+    manifest: Bytes,
+    out_vm: *mut u64,
+    error: *mut Error,
+) -> ResultCode {
+    vm_restore_common(runtime, kernel, plan, options, manifest, out_vm, error)
+}
+
+fn vm_restore_common(
+    runtime: u64,
+    kernel: u64,
+    plan: u64,
+    options: *const VmRestoreOptions,
+    manifest: Bytes,
+    out_vm: *mut u64,
+    error: *mut Error,
+) -> ResultCode {
     guard(error, || {
         if out_vm.is_null() || (out_vm as usize) % align_of::<u64>() != 0 {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
@@ -241,6 +276,9 @@ pub unsafe extern "C" fn vm_restore(
         {
             return Err(contract::MC_HOST_UNSUPPORTED);
         }
+        if options.mode == contract::MC_HOST_RESTORE_DETACHED && manifest.len != 0 {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
         let snapshot = unsafe { bytes(options.snapshot, 512 * 1024 * 1024)? };
         super::snapshot_api::check_snapshot_memory(snapshot)?;
         let baseline = if options.baseline.len == 0 {
@@ -251,6 +289,11 @@ pub unsafe extern "C" fn vm_restore(
         if let Some(base) = baseline {
             super::snapshot_api::check_snapshot_memory(base)?;
         }
+        let manifest = if manifest.len == 0 {
+            None
+        } else {
+            Some(unsafe { bytes(manifest, 1024 * 1024)? })
+        };
         if ranges_overlap(
             snapshot.as_ptr() as usize,
             snapshot.len(),
@@ -263,14 +306,22 @@ pub unsafe extern "C" fn vm_restore(
                 out_vm as usize,
                 size_of::<u64>(),
             )
+        }) || manifest.is_some_and(|bytes| {
+            ranges_overlap(
+                bytes.as_ptr() as usize,
+                bytes.len(),
+                out_vm as usize,
+                size_of::<u64>(),
+            )
         }) {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
         unsafe { *out_vm = 0 };
         let active = ActiveRuntime::acquire(runtime)?;
-        let vm = active
-            .state
-            .restore_vm(kernel, plan, options.mode, snapshot, baseline)?;
+        let vm =
+            active
+                .state
+                .restore_vm(kernel, plan, options.mode, snapshot, baseline, manifest)?;
         unsafe { *out_vm = vm };
         Ok(())
     })
@@ -430,4 +481,5 @@ pub static VM_API: VmApi = VmApi {
     vm_cancel_and_close,
     terminal_input,
     terminal_resize,
+    vm_restore_attached,
 };

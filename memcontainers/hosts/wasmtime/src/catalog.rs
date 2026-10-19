@@ -263,6 +263,7 @@ pub fn validate_native_restored_catalog(
 pub fn validate_native_restored_mounts(
     host: &mut KernelHost,
     route_names: &std::collections::BTreeSet<String>,
+    has_manifest: bool,
 ) -> Result<()> {
     let mounts = host.read_file("/proc/mounts")?;
     let text = std::str::from_utf8(&mounts)?;
@@ -273,7 +274,7 @@ pub fn validate_native_restored_mounts(
         else {
             return Err(anyhow!("invalid restored mount table"));
         };
-        if label == "mountfs" && !route_names.contains(path) {
+        if label == "mountfs" && (!has_manifest || !route_names.contains(path)) {
             return Err(anyhow!("restored mount {path} has no host route"));
         }
     }

@@ -1909,6 +1909,23 @@ int main(int argc, char **argv) {
            memcmp(delta_info.baseline_id, full_info.baseline_id, 32) == 0,
        "incremental baseline identity");
   uint8_t *delta = snapshot_bytes(&snap_api, runtime, delta_handle, delta_info.length);
+  mc_host_buffer_v1 manifest_probe = {NULL, 0, 0};
+  need(snap_api.attachment_manifest(runtime, delta_handle, &manifest_probe, NULL) ==
+           MC_HOST_BUFFER_TOO_SMALL && manifest_probe.required < 4096,
+       "probe companion attachment manifest");
+  uint8_t manifest[4096];
+  mc_host_buffer_v1 manifest_buffer = {manifest, sizeof(manifest), 0};
+  check(snap_api.attachment_manifest(runtime, delta_handle, &manifest_buffer, NULL),
+        "read companion attachment manifest");
+  need(manifest_buffer.required == manifest_probe.required,
+       "manifest read matches probe");
+  mc_host_wire_snapshot_attachment_manifest manifest_doc;
+  need(mc_host_wire_decode_snapshot_attachment_manifest(manifest,
+           manifest_buffer.required, &manifest_doc) == MC_HOST_WIRE_OK &&
+           manifest_doc.content_digest.len == 32 &&
+           memcmp(manifest_doc.content_digest.data, delta_info.content_digest, 32) == 0 &&
+           manifest_doc.routes.count == 2,
+       "manifest binds exact MCSN and host routes");
   check(snap_api.finish(runtime, delta_handle, NULL), "finish incremental snapshot read");
 
   mc_host_vm_restore_options_v1 restore = MC_HOST_INIT(mc_host_vm_restore_options_v1);
@@ -1916,7 +1933,12 @@ int main(int argc, char **argv) {
   restore.baseline = (mc_host_bytes_v1){full, full_info.length};
   restore.mode = MC_HOST_RESTORE_STRICT;
   mc_host_handle_t restored = 0;
-  need(vm_api.vm_restore(runtime, kernel_handle, 0, &restore, &restored, NULL) ==
+  mc_host_bytes_v1 manifest_bytes = {manifest, manifest_buffer.required};
+  need(vm_api.vm_restore(runtime, kernel_handle, plan, &restore,
+                         &restored, NULL) == MC_HOST_INVALID_STATE && restored == 0,
+       "strict restore requires companion identity for attached providers");
+  need(vm_api.vm_restore_attached(runtime, kernel_handle, 0, &restore,
+                                  manifest_bytes, &restored, NULL) ==
            MC_HOST_INVALID_STATE && restored == 0,
        "strict restore rejects missing catalog handler");
   mc_host_handle_t wrong_plan = 0;
@@ -1945,7 +1967,8 @@ int main(int argc, char **argv) {
         "attach mismatched host tool");
   check(attachment_api.plan_seal(runtime, wrong_plan, NULL),
         "seal mismatched restore plan");
-  need(vm_api.vm_restore(runtime, kernel_handle, wrong_plan, &restore,
+  need(vm_api.vm_restore_attached(runtime, kernel_handle, wrong_plan, &restore,
+                         manifest_bytes,
                          &restored, NULL) == MC_HOST_INVALID_STATE && restored == 0,
        "strict restore rejects changed host tool definition");
   check(attachment_api.plan_close(runtime, wrong_plan, NULL),
@@ -1973,12 +1996,61 @@ int main(int argc, char **argv) {
         "attach matching host tool without mount driver");
   check(attachment_api.plan_seal(runtime, missing_mount_plan, NULL),
         "seal plan without mount driver");
-  need(vm_api.vm_restore(runtime, kernel_handle, missing_mount_plan, &restore,
+  need(vm_api.vm_restore_attached(runtime, kernel_handle, missing_mount_plan, &restore,
+                         manifest_bytes,
                          &restored, NULL) == MC_HOST_INVALID_STATE && restored == 0,
        "strict restore rejects missing mounted driver");
   check(attachment_api.plan_close(runtime, missing_mount_plan, NULL),
         "close plan without mount driver");
-  check(vm_api.vm_restore(runtime, kernel_handle, plan, &restore, &restored, NULL),
+  mc_host_handle_t wrong_identity_plan = 0;
+  check(attachment_api.plan_create(runtime, &wrong_identity_plan, NULL),
+        "create restore plan with wrong provider identity");
+  wire changed_route = {0}, changed_route_definition = {0};
+  put_u16(&changed_route, 29);
+  put_u8(&changed_route, 1);
+  put_bytes(&changed_route, (const uint8_t *)"/mnt/capi", strlen("/mnt/capi"));
+  put_bytes(&changed_route, (const uint8_t *)"different-driver",
+            strlen("different-driver"));
+  put_u16(&changed_route_definition, 20);
+  put_u8(&changed_route_definition, 1);
+  put_u32(&changed_route_definition, MC_HOST_ATTACHMENT_HOST_CALL);
+  put_bytes(&changed_route_definition, changed_route.bytes, changed_route.length);
+  check(attachment_api.plan_add(runtime, wrong_identity_plan,
+                                (mc_host_bytes_v1){changed_route_definition.bytes,
+                                                   changed_route_definition.length}, NULL),
+        "attach same mount name with different provider identity");
+  check(attachment_api.plan_add(runtime, wrong_identity_plan,
+                                (mc_host_bytes_v1){tool_definition.bytes,
+                                                   tool_definition.length}, NULL),
+        "attach matching host tool handler to identity plan");
+  check(attachment_api.plan_add(runtime, wrong_identity_plan,
+                                (mc_host_bytes_v1){host_tool_definition.bytes,
+                                                   host_tool_definition.length}, NULL),
+        "attach matching host tool definition to identity plan");
+  check(attachment_api.plan_add(runtime, wrong_identity_plan,
+                                (mc_host_bytes_v1){persist_definition.bytes,
+                                                   persist_definition.length}, NULL),
+        "attach matching persistence identity");
+  check(attachment_api.plan_add(runtime, wrong_identity_plan,
+                                (mc_host_bytes_v1){http_definition.bytes,
+                                                   http_definition.length}, NULL),
+        "attach matching HTTP identity");
+  check(attachment_api.plan_seal(runtime, wrong_identity_plan, NULL),
+        "seal plan with wrong provider identity");
+  need(vm_api.vm_restore_attached(runtime, kernel_handle, wrong_identity_plan,
+                                  &restore, manifest_bytes, &restored, NULL) ==
+           MC_HOST_INVALID_STATE && restored == 0,
+       "strict restore rejects changed provider identity");
+  check(attachment_api.plan_close(runtime, wrong_identity_plan, NULL),
+        "close plan with wrong provider identity");
+  manifest[7] ^= 1;
+  need(vm_api.vm_restore_attached(runtime, kernel_handle, plan, &restore,
+                                  manifest_bytes, &restored, NULL) ==
+           MC_HOST_SNAPSHOT_ERROR && restored == 0,
+       "strict restore rejects manifest bound to wrong MCSN");
+  manifest[7] ^= 1;
+  check(vm_api.vm_restore_attached(runtime, kernel_handle, plan, &restore,
+                                  manifest_bytes, &restored, NULL),
         "strict restore real incremental snapshot with matching attachments");
   mc_host_handle_t over_limit_vm = 0;
   need(vm_api.vm_restore(runtime, kernel_handle, 0, &restore, &over_limit_vm, NULL) ==

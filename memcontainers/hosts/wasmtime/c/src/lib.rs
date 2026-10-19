@@ -221,6 +221,15 @@ struct VmApi {
     vm_cancel_and_close: unsafe extern "C" fn(RuntimeHandle, u64, *mut Error) -> ResultCode,
     terminal_input: unsafe extern "C" fn(RuntimeHandle, u64, Bytes, *mut Error) -> ResultCode,
     terminal_resize: unsafe extern "C" fn(RuntimeHandle, u64, u32, u32, *mut Error) -> ResultCode,
+    vm_restore_attached: unsafe extern "C" fn(
+        RuntimeHandle,
+        u64,
+        u64,
+        *const VmRestoreOptions,
+        Bytes,
+        *mut u64,
+        *mut Error,
+    ) -> ResultCode,
 }
 
 #[repr(C)]
@@ -314,6 +323,7 @@ struct SnapshotApi {
     cancel: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
     inspect: unsafe extern "C" fn(u64, Bytes, Bytes, *mut SnapshotInfo, *mut Error) -> ResultCode,
     readiness: unsafe extern "C" fn(u64, u64, *mut SnapshotReadiness, *mut Error) -> ResultCode,
+    attachment_manifest: unsafe extern "C" fn(u64, u64, *mut Buffer, *mut Error) -> ResultCode,
 }
 
 #[repr(C)]
@@ -618,6 +628,10 @@ const _: () = {
         offset_of!(VmApi, terminal_resize)
             == contract::MC_HOST_LAYOUT_VM_API_TERMINAL_RESIZE_OFFSET
     );
+    assert!(
+        offset_of!(VmApi, vm_restore_attached)
+            == contract::MC_HOST_LAYOUT_VM_API_VM_RESTORE_ATTACHED_OFFSET
+    );
     assert!(size_of::<OutputRecordInfo>() == contract::MC_HOST_LAYOUT_OUTPUT_RECORD_SIZE);
     assert!(align_of::<OutputRecordInfo>() == contract::MC_HOST_LAYOUT_OUTPUT_RECORD_ALIGN);
     assert!(
@@ -798,6 +812,10 @@ const _: () = {
     assert!(
         offset_of!(SnapshotApi, readiness)
             == contract::MC_HOST_LAYOUT_SNAPSHOT_API_READINESS_OFFSET
+    );
+    assert!(
+        offset_of!(SnapshotApi, attachment_manifest)
+            == contract::MC_HOST_LAYOUT_SNAPSHOT_API_ATTACHMENT_MANIFEST_OFFSET
     );
     assert!(size_of::<OperationStatus>() == contract::MC_HOST_LAYOUT_OPERATION_STATUS_SIZE);
     assert!(align_of::<OperationStatus>() == contract::MC_HOST_LAYOUT_OPERATION_STATUS_ALIGN);
@@ -1071,8 +1089,10 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
     const PRE_TOTAL_OPTIONS_SIZE: usize = 28;
     if !valid_header(header, size_of::<Header>())
         || header.size as usize > MAX_INPUT_STRUCT_SIZE
-        || !matches!(header.size as usize, 8 | OLD_OPTIONS_SIZE | PRE_SNAPSHOT_OPTIONS_SIZE | PRE_TOTAL_OPTIONS_SIZE)
-            && (header.size as usize) < size_of::<RuntimeOptions>()
+        || !matches!(
+            header.size as usize,
+            8 | OLD_OPTIONS_SIZE | PRE_SNAPSHOT_OPTIONS_SIZE | PRE_TOTAL_OPTIONS_SIZE
+        ) && (header.size as usize) < size_of::<RuntimeOptions>()
     {
         return Err(contract::MC_HOST_INVALID_ARGUMENT);
     }
@@ -1111,7 +1131,10 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
             (0, 0)
         } else {
             let options = unsafe { ptr::read(options) };
-            (options.max_snapshot_total_bytes, options.max_operations_per_vm)
+            (
+                options.max_snapshot_total_bytes,
+                options.max_operations_per_vm,
+            )
         };
     RuntimeLimits::new(
         max_vms,
