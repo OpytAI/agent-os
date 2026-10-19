@@ -288,6 +288,7 @@ static inline mc_host_wire_result mc_host_wire_decode_exec_request(const uint8_t
     if (out->has_command) {
         out->command = mc_host_wire_get_bytes(&r, 1);
     }
+        {
         out->argv.count = mc_host_wire_get_u32(&r);
         out->argv.data = r.data + r.off;
         size_t list_start = r.off;
@@ -297,6 +298,7 @@ static inline mc_host_wire_result mc_host_wire_decode_exec_request(const uint8_t
             if (r.error == MC_HOST_WIRE_OK) r.error = mc_host_wire_decode_exec_arg(item.data, item.len, &nested);
         }
         out->argv.len = r.off - list_start;
+        }
     out->has_cwd = mc_host_wire_get_flag(&r);
     if (out->has_cwd) {
         out->cwd = mc_host_wire_get_bytes(&r, 1);
@@ -321,6 +323,7 @@ static inline mc_host_wire_result mc_host_wire_encode_exec_request(const mc_host
         if (value->has_command) {
             mc_host_wire_put_bytes(&w, value->command, 1);
         }
+            {
             mc_host_wire_reader list_reader = {value->argv.data, value->argv.len, 0, MC_HOST_WIRE_OK};
             for (uint32_t i = 0; i < value->argv.count; ++i) {
                 mc_host_wire_bytes item = mc_host_wire_get_bytes(&list_reader, 0);
@@ -330,6 +333,7 @@ static inline mc_host_wire_result mc_host_wire_encode_exec_request(const mc_host
             if (list_reader.error != MC_HOST_WIRE_OK || list_reader.off != value->argv.len) return list_reader.error == MC_HOST_WIRE_OK ? MC_HOST_WIRE_TRAILING_BYTES : list_reader.error;
             mc_host_wire_put_u32(&w, value->argv.count);
             mc_host_wire_put(&w, value->argv.data, value->argv.len);
+            }
         if (value->has_cwd > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
         mc_host_wire_put_u8(&w, value->has_cwd);
         if (value->has_cwd) {
@@ -472,6 +476,7 @@ static inline mc_host_wire_result mc_host_wire_decode_dir_entries(const uint8_t 
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 5 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
     if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        {
         out->entries.count = mc_host_wire_get_u32(&r);
         out->entries.data = r.data + r.off;
         size_t list_start = r.off;
@@ -481,6 +486,7 @@ static inline mc_host_wire_result mc_host_wire_decode_dir_entries(const uint8_t 
             if (r.error == MC_HOST_WIRE_OK) r.error = mc_host_wire_decode_dir_entry(item.data, item.len, &nested);
         }
         out->entries.len = r.off - list_start;
+        }
     if (r.error != MC_HOST_WIRE_OK) return r.error;
     return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
 }
@@ -490,6 +496,7 @@ static inline mc_host_wire_result mc_host_wire_encode_dir_entries(const mc_host_
         mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
         mc_host_wire_put_u16(&w, 5);
         mc_host_wire_put_u8(&w, 1);
+            {
             mc_host_wire_reader list_reader = {value->entries.data, value->entries.len, 0, MC_HOST_WIRE_OK};
             for (uint32_t i = 0; i < value->entries.count; ++i) {
                 mc_host_wire_bytes item = mc_host_wire_get_bytes(&list_reader, 0);
@@ -499,6 +506,7 @@ static inline mc_host_wire_result mc_host_wire_encode_dir_entries(const mc_host_
             if (list_reader.error != MC_HOST_WIRE_OK || list_reader.off != value->entries.len) return list_reader.error == MC_HOST_WIRE_OK ? MC_HOST_WIRE_TRAILING_BYTES : list_reader.error;
             mc_host_wire_put_u32(&w, value->entries.count);
             mc_host_wire_put(&w, value->entries.data, value->entries.len);
+            }
         if (w.error != MC_HOST_WIRE_OK) return w.error;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
@@ -828,6 +836,7 @@ static inline mc_host_wire_result mc_host_wire_decode_autocomplete_result(const 
         out->replace_start = mc_host_wire_get_u32(&r);
         out->replace_end = mc_host_wire_get_u32(&r);
         out->common_prefix = mc_host_wire_get_bytes(&r, 1);
+        {
         out->items.count = mc_host_wire_get_u32(&r);
         out->items.data = r.data + r.off;
         size_t list_start = r.off;
@@ -837,6 +846,7 @@ static inline mc_host_wire_result mc_host_wire_decode_autocomplete_result(const 
             if (r.error == MC_HOST_WIRE_OK) r.error = mc_host_wire_decode_autocomplete_item(item.data, item.len, &nested);
         }
         out->items.len = r.off - list_start;
+        }
         out->truncated = mc_host_wire_get_flag(&r);
     if (r.error != MC_HOST_WIRE_OK) return r.error;
     return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
@@ -850,6 +860,7 @@ static inline mc_host_wire_result mc_host_wire_encode_autocomplete_result(const 
             mc_host_wire_put_u32(&w, (uint32_t)value->replace_start);
             mc_host_wire_put_u32(&w, (uint32_t)value->replace_end);
             mc_host_wire_put_bytes(&w, value->common_prefix, 1);
+            {
             mc_host_wire_reader list_reader = {value->items.data, value->items.len, 0, MC_HOST_WIRE_OK};
             for (uint32_t i = 0; i < value->items.count; ++i) {
                 mc_host_wire_bytes item = mc_host_wire_get_bytes(&list_reader, 0);
@@ -859,6 +870,7 @@ static inline mc_host_wire_result mc_host_wire_encode_autocomplete_result(const 
             if (list_reader.error != MC_HOST_WIRE_OK || list_reader.off != value->items.len) return list_reader.error == MC_HOST_WIRE_OK ? MC_HOST_WIRE_TRAILING_BYTES : list_reader.error;
             mc_host_wire_put_u32(&w, value->items.count);
             mc_host_wire_put(&w, value->items.data, value->items.len);
+            }
             if (value->truncated > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
             mc_host_wire_put_u8(&w, value->truncated);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
