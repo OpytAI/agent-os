@@ -150,6 +150,16 @@ int main(int argc, char **argv) {
                          &prefix, NULL) == MC_HOST_OK &&
            prefix.size == sizeof(mc_host_effect_api_v1),
        "effect table prefix");
+  struct {
+    uint8_t table[96];
+    uint64_t canary;
+  } old_effect = {{0}, UINT64_C(0x76543210fedcba98)};
+  need(api.get_interface(runtime, MC_HOST_IFACE_EFFECT_V1, 1,
+                         sizeof(old_effect.table), old_effect.table, NULL) == MC_HOST_OK,
+       "old effect table negotiation");
+  need(((mc_host_header_v1 *)old_effect.table)->size == sizeof(mc_host_effect_api_v1) &&
+           old_effect.canary == UINT64_C(0x76543210fedcba98),
+       "appended effect functions preserve old caller table");
   need(api.runtime_close(runtime, NULL) == MC_HOST_OK, "close runtime");
   need(api.runtime_close(runtime, NULL) == MC_HOST_STALE_HANDLE, "stale close");
 

@@ -88,6 +88,29 @@ struct Inner {
     queued_bytes: usize,
     response_bytes: usize,
     approvals: HashMap<i32, mpsc::Sender<ToolApprovalDecision>>,
+    refused: [u64; 5],
+}
+
+pub struct RelayStats {
+    pub queued_events: u64,
+    pub leased_events: u64,
+    pub queued_bytes: u64,
+    pub response_bytes: u64,
+    pub refused: [u64; 5],
+}
+
+fn family_index(kind: u32) -> usize {
+    match kind {
+        contract::MC_HOST_EVENT_HOST_CALL => 0,
+        contract::MC_HOST_EVENT_PERSIST_GET
+        | contract::MC_HOST_EVENT_PERSIST_PUT
+        | contract::MC_HOST_EVENT_PERSIST_DELETE
+        | contract::MC_HOST_EVENT_PERSIST_LIST => 1,
+        contract::MC_HOST_EVENT_HTTP_REQUEST => 2,
+        contract::MC_HOST_EVENT_WS_CONNECT | contract::MC_HOST_EVENT_WS_SEND => 3,
+        contract::MC_HOST_EVENT_TOOL_APPROVAL => 4,
+        _ => unreachable!("only bridge starts are admitted"),
+    }
 }
 
 impl Inner {
@@ -120,6 +143,9 @@ impl Inner {
     }
 
     fn enqueue(&mut self, kind: u32, payload: Vec<u8>) -> Option<i32> {
+        if self.closed {
+            return None;
+        }
         if self.slots.len() >= MAX_EVENTS
             || self
                 .queued_bytes
@@ -128,6 +154,8 @@ impl Inner {
             || self.next_bridge_handle == i32::MAX
             || self.next_event_id > u64::MAX - MAX_EVENTS as u64
         {
+            let counter = &mut self.refused[family_index(kind)];
+            *counter = counter.saturating_add(1);
             return None;
         }
         let handle = self.next_bridge_handle;
@@ -265,6 +293,7 @@ impl Relay {
                 queued_bytes: 0,
                 response_bytes: 0,
                 approvals: HashMap::new(),
+                refused: [0; 5],
             }),
         })
     }
@@ -319,6 +348,23 @@ impl Relay {
 
     pub fn ready(&self) -> bool {
         self.inner.lock().is_ok_and(|inner| !inner.queue.is_empty())
+    }
+
+    pub fn stats(&self) -> Result<RelayStats, u32> {
+        let inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        Ok(RelayStats {
+            queued_events: inner.queue.len() as u64,
+            leased_events: inner
+                .events
+                .values()
+                .filter(|event| {
+                    event.phase == EventPhase::Leased || event.phase == EventPhase::Responding
+                })
+                .count() as u64,
+            queued_bytes: inner.queued_bytes as u64,
+            response_bytes: inner.response_bytes as u64,
+            refused: inner.refused,
+        })
     }
 
     pub fn has_live_events(&self) -> bool {

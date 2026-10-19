@@ -370,6 +370,20 @@ struct EffectInfo {
 }
 
 #[repr(C)]
+struct EffectStats {
+    header: Header,
+    queued_events: u64,
+    leased_events: u64,
+    queued_bytes: u64,
+    response_bytes: u64,
+    refused_host_call: u64,
+    refused_persist: u64,
+    refused_http: u64,
+    refused_ws: u64,
+    refused_approval: u64,
+}
+
+#[repr(C)]
 struct EffectApi {
     header: Header,
     next: unsafe extern "C" fn(u64, u64, u64, *mut u64, *mut EffectInfo, *mut Error) -> ResultCode,
@@ -383,6 +397,9 @@ struct EffectApi {
     response_abort: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
     socket_push: unsafe extern "C" fn(u64, u64, Bytes, *mut Error) -> ResultCode,
     socket_close: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
+    info: unsafe extern "C" fn(u64, u64, *mut EffectInfo, *mut Error) -> ResultCode,
+    cancel: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
+    stats: unsafe extern "C" fn(u64, u64, *mut EffectStats, *mut Error) -> ResultCode,
 }
 
 // The manifest in embedder.kdl is checked independently by Rust and C. A
@@ -885,10 +902,14 @@ const _: () = {
         offset_of!(AttachmentApi, plan_close)
             == contract::MC_HOST_LAYOUT_ATTACHMENT_API_PLAN_CLOSE_OFFSET
     );
-    assert!(offset_of!(AttachmentApi, vm_attach_update)
-        == contract::MC_HOST_LAYOUT_ATTACHMENT_API_VM_ATTACH_UPDATE_OFFSET);
-    assert!(offset_of!(AttachmentApi, vm_attachment_manifest)
-        == contract::MC_HOST_LAYOUT_ATTACHMENT_API_VM_ATTACHMENT_MANIFEST_OFFSET);
+    assert!(
+        offset_of!(AttachmentApi, vm_attach_update)
+            == contract::MC_HOST_LAYOUT_ATTACHMENT_API_VM_ATTACH_UPDATE_OFFSET
+    );
+    assert!(
+        offset_of!(AttachmentApi, vm_attachment_manifest)
+            == contract::MC_HOST_LAYOUT_ATTACHMENT_API_VM_ATTACHMENT_MANIFEST_OFFSET
+    );
     assert!(size_of::<EffectInfo>() == contract::MC_HOST_LAYOUT_EFFECT_INFO_SIZE);
     assert!(align_of::<EffectInfo>() == contract::MC_HOST_LAYOUT_EFFECT_INFO_ALIGN);
     assert!(offset_of!(EffectInfo, header) == contract::MC_HOST_LAYOUT_EFFECT_INFO_HEADER_OFFSET);
@@ -897,6 +918,45 @@ const _: () = {
         offset_of!(EffectInfo, reserved) == contract::MC_HOST_LAYOUT_EFFECT_INFO_RESERVED_OFFSET
     );
     assert!(offset_of!(EffectInfo, length) == contract::MC_HOST_LAYOUT_EFFECT_INFO_LENGTH_OFFSET);
+    assert!(size_of::<EffectStats>() == contract::MC_HOST_LAYOUT_EFFECT_STATS_SIZE);
+    assert!(align_of::<EffectStats>() == contract::MC_HOST_LAYOUT_EFFECT_STATS_ALIGN);
+    assert!(offset_of!(EffectStats, header) == contract::MC_HOST_LAYOUT_EFFECT_STATS_HEADER_OFFSET);
+    assert!(
+        offset_of!(EffectStats, queued_events)
+            == contract::MC_HOST_LAYOUT_EFFECT_STATS_QUEUED_EVENTS_OFFSET
+    );
+    assert!(
+        offset_of!(EffectStats, leased_events)
+            == contract::MC_HOST_LAYOUT_EFFECT_STATS_LEASED_EVENTS_OFFSET
+    );
+    assert!(
+        offset_of!(EffectStats, queued_bytes)
+            == contract::MC_HOST_LAYOUT_EFFECT_STATS_QUEUED_BYTES_OFFSET
+    );
+    assert!(
+        offset_of!(EffectStats, response_bytes)
+            == contract::MC_HOST_LAYOUT_EFFECT_STATS_RESPONSE_BYTES_OFFSET
+    );
+    assert!(
+        offset_of!(EffectStats, refused_host_call)
+            == contract::MC_HOST_LAYOUT_EFFECT_STATS_REFUSED_HOST_CALL_OFFSET
+    );
+    assert!(
+        offset_of!(EffectStats, refused_persist)
+            == contract::MC_HOST_LAYOUT_EFFECT_STATS_REFUSED_PERSIST_OFFSET
+    );
+    assert!(
+        offset_of!(EffectStats, refused_http)
+            == contract::MC_HOST_LAYOUT_EFFECT_STATS_REFUSED_HTTP_OFFSET
+    );
+    assert!(
+        offset_of!(EffectStats, refused_ws)
+            == contract::MC_HOST_LAYOUT_EFFECT_STATS_REFUSED_WS_OFFSET
+    );
+    assert!(
+        offset_of!(EffectStats, refused_approval)
+            == contract::MC_HOST_LAYOUT_EFFECT_STATS_REFUSED_APPROVAL_OFFSET
+    );
     assert!(size_of::<EffectApi>() == contract::MC_HOST_LAYOUT_EFFECT_API_SIZE);
     assert!(align_of::<EffectApi>() == contract::MC_HOST_LAYOUT_EFFECT_API_ALIGN);
     assert!(offset_of!(EffectApi, header) == contract::MC_HOST_LAYOUT_EFFECT_API_HEADER_OFFSET);
@@ -929,6 +989,9 @@ const _: () = {
         offset_of!(EffectApi, socket_close)
             == contract::MC_HOST_LAYOUT_EFFECT_API_SOCKET_CLOSE_OFFSET
     );
+    assert!(offset_of!(EffectApi, info) == contract::MC_HOST_LAYOUT_EFFECT_API_INFO_OFFSET);
+    assert!(offset_of!(EffectApi, cancel) == contract::MC_HOST_LAYOUT_EFFECT_API_CANCEL_OFFSET);
+    assert!(offset_of!(EffectApi, stats) == contract::MC_HOST_LAYOUT_EFFECT_API_STATS_OFFSET);
 };
 
 struct RuntimeSlot {

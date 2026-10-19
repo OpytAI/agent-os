@@ -260,6 +260,66 @@ unsafe extern "C" fn socket_close(runtime: u64, socket: u64, error: *mut Error) 
     })
 }
 
+unsafe extern "C" fn info(
+    runtime: u64,
+    event: u64,
+    out_info: *mut EffectInfo,
+    error: *mut Error,
+) -> ResultCode {
+    guard(error, || {
+        let size = unsafe { output_size(out_info)? };
+        let (kind, length) = ActiveRuntime::acquire(runtime)?.state.effect_info(event)?;
+        let value = EffectInfo {
+            header: Header {
+                size: size as u32,
+                version: 1,
+                flags: 0,
+            },
+            kind,
+            reserved: 0,
+            length,
+        };
+        unsafe { copy_output(out_info, &value, size) };
+        Ok(())
+    })
+}
+
+unsafe extern "C" fn cancel(runtime: u64, event: u64, error: *mut Error) -> ResultCode {
+    guard(error, || {
+        ActiveRuntime::acquire(runtime)?.state.effect_cancel(event)
+    })
+}
+
+unsafe extern "C" fn stats(
+    runtime: u64,
+    vm: u64,
+    out_stats: *mut EffectStats,
+    error: *mut Error,
+) -> ResultCode {
+    guard(error, || {
+        let size = unsafe { output_size(out_stats)? };
+        let state = ActiveRuntime::acquire(runtime)?.state.effect_stats(vm)?;
+        let value = EffectStats {
+            header: Header {
+                size: size as u32,
+                version: 1,
+                flags: 0,
+            },
+            queued_events: state.queued_events,
+            leased_events: state.leased_events,
+            queued_bytes: state.queued_bytes,
+            response_bytes: state.response_bytes,
+            refused_host_call: state.refused[0],
+            refused_persist: state.refused[1],
+            refused_http: state.refused[2],
+            refused_ws: state.refused[3],
+            refused_approval: state.refused[4],
+        };
+        unsafe { copy_output(out_stats, &value, size) };
+        Ok(())
+    })
+}
+
 pub(super) static EFFECT_API: EffectApi = EffectApi {
     header: Header {
         size: size_of::<EffectApi>() as u32,
@@ -277,4 +337,7 @@ pub(super) static EFFECT_API: EffectApi = EffectApi {
     response_abort,
     socket_push,
     socket_close,
+    info,
+    cancel,
+    stats,
 };

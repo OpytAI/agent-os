@@ -700,7 +700,10 @@ static void run_http_relay(const mc_host_vm_api_v1 *vm_api,
       "local sys=require('sys'); local r=assert(sys.net.fetch('http://127.0.0.1:%u/native')); "
       "assert(r.status==200,tostring(r.status)); "
       "local denied=sys.net.fetch('http://127.0.0.1:%u/native',{headers={['X-MC-Connection']='test.owner.secret'}}); "
-      "assert(denied==nil); print('native-http-ok')",
+      "assert(denied==nil); "
+      "local cancelled=sys.net.fetch('http://127.0.0.1:%u/cancel'); "
+      "assert(cancelled==nil); print('native-http-ok')",
+      (unsigned)ntohs(address.sin_port),
       (unsigned)ntohs(address.sin_port),
       (unsigned)ntohs(address.sin_port));
   need(script_length > 0 && (size_t)script_length < sizeof(script), "guest HTTP script");
@@ -735,7 +738,42 @@ static void run_http_relay(const mc_host_vm_api_v1 *vm_api,
     mc_host_result_t next = effect_api->next(runtime, vm,
         UINT64_C(1) << MC_HOST_EVENT_HTTP_REQUEST, &event, &info, NULL);
     if (next == MC_HOST_OK) {
-      need(!handled && info.kind == MC_HOST_EVENT_HTTP_REQUEST, "one guest HTTP request");
+      need(handled < 2 && info.kind == MC_HOST_EVENT_HTTP_REQUEST,
+           "expected guest HTTP request");
+      mc_host_effect_info_v1 inspected = MC_HOST_INIT(mc_host_effect_info_v1);
+      check(effect_api->info(runtime, event, &inspected, NULL), "inspect leased HTTP event");
+      need(inspected.kind == info.kind && inspected.length == info.length,
+           "leased event identity and length");
+      mc_host_effect_stats_v1 stats = MC_HOST_INIT(mc_host_effect_stats_v1);
+      check(effect_api->stats(runtime, vm, &stats, NULL), "read live effect statistics");
+      need(stats.leased_events >= 1 && stats.queued_bytes > 0,
+           "leased effect remains inside queue quota");
+      if (handled == 1) {
+        wire payload = {0}, answer = {0};
+        const char head[] = "200 OK\r\nContent-Length: 1\r\n\r\n";
+        mc_host_wire_http_effect_response planned = {
+            .failed = 0,
+            .head = {(const uint8_t *)head, sizeof(head) - 1},
+            .body = {NULL, 0}};
+        need(mc_host_wire_encode_http_effect_response(&planned, payload.bytes,
+                    sizeof(payload.bytes), &payload.length) == MC_HOST_WIRE_OK,
+             "encode response later cancelled by application");
+        mc_host_wire_effect_response answer_envelope = {
+            .kind = MC_HOST_EVENT_HTTP_REQUEST,
+            .event_id = (int64_t)event,
+            .payload = {payload.bytes, payload.length}};
+        need(mc_host_wire_encode_effect_response(&answer_envelope, answer.bytes,
+                    sizeof(answer.bytes), &answer.length) == MC_HOST_WIRE_OK,
+             "encode pending response before cancellation");
+        check(effect_api->response_begin(runtime, event,
+            (mc_host_bytes_v1){answer.bytes, answer.length}, 1, NULL),
+            "begin response later cancelled by application");
+        check(effect_api->cancel(runtime, event, NULL), "cancel second guest HTTP request");
+        need(effect_api->info(runtime, event, &inspected, NULL) == MC_HOST_STALE_HANDLE,
+             "cancelled event handle is stale");
+        handled = 2;
+        continue;
+      }
       uint8_t frame[2048];
       mc_host_buffer_v1 buffer = {frame, sizeof(frame), 0};
       check(effect_api->read(runtime, event, &buffer, NULL), "read HTTP event");
@@ -832,7 +870,7 @@ static void run_http_relay(const mc_host_vm_api_v1 *vm_api,
     check(op_api->poll(runtime, operation, &status, NULL), "poll guest HTTP fetch");
     if (status.state == MC_HOST_OP_READY) break;
   }
-  need(handled && status.state == MC_HOST_OP_READY && status.result_length < 4096,
+  need(handled == 2 && status.state == MC_HOST_OP_READY && status.result_length < 4096,
        "guest HTTP fetch completes");
   uint8_t result[4096];
   mc_host_buffer_v1 buffer = {result, sizeof(result), 0};

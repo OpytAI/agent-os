@@ -1249,6 +1249,38 @@ impl RuntimeState {
         .encode())
     }
 
+    pub fn effect_info(&self, handle: u64) -> Result<(u32, u64), u32> {
+        let (vm, event_id, relay) = self.effect_record(handle)?;
+        let (kind, payload) = relay.event(event_id, handle)?;
+        let socket = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .effects
+            .get(self.namespace, handle)?
+            .socket;
+        let frame_len = EffectEvent {
+            kind,
+            event_id: handle as i64,
+            vm_id: vm as i64,
+            operation_id: None,
+            socket_id: socket.map(|id| id as i64),
+            flags: 0,
+            payload,
+        }
+        .encode()
+        .len() as u64;
+        Ok((kind, frame_len))
+    }
+
+    pub fn effect_stats(&self, vm_handle: u64) -> Result<super::relay::RelayStats, u32> {
+        let vm = self.vm(vm_handle)?;
+        vm.relay
+            .as_ref()
+            .ok_or(contract::MC_HOST_UNSUPPORTED)?
+            .stats()
+    }
+
     pub fn effect_release(&self, handle: u64) -> Result<(), u32> {
         let (_, event_id, relay) = self.effect_record(handle)?;
         relay.release(event_id, handle)?;
@@ -1263,6 +1295,40 @@ impl RuntimeState {
     pub fn effect_respond(&self, handle: u64, kind: u32, response: EffectBody) -> Result<(), u32> {
         let (_, event_id, relay) = self.effect_record(handle)?;
         relay.respond(event_id, handle, kind, response)?;
+        self.resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .effects
+            .remove(self.namespace, handle)?;
+        Ok(())
+    }
+
+    pub fn effect_cancel(&self, handle: u64) -> Result<(), u32> {
+        let (_, event_id, relay) = self.effect_record(handle)?;
+        let kind = self
+            .resources
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .effects
+            .get(self.namespace, handle)?
+            .kind;
+        let response = || EffectBody {
+            failed: true,
+            head: Vec::new(),
+            body: if kind == contract::MC_HOST_EVENT_TOOL_APPROVAL {
+                vec![0]
+            } else {
+                Vec::new()
+            },
+        };
+        match relay.respond(event_id, handle, kind, response()) {
+            Ok(()) => {}
+            Err(error) if error == contract::MC_HOST_INVALID_STATE => {
+                relay.response_abort(event_id, handle)?;
+                relay.respond(event_id, handle, kind, response())?;
+            }
+            Err(error) => return Err(error),
+        }
         self.resources
             .lock()
             .map_err(|_| contract::MC_HOST_INTERNAL)?

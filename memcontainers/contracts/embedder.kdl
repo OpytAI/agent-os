@@ -219,7 +219,19 @@ layout "EFFECT_INFO" size=24 align=8 {
   offset "reserved" value=12
   offset "length" value=16
 }
-layout "EFFECT_API" size=96 align=8 {
+layout "EFFECT_STATS" size=80 align=8 {
+  offset "header" value=0
+  offset "queued_events" value=8
+  offset "leased_events" value=16
+  offset "queued_bytes" value=24
+  offset "response_bytes" value=32
+  offset "refused_host_call" value=40
+  offset "refused_persist" value=48
+  offset "refused_http" value=56
+  offset "refused_ws" value=64
+  offset "refused_approval" value=72
+}
+layout "EFFECT_API" size=120 align=8 {
   offset "header" value=0
   offset "next" value=8
   offset "read" value=16
@@ -232,6 +244,9 @@ layout "EFFECT_API" size=96 align=8 {
   offset "response_abort" value=72
   offset "socket_push" value=80
   offset "socket_close" value=88
+  offset "info" value=96
+  offset "cancel" value=104
+  offset "stats" value=112
 }
 
 constant "MC_HOST_OK" value=0 type="u32"

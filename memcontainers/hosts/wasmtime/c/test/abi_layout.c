@@ -208,6 +208,18 @@ CHECK_FIELD(mc_host_effect_info_v1, EFFECT_INFO, kind, KIND);
 CHECK_FIELD(mc_host_effect_info_v1, EFFECT_INFO, reserved, RESERVED);
 CHECK_FIELD(mc_host_effect_info_v1, EFFECT_INFO, length, LENGTH);
 
+CHECK_LAYOUT(mc_host_effect_stats_v1, EFFECT_STATS);
+CHECK_FIELD(mc_host_effect_stats_v1, EFFECT_STATS, header, HEADER);
+CHECK_FIELD(mc_host_effect_stats_v1, EFFECT_STATS, queued_events, QUEUED_EVENTS);
+CHECK_FIELD(mc_host_effect_stats_v1, EFFECT_STATS, leased_events, LEASED_EVENTS);
+CHECK_FIELD(mc_host_effect_stats_v1, EFFECT_STATS, queued_bytes, QUEUED_BYTES);
+CHECK_FIELD(mc_host_effect_stats_v1, EFFECT_STATS, response_bytes, RESPONSE_BYTES);
+CHECK_FIELD(mc_host_effect_stats_v1, EFFECT_STATS, refused_host_call, REFUSED_HOST_CALL);
+CHECK_FIELD(mc_host_effect_stats_v1, EFFECT_STATS, refused_persist, REFUSED_PERSIST);
+CHECK_FIELD(mc_host_effect_stats_v1, EFFECT_STATS, refused_http, REFUSED_HTTP);
+CHECK_FIELD(mc_host_effect_stats_v1, EFFECT_STATS, refused_ws, REFUSED_WS);
+CHECK_FIELD(mc_host_effect_stats_v1, EFFECT_STATS, refused_approval, REFUSED_APPROVAL);
+
 CHECK_LAYOUT(mc_host_effect_api_v1, EFFECT_API);
 CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, header, HEADER);
 CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, next, NEXT);
@@ -215,6 +227,9 @@ CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, read, READ);
 CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, release, RELEASE);
 CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, respond, RESPOND);
 CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, ack, ACK);
+CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, info, INFO);
+CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, cancel, CANCEL);
+CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, stats, STATS);
 CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, header, HEADER);
 CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, start, START);
 CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, poll, POLL);

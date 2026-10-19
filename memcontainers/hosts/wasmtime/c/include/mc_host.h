@@ -329,6 +329,19 @@ typedef struct mc_host_effect_info_v1 {
   uint64_t length;
 } mc_host_effect_info_v1;
 
+typedef struct mc_host_effect_stats_v1 {
+  mc_host_header_v1 header;
+  uint64_t queued_events;
+  uint64_t leased_events;
+  uint64_t queued_bytes;
+  uint64_t response_bytes;
+  uint64_t refused_host_call;
+  uint64_t refused_persist;
+  uint64_t refused_http;
+  uint64_t refused_ws;
+  uint64_t refused_approval;
+} mc_host_effect_stats_v1;
+
 typedef struct mc_host_effect_api_v1 {
   mc_host_header_v1 header;
   mc_host_result_t (MC_HOST_CALL *next)(
@@ -355,6 +368,12 @@ typedef struct mc_host_effect_api_v1 {
       mc_host_runtime_t, mc_host_handle_t, mc_host_bytes_v1, mc_host_error_v1 *);
   mc_host_result_t (MC_HOST_CALL *socket_close)(
       mc_host_runtime_t, mc_host_handle_t, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *info)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_effect_info_v1 *, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *cancel)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *stats)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_effect_stats_v1 *, mc_host_error_v1 *);
 } mc_host_effect_api_v1;
 
 #define MC_HOST_INIT(type_) { { (uint32_t)sizeof(type_), 1u, 0u } }
