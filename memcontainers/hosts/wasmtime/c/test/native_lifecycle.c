@@ -972,6 +972,124 @@ static void run_effect_pressure(const mc_host_vm_api_v1 *vm_api,
   }
 }
 
+typedef struct stack_probe {
+  const mc_host_vm_api_v1 *vm_api;
+  const mc_host_operation_api_v1 *op_api;
+  mc_host_runtime_t runtime;
+  mc_host_handle_t vm;
+} stack_probe;
+
+static void stack_probe_wait(const stack_probe *probe, mc_host_handle_t operation,
+                             const char *step) {
+  mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 drive = MC_HOST_INIT(mc_host_drive_options_v1);
+    drive.max_ticks = 128;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(probe->vm_api->vm_drive(probe->runtime, probe->vm, &drive, &driven, NULL), step);
+    check(probe->op_api->poll(probe->runtime, operation, &status, NULL), step);
+    if (status.state == MC_HOST_OP_READY) return;
+  }
+  need(0, step);
+}
+
+static void stack_probe_command(const stack_probe *probe, const char *command,
+                                const char *expected) {
+  wire request = shell_request(command);
+  mc_host_handle_t operation = 0;
+  check(probe->op_api->start(probe->runtime, probe->vm,
+                            (mc_host_bytes_v1){request.bytes, request.length},
+                            &operation, NULL), "start guest command on eight-MiB thread");
+  stack_probe_wait(probe, operation, "drive guest command on eight-MiB thread");
+  if (expected) {
+    uint8_t result[4096];
+    mc_host_buffer_v1 buffer = {result, sizeof(result), 0};
+    check(probe->op_api->result(probe->runtime, operation, &buffer, NULL),
+          "read post-depth guest command");
+    need(contains_bytes(result, buffer.required, expected, strlen(expected)),
+         "guest remains usable after pathological depth");
+  }
+  check(probe->op_api->close(probe->runtime, operation, NULL),
+        "close guest command on eight-MiB thread");
+}
+
+static void *run_stack_probe(void *context) {
+  const stack_probe *probe = (const stack_probe *)context;
+  const size_t depth = 8000;
+  const size_t capacity = 16 * depth + 128;
+  uint8_t *source = malloc(capacity);
+  need(source != NULL, "allocate pathological guest source");
+  size_t length = 0;
+#define APPEND_TEXT(value) do { \
+    const char *part = (value); \
+    size_t part_length = strlen(part); \
+    need(length + part_length <= capacity, "bounded pathological source"); \
+    memcpy(source + length, part, part_length); \
+    length += part_length; \
+  } while (0)
+  APPEND_TEXT("--!strict\nlocal d: ");
+  for (size_t i = 0; i < depth; ++i) APPEND_TEXT("{x:");
+  APPEND_TEXT("number");
+  for (size_t i = 0; i < depth; ++i) APPEND_TEXT("}");
+  APPEND_TEXT(" = ");
+  for (size_t i = 0; i < depth; ++i) APPEND_TEXT("{x=");
+  APPEND_TEXT("false");
+  for (size_t i = 0; i < depth; ++i) APPEND_TEXT("}");
+  APPEND_TEXT("\nprint(d)\n");
+#undef APPEND_TEXT
+  mc_host_wire_filesystem_request file = {
+      .path = {(const uint8_t *)"/tmp/native-deep.luau", 21},
+      .has_data = 1,
+      .data = {source, length}};
+  size_t file_capacity = length + 128, file_length = 0;
+  uint8_t *file_frame = malloc(file_capacity);
+  need(file_frame != NULL &&
+       mc_host_wire_encode_filesystem_request(&file, file_frame, file_capacity,
+                                               &file_length) == MC_HOST_WIRE_OK,
+       "encode pathological guest source write");
+  mc_host_wire_operation_request operation_request = {
+      .kind = MC_HOST_OP_FS_WRITE,
+      .payload = {file_frame, file_length}};
+  size_t frame_capacity = file_length + 128, frame_length = 0;
+  uint8_t *frame = malloc(frame_capacity);
+  need(frame != NULL &&
+       mc_host_wire_encode_operation_request(&operation_request, frame, frame_capacity,
+                                             &frame_length) == MC_HOST_WIRE_OK,
+       "encode pathological guest write operation");
+  mc_host_handle_t operation = 0;
+  check(probe->op_api->start(probe->runtime, probe->vm,
+                            (mc_host_bytes_v1){frame, frame_length}, &operation, NULL),
+        "write pathological guest source on eight-MiB thread");
+  free(frame);
+  free(file_frame);
+  free(source);
+  stack_probe_wait(probe, operation, "drive pathological guest source write");
+  check(probe->op_api->close(probe->runtime, operation, NULL),
+        "close pathological source write");
+  stack_probe_command(probe, "luau --check /tmp/native-deep.luau", NULL);
+  stack_probe_command(probe, "luau -e 'print(2)'", "2");
+  return NULL;
+}
+
+static void run_min_stack_probe(const mc_host_vm_api_v1 *vm_api,
+                                const mc_host_operation_api_v1 *op_api,
+                                mc_host_runtime_t runtime, mc_host_handle_t vm) {
+  pthread_attr_t attr;
+  need(pthread_attr_init(&attr) == 0, "initialize native stack attributes");
+  need(pthread_attr_setstacksize(&attr, MC_HOST_MIN_NATIVE_STACK_BYTES) == 0,
+       "set published minimum native stack");
+  size_t stack_size = 0;
+  need(pthread_attr_getstacksize(&attr, &stack_size) == 0 &&
+       stack_size == MC_HOST_MIN_NATIVE_STACK_BYTES,
+       "verify native stack for pathological guest");
+  stack_probe probe = {vm_api, op_api, runtime, vm};
+  pthread_t thread;
+  need(pthread_create(&thread, &attr, run_stack_probe, &probe) == 0,
+       "run pathological guest on minimum native stack");
+  need(pthread_attr_destroy(&attr) == 0, "destroy native stack attributes");
+  need(pthread_join(thread, NULL) == 0, "join minimum-stack guest thread");
+}
+
 static void run_native_connection(const mc_host_vm_api_v1 *vm_api,
                                   const mc_host_operation_api_v1 *op_api,
                                   const mc_host_effect_api_v1 *effect_api,
@@ -2519,6 +2637,7 @@ int main(int argc, char **argv) {
   check(op_api.close(runtime, snapshot_unmount_op, NULL),
         "close snapshot unmount operation");
   run_effect_pressure(&vm_api, &op_api, &effect_api, runtime, vm);
+  run_min_stack_probe(&vm_api, &op_api, runtime, vm);
   cancel_mount_relay(&vm_api, &op_api, &effect_api, runtime, vm);
   run_native_connection(&vm_api, &op_api, &effect_api, &snap_api,
                         &output_api, &attachment_api, runtime, kernel_handle, &create);

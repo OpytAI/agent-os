@@ -326,6 +326,7 @@ constant "MC_HOST_DEFAULT_MAX_WS_SOCKETS" value=256 type="u32"
 constant "MC_HOST_HARD_MAX_WS_SOCKETS" value=256 type="u32"
 constant "MC_HOST_DEFAULT_MAX_WS_INCOMING_BYTES" value=16777216 type="u32"
 constant "MC_HOST_HARD_MAX_WS_INCOMING_BYTES" value=16777216 type="u32"
+constant "MC_HOST_MIN_NATIVE_STACK_BYTES" value=8388608 type="u32"
 
 constant "MC_HOST_TICK_WAITING" value=0 type="u32"
 constant "MC_HOST_TICK_RUNNABLE" value=1 type="u32"

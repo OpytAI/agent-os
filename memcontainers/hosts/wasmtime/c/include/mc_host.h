@@ -5,6 +5,11 @@
 #include "memcontainers/contracts/ctl.gen.h"
 #include "memcontainers/contracts/embedder.gen.h"
 
+/* Linux callers use at least MC_HOST_MIN_NATIVE_STACK_BYTES for threads that
+ * load kernels, create or restore VMs, drive, or call trusted controls. The
+ * Wasmtime engine handles SIGSEGV, SIGBUS, SIGILL, and SIGFPE for guest traps;
+ * application handlers installed later must chain to the prior handlers. */
+
 #if defined(_WIN32)
 #  if defined(MC_HOST_BUILD)
 #    define MC_HOST_EXPORT __declspec(dllexport)
