@@ -1407,15 +1407,22 @@ impl RuntimeState {
                 return Err(contract::MC_HOST_SNAPSHOT_ERROR);
             }
         };
-        if mode == contract::MC_HOST_RESTORE_STRICT
-            && host::validate_native_restored_catalog(
+        let strict_valid = mode != contract::MC_HOST_RESTORE_STRICT
+            || (host::validate_native_restored_catalog(
                 &mut host,
                 capabilities
                     .as_ref()
                     .map_or(&[], |plan| plan.host_tools.as_slice()),
             )
-            .is_err()
-        {
+            .is_ok()
+                && host::validate_native_restored_mounts(
+                    &mut host,
+                    &capabilities.as_ref().map_or_else(Default::default, |plan| {
+                        plan.routes.keys().cloned().collect()
+                    }),
+                )
+                .is_ok());
+        if !strict_valid {
             self.unpin_kernel(kernel_handle)?;
             self.release_snapshot_charge(transient_bytes)?;
             return Err(contract::MC_HOST_INVALID_STATE);

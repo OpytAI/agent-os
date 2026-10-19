@@ -1768,6 +1768,13 @@ int main(int argc, char **argv) {
        !readiness.pending_transactions,
        "snapshot readiness reports no remaining blockers");
 
+  wire snapshot_mount = mount_request(MC_HOST_OP_MOUNT, "/mnt/capi");
+  mc_host_handle_t snapshot_mount_op = 0;
+  check(op_api.start(runtime, vm,
+                     (mc_host_bytes_v1){snapshot_mount.bytes, snapshot_mount.length},
+                     &snapshot_mount_op, NULL), "mount host driver before snapshot");
+  check(op_api.close(runtime, snapshot_mount_op, NULL),
+        "close pre-snapshot mount operation");
   mc_host_snapshot_begin_options_v1 full_options = MC_HOST_INIT(mc_host_snapshot_begin_options_v1);
   full_options.mode = MC_HOST_SNAPSHOT_FULL;
   mc_host_handle_t full_handle = 0;
@@ -1919,6 +1926,9 @@ int main(int argc, char **argv) {
                                 (mc_host_bytes_v1){tool_definition.bytes,
                                                    tool_definition.length}, NULL),
         "attach handler to mismatched plan");
+  check(attachment_api.plan_add(runtime, wrong_plan,
+                                (mc_host_bytes_v1){definition.bytes, definition.length}, NULL),
+        "attach mount driver to mismatched plan");
   host_tool_spec.description = (mc_host_wire_bytes){
       (const uint8_t *)"Changed definition", strlen("Changed definition")};
   need(mc_host_wire_encode_host_tool_attachment(&host_tool_spec, host_tool.bytes,
@@ -1940,6 +1950,34 @@ int main(int argc, char **argv) {
        "strict restore rejects changed host tool definition");
   check(attachment_api.plan_close(runtime, wrong_plan, NULL),
         "close mismatched restore plan");
+  mc_host_handle_t missing_mount_plan = 0;
+  check(attachment_api.plan_create(runtime, &missing_mount_plan, NULL),
+        "create restore plan without mount driver");
+  check(attachment_api.plan_add(runtime, missing_mount_plan,
+                                (mc_host_bytes_v1){tool_definition.bytes,
+                                                   tool_definition.length}, NULL),
+        "attach host tool handler without mount driver");
+  host_tool_spec.description = (mc_host_wire_bytes){
+      (const uint8_t *)"Native echo 1", strlen("Native echo 1")};
+  need(mc_host_wire_encode_host_tool_attachment(&host_tool_spec, host_tool.bytes,
+           sizeof(host_tool.bytes), &host_tool.length) == MC_HOST_WIRE_OK,
+       "encode matching host tool for mount check");
+  host_tool_entry.payload = (mc_host_wire_bytes){host_tool.bytes, host_tool.length};
+  need(mc_host_wire_encode_attachment_definition(&host_tool_entry,
+           host_tool_definition.bytes, sizeof(host_tool_definition.bytes),
+           &host_tool_definition.length) == MC_HOST_WIRE_OK,
+       "encode matching host tool attachment for mount check");
+  check(attachment_api.plan_add(runtime, missing_mount_plan,
+                                (mc_host_bytes_v1){host_tool_definition.bytes,
+                                                   host_tool_definition.length}, NULL),
+        "attach matching host tool without mount driver");
+  check(attachment_api.plan_seal(runtime, missing_mount_plan, NULL),
+        "seal plan without mount driver");
+  need(vm_api.vm_restore(runtime, kernel_handle, missing_mount_plan, &restore,
+                         &restored, NULL) == MC_HOST_INVALID_STATE && restored == 0,
+       "strict restore rejects missing mounted driver");
+  check(attachment_api.plan_close(runtime, missing_mount_plan, NULL),
+        "close plan without mount driver");
   check(vm_api.vm_restore(runtime, kernel_handle, plan, &restore, &restored, NULL),
         "strict restore real incremental snapshot with matching attachments");
   mc_host_handle_t over_limit_vm = 0;
@@ -1953,6 +1991,13 @@ int main(int argc, char **argv) {
   drive_to_prompt(&vm_api, &output_api, runtime, restored, "agentos-git");
 
   cancel_vm_with_operation(&vm_api, &op_api, runtime, restored);
+  wire snapshot_unmount = mount_request(MC_HOST_OP_UNMOUNT, "/mnt/capi");
+  mc_host_handle_t snapshot_unmount_op = 0;
+  check(op_api.start(runtime, vm,
+                     (mc_host_bytes_v1){snapshot_unmount.bytes, snapshot_unmount.length},
+                     &snapshot_unmount_op, NULL), "unmount snapshot driver from source");
+  check(op_api.close(runtime, snapshot_unmount_op, NULL),
+        "close snapshot unmount operation");
   cancel_mount_relay(&vm_api, &op_api, &effect_api, runtime, vm);
   size_t rust_full_length = 0, rust_bundle_length = 0;
   uint8_t *rust_full = read_artifact(argv[5], &rust_full_length);

@@ -258,6 +258,28 @@ pub fn validate_native_restored_catalog(
     Ok(())
 }
 
+/// `/proc/mounts` is generated from the restored root namespace. Every
+/// host-backed mount must have a route in the new attachment plan.
+pub fn validate_native_restored_mounts(
+    host: &mut KernelHost,
+    route_names: &std::collections::BTreeSet<String>,
+) -> Result<()> {
+    let mounts = host.read_file("/proc/mounts")?;
+    let text = std::str::from_utf8(&mounts)?;
+    for line in text.lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(path), Some(label), Some(_mode), None) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
+            return Err(anyhow!("invalid restored mount table"));
+        };
+        if label == "mountfs" && !route_names.contains(path) {
+            return Err(anyhow!("restored mount {path} has no host route"));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 struct SourceBytes {
     bytes: Vec<u8>,
