@@ -9,15 +9,16 @@ use embedder_rust::{
     ConnectionPolicyAttachment, EffectEvent, HostCallAttachment, LiveAttachmentManifest,
     SnapshotAttachmentManifest,
 };
-use host::output_queue::{OutputQueue, OutputRecord, OutputStats, LOG, STDERR, STDOUT};
+use host::output_queue::{OutputQueue, OutputRecord, OutputStats, QueueSink, LOG, STDERR, STDOUT};
 use host::{
     inspect_snapshot_bytes, ConnectionCredential, ConnectionPolicyAction, ConnectionPolicyOwner,
     ConnectionPolicyRule, ConnectionPolicySet, ConnectionRegistry, ControlRetryAction, ExecOptions,
     HostToolDef, KernelCacheLimit, KernelHost, KernelHostBuilder, KernelModuleCache,
-    NativeCatalogUpdate, RealNet, SnapshotDescription, TickState,
+    NativeCatalogUpdate, RealNet, SnapshotDescription, StreamSink, TickState,
 };
 use sha2::{Digest, Sha256};
 
+use super::notifier::{Notifier, WakeCallback};
 use super::operations::OperationRecord;
 use super::relay::{EffectBody, Relay, RelayLimits};
 use super::{pack_kind, unpack, MAX_GENERATION, MAX_INDEX};
@@ -48,6 +49,8 @@ pub struct RuntimeLimits {
     pub max_snapshot_total_bytes: usize,
     pub max_operations_per_vm: usize,
     pub relay: RelayLimits,
+    pub wake: Option<WakeCallback>,
+    pub wake_user_data: usize,
 }
 
 impl RuntimeLimits {
@@ -64,6 +67,8 @@ impl RuntimeLimits {
         max_effect_response_bytes: u32,
         max_ws_sockets: u32,
         max_ws_incoming_bytes: u32,
+        wake: Option<WakeCallback>,
+        wake_user_data: usize,
     ) -> Result<Self, u32> {
         if max_vms > MAX_VMS as u32
             || max_drive_ticks > MAX_DRIVE_TICKS
@@ -149,6 +154,8 @@ impl RuntimeLimits {
                     max_ws_incoming_bytes
                 } as usize,
             },
+            wake,
+            wake_user_data,
         })
     }
 }
@@ -790,7 +797,35 @@ pub struct RuntimeState {
     namespace: u16,
     limits: RuntimeLimits,
     pub cache: Arc<KernelModuleCache>,
+    pub notifier: Option<Arc<Notifier>>,
     resources: Mutex<Resources>,
+}
+
+struct WakeSink {
+    inner: QueueSink,
+    notifier: Option<Arc<Notifier>>,
+}
+
+impl StreamSink for WakeSink {
+    fn write(&mut self, bytes: &[u8]) {
+        self.inner.write(bytes);
+        if !bytes.is_empty() {
+            if let Some(notifier) = &self.notifier {
+                notifier.notify();
+            }
+        }
+    }
+}
+
+fn wake_sink(
+    output: &Arc<OutputQueue>,
+    channel: u32,
+    notifier: &Option<Arc<Notifier>>,
+) -> Box<dyn StreamSink> {
+    Box::new(WakeSink {
+        inner: output.sink(channel),
+        notifier: notifier.clone(),
+    })
 }
 
 struct SnapshotCaptureReservation<'a> {
@@ -812,11 +847,16 @@ impl Drop for SnapshotCaptureReservation<'_> {
 }
 
 impl RuntimeState {
-    pub fn new(namespace: u16, limits: RuntimeLimits) -> Self {
-        Self {
+    pub fn new(namespace: u16, limits: RuntimeLimits) -> Result<Self, u32> {
+        let notifier = limits
+            .wake
+            .map(|wake| Notifier::new(wake, limits.wake_user_data))
+            .transpose()?;
+        Ok(Self {
             namespace,
             limits,
             cache: Arc::new(KernelModuleCache::bounded(MAX_KERNELS, MAX_KERNEL_BYTES)),
+            notifier,
             resources: Mutex::new(Resources {
                 kernels: HandleTable::new(KERNEL_KIND),
                 kernel_bytes: 0,
@@ -830,7 +870,7 @@ impl RuntimeState {
                 sockets: HandleTable::new(SOCKET_KIND),
                 snapshot_bytes: 0,
             }),
-        }
+        })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1591,9 +1631,9 @@ impl RuntimeState {
                 config.contract_budget_mib,
                 config.contract_fuel,
             )
-            .with_stdout(Box::new(output.sink(STDOUT)))
-            .with_stderr(Box::new(output.sink(STDERR)))
-            .with_log(Box::new(output.sink(LOG)));
+            .with_stdout(wake_sink(&output, STDOUT, &self.notifier))
+            .with_stderr(wake_sink(&output, STDERR, &self.notifier))
+            .with_log(wake_sink(&output, LOG, &self.notifier));
         let relay = Some({
             Relay::new(
                 capabilities.as_ref().map_or_else(Default::default, |plan| {
@@ -1606,6 +1646,7 @@ impl RuntimeState {
                     .as_ref()
                     .is_some_and(|plan| plan.http_identity.is_some()),
                 self.limits.relay,
+                self.notifier.clone(),
             )
         });
         if let Some(relay) = &relay {
@@ -1825,9 +1866,9 @@ impl RuntimeState {
         );
         let mut builder = KernelHostBuilder::new(kernel_bytes.to_vec())
             .with_module_cache(Arc::clone(&self.cache))
-            .with_stdout(Box::new(output.sink(STDOUT)))
-            .with_stderr(Box::new(output.sink(STDERR)))
-            .with_log(Box::new(output.sink(LOG)));
+            .with_stdout(wake_sink(&output, STDOUT, &self.notifier))
+            .with_stderr(wake_sink(&output, STDERR, &self.notifier))
+            .with_log(wake_sink(&output, LOG, &self.notifier));
         let relay = Some({
             Relay::new(
                 capabilities.as_ref().map_or_else(Default::default, |plan| {
@@ -1840,6 +1881,7 @@ impl RuntimeState {
                     .as_ref()
                     .is_some_and(|plan| plan.http_identity.is_some()),
                 self.limits.relay,
+                self.notifier.clone(),
             )
         });
         if let Some(relay) = &relay {

@@ -4,6 +4,7 @@
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::{mpsc, Arc, Mutex};
 
+use super::notifier::Notifier;
 use constants_rust::{
     EAGAIN, EMSGSIZE, PERSIST_OP_DELETE, PERSIST_OP_GET, PERSIST_OP_LIST, PERSIST_OP_PUT,
 };
@@ -80,6 +81,7 @@ pub struct EffectBody {
 struct Inner {
     closed: bool,
     limits: RelayLimits,
+    notifier: Option<Arc<Notifier>>,
     routes: BTreeSet<String>,
     persist_enabled: bool,
     http_enabled: bool,
@@ -190,6 +192,9 @@ impl Inner {
                 offset: 0,
             },
         );
+        if let Some(notifier) = &self.notifier {
+            notifier.notify();
+        }
         Some(handle)
     }
 
@@ -221,6 +226,9 @@ impl Inner {
             },
         );
         self.queue.push_back(id);
+        if let Some(notifier) = &self.notifier {
+            notifier.notify();
+        }
     }
 
     fn cancel_leased(&mut self, id: u64) {
@@ -266,6 +274,9 @@ impl Inner {
             },
         );
         self.queue.push_back(notice_id);
+        if let Some(notifier) = &self.notifier {
+            notifier.notify();
+        }
     }
 }
 
@@ -286,11 +297,13 @@ impl Relay {
         persist_enabled: bool,
         http_enabled: bool,
         limits: RelayLimits,
+        notifier: Option<Arc<Notifier>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(Inner {
                 closed: false,
                 limits,
+                notifier,
                 routes,
                 persist_enabled,
                 http_enabled,
@@ -440,6 +453,9 @@ impl Relay {
         }
         state.incoming_bytes += data.len();
         state.incoming.push_back(data.to_vec());
+        if let Some(notifier) = &inner.notifier {
+            notifier.notify();
+        }
         Ok(())
     }
 
@@ -453,6 +469,9 @@ impl Relay {
             return Err(contract::MC_HOST_CANCELLED);
         }
         state.failed = true;
+        if let Some(notifier) = &inner.notifier {
+            notifier.notify();
+        }
         Ok(())
     }
 
@@ -642,6 +661,9 @@ impl Relay {
                 allow: !response.failed,
                 remember_session: !response.failed && response.body[0] == 1,
             });
+            if let Some(notifier) = &inner.notifier {
+                notifier.notify();
+            }
             return Ok(());
         }
         if kind == contract::MC_HOST_EVENT_WS_CONNECT || kind == contract::MC_HOST_EVENT_WS_SEND {
@@ -674,6 +696,9 @@ impl Relay {
             inner.slots.remove(&slot_handle);
             let event = inner.events.remove(&id).ok_or(contract::MC_HOST_INTERNAL)?;
             inner.queued_bytes -= event.payload.len();
+            if let Some(notifier) = &inner.notifier {
+                notifier.notify();
+            }
             return Ok(());
         }
         if inner
@@ -694,6 +719,9 @@ impl Relay {
         inner.response_bytes += response_len;
         let event = inner.events.remove(&id).ok_or(contract::MC_HOST_INTERNAL)?;
         inner.queued_bytes -= event.payload.len();
+        if let Some(notifier) = &inner.notifier {
+            notifier.notify();
+        }
         Ok(())
     }
 
@@ -818,6 +846,9 @@ impl Relay {
         slot.result = Some(stream.response);
         let event = inner.events.remove(&id).ok_or(contract::MC_HOST_INTERNAL)?;
         inner.queued_bytes -= event.payload.len();
+        if let Some(notifier) = &inner.notifier {
+            notifier.notify();
+        }
         Ok(())
     }
 
@@ -1270,7 +1301,10 @@ impl NetCapability for RelayNet {
         if !state.open || state.outgoing_bytes + data.len() > WS_WINDOW_BYTES {
             return -EAGAIN;
         }
-        let payload = WsSendRequest { data: data.to_vec() }.encode();
+        let payload = WsSendRequest {
+            data: data.to_vec(),
+        }
+        .encode();
         if payload.len() > inner.limits.max_event_bytes {
             return -EMSGSIZE;
         }

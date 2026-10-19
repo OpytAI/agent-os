@@ -13,6 +13,7 @@ use embedder_rust as contract;
 
 mod attachment_api;
 mod effect_api;
+mod notifier;
 mod operation_api;
 mod operations;
 mod output_api;
@@ -90,6 +91,8 @@ struct RuntimeOptions {
     max_effect_response_bytes: u32,
     max_ws_sockets: u32,
     max_ws_incoming_bytes: u32,
+    wake: Option<notifier::WakeCallback>,
+    wake_user_data: *mut c_void,
 }
 
 #[repr(C)]
@@ -484,6 +487,13 @@ const _: () = {
     assert!(
         offset_of!(RuntimeOptions, max_ws_incoming_bytes)
             == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_MAX_WS_INCOMING_BYTES_OFFSET
+    );
+    assert!(
+        offset_of!(RuntimeOptions, wake) == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_WAKE_OFFSET
+    );
+    assert!(
+        offset_of!(RuntimeOptions, wake_user_data)
+            == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_WAKE_USER_DATA_OFFSET
     );
 
     assert!(size_of::<LibraryInfo>() == contract::MC_HOST_LAYOUT_LIBRARY_INFO_SIZE);
@@ -1041,6 +1051,7 @@ impl RuntimeTable {
         if namespace > MAX_NAMESPACE {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
+        let state = std::sync::Arc::new(RuntimeState::new(namespace as u16, limits)?);
         let index = if let Some(index) = self.free.pop() {
             index
         } else {
@@ -1063,10 +1074,7 @@ impl RuntimeTable {
         }
         slot.namespace = namespace as u16;
         slot.open = true;
-        slot.state = Some(std::sync::Arc::new(RuntimeState::new(
-            slot.namespace,
-            limits,
-        )));
+        slot.state = Some(state);
         self.next_namespace = namespace;
         Ok(pack(slot.namespace, slot.generation, index))
     }
@@ -1087,21 +1095,29 @@ impl RuntimeTable {
         Ok(slot)
     }
 
-    fn close(&mut self, handle: RuntimeHandle) -> Result<(), ResultCode> {
+    fn close(&mut self, handle: RuntimeHandle) -> Result<Arc<RuntimeState>, ResultCode> {
         let (_, _, _, index) = unpack(handle).ok_or(contract::MC_HOST_STALE_HANDLE)?;
         let slot = self.slot_mut(handle)?;
-        if slot.active_calls != 0 || slot.state.as_ref().is_some_and(|state| !state.is_empty()) {
+        if slot.active_calls != 0
+            || slot.state.as_ref().is_some_and(|state| {
+                !state.is_empty()
+                    || state
+                        .notifier
+                        .as_ref()
+                        .is_some_and(|notifier| !notifier.idle())
+            })
+        {
             return Err(contract::MC_HOST_BUSY);
         }
         slot.open = false;
-        slot.state = None;
+        let state = slot.state.take().ok_or(contract::MC_HOST_INTERNAL)?;
         if slot.generation == MAX_GENERATION {
             slot.retired = true;
         } else {
             slot.generation += 1;
             self.free.push(index);
         }
-        Ok(())
+        Ok(state)
     }
 }
 
@@ -1176,7 +1192,7 @@ fn ranges_overlap(a: usize, a_len: usize, b: usize, b_len: usize) -> bool {
 
 unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimits, ResultCode> {
     if options.is_null() {
-        return RuntimeLimits::new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        return RuntimeLimits::new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, 0);
     }
     if (options as usize) % align_of::<Header>() != 0 {
         return Err(contract::MC_HOST_INVALID_ARGUMENT);
@@ -1186,6 +1202,7 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
     const PRE_SNAPSHOT_OPTIONS_SIZE: usize = 24;
     const PRE_TOTAL_OPTIONS_SIZE: usize = 28;
     const PRE_EFFECT_OPTIONS_SIZE: usize = 36;
+    const PRE_WAKE_OPTIONS_SIZE: usize = 56;
     if !valid_header(header, size_of::<Header>())
         || header.size as usize > MAX_INPUT_STRUCT_SIZE
         || !matches!(
@@ -1194,12 +1211,13 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
                 | PRE_SNAPSHOT_OPTIONS_SIZE
                 | PRE_TOTAL_OPTIONS_SIZE
                 | PRE_EFFECT_OPTIONS_SIZE
+                | PRE_WAKE_OPTIONS_SIZE
         ) && (header.size as usize) < size_of::<RuntimeOptions>()
     {
         return Err(contract::MC_HOST_INVALID_ARGUMENT);
     }
     if header.size as usize == size_of::<Header>() {
-        return RuntimeLimits::new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        return RuntimeLimits::new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, 0);
     }
     let tail_len = (header.size as usize).saturating_sub(size_of::<RuntimeOptions>());
     if tail_len != 0 {
@@ -1243,17 +1261,25 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
         max_effect_response_bytes,
         max_ws_sockets,
         max_ws_incoming_bytes,
-    ) = if (header.size as usize) < size_of::<RuntimeOptions>() {
+    ) = if (header.size as usize) < PRE_WAKE_OPTIONS_SIZE {
         (0, 0, 0, 0, 0)
     } else {
-        let options = unsafe { ptr::read(options) };
         (
-            options.max_effect_events,
-            options.max_effect_bytes,
-            options.max_effect_response_bytes,
-            options.max_ws_sockets,
-            options.max_ws_incoming_bytes,
+            unsafe { ptr::read((options as *const u8).add(36).cast::<u32>()) },
+            unsafe { ptr::read((options as *const u8).add(40).cast::<u32>()) },
+            unsafe { ptr::read((options as *const u8).add(44).cast::<u32>()) },
+            unsafe { ptr::read((options as *const u8).add(48).cast::<u32>()) },
+            unsafe { ptr::read((options as *const u8).add(52).cast::<u32>()) },
         )
+    };
+    let (wake, wake_user_data) = if (header.size as usize) < size_of::<RuntimeOptions>() {
+        (None, 0)
+    } else {
+        let options = unsafe { ptr::read(options) };
+        if options.wake.is_none() && !options.wake_user_data.is_null() {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        (options.wake, options.wake_user_data as usize)
     };
     RuntimeLimits::new(
         max_vms,
@@ -1268,6 +1294,8 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
         max_effect_response_bytes,
         max_ws_sockets,
         max_ws_incoming_bytes,
+        wake,
+        wake_user_data,
     )
 }
 
@@ -1388,10 +1416,14 @@ unsafe extern "C" fn runtime_create(
 
 unsafe extern "C" fn runtime_close(handle: RuntimeHandle, error: *mut Error) -> ResultCode {
     guard(error, || {
-        runtimes()
+        let state = runtimes()
             .lock()
             .map_err(|_| contract::MC_HOST_INTERNAL)?
-            .close(handle)
+            .close(handle)?;
+        if let Some(notifier) = &state.notifier {
+            notifier.shutdown();
+        }
+        Ok(())
     })
 }
 

@@ -150,7 +150,16 @@ int main(int argc, char **argv) {
        "old runtime options remain accepted");
   need(api.runtime_close(runtime, NULL) == MC_HOST_OK, "close legacy options runtime");
   runtime = 0;
+  options.known.header.size = 56;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK && runtime != 0,
+       "pre-wake runtime options remain accepted");
+  need(api.runtime_close(runtime, NULL) == MC_HOST_OK, "close pre-wake options runtime");
+  runtime = 0;
   options.known.header.size = sizeof(options);
+  options.known.wake_user_data = &runtime;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
+           runtime == 0, "reject wake user data without callback");
+  options.known.wake_user_data = NULL;
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK,
        "accept zero future option");
   need(runtime != 0, "runtime handle");

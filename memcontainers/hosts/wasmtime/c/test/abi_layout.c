@@ -40,6 +40,8 @@ CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_effect_bytes, MAX_E
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_effect_response_bytes, MAX_EFFECT_RESPONSE_BYTES);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_ws_sockets, MAX_WS_SOCKETS);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_ws_incoming_bytes, MAX_WS_INCOMING_BYTES);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, wake, WAKE);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, wake_user_data, WAKE_USER_DATA);
 
 CHECK_LAYOUT(mc_host_library_info_v1, LIBRARY_INFO);
 CHECK_FIELD(mc_host_library_info_v1, LIBRARY_INFO, header, HEADER);

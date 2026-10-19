@@ -42,6 +42,11 @@ typedef struct mc_host_bytes_v1 {
   uint64_t len;
 } mc_host_bytes_v1;
 
+/* Wake is an edge hint on one library thread. It may coalesce notifications.
+ * The callback must not call this API. Keep user_data valid until runtime_close.
+ * Drain status, output, and effects until WOULD_BLOCK. */
+typedef void (MC_HOST_CALL *mc_host_wake_fn)(void *user_data);
+
 typedef struct mc_host_error_v1 {
   mc_host_header_v1 header;
   uint32_t domain;
@@ -70,6 +75,8 @@ typedef struct mc_host_runtime_options_v1 {
   uint32_t max_effect_response_bytes;
   uint32_t max_ws_sockets;
   uint32_t max_ws_incoming_bytes;
+  mc_host_wake_fn wake;
+  void *wake_user_data;
 } mc_host_runtime_options_v1;
 
 typedef struct mc_host_library_info_v1 {

@@ -26,7 +26,7 @@ layout "ERROR" size=48 align=8 {
   offset "reserved" value=17
   offset "message" value=24
 }
-layout "RUNTIME_OPTIONS" size=56 align=4 {
+layout "RUNTIME_OPTIONS" size=72 align=8 {
   offset "header" value=0
   offset "max_vms" value=8
   offset "max_drive_ticks" value=12
@@ -40,6 +40,8 @@ layout "RUNTIME_OPTIONS" size=56 align=4 {
   offset "max_effect_response_bytes" value=44
   offset "max_ws_sockets" value=48
   offset "max_ws_incoming_bytes" value=52
+  offset "wake" value=56
+  offset "wake_user_data" value=64
 }
 layout "LIBRARY_INFO" size=24 align=8 {
   offset "header" value=0

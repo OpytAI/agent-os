@@ -5,7 +5,9 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +25,19 @@ static void check(mc_host_result_t result, const char *step) {
   if (result == MC_HOST_OK) return;
   fprintf(stderr, "native lifecycle failed: %s (result %u)\n", step, result);
   exit(2);
+}
+
+typedef struct wake_gate {
+  _Atomic uint32_t entered;
+  _Atomic uint32_t release;
+  _Atomic uint32_t calls;
+} wake_gate;
+
+static void MC_HOST_CALL count_wake(void *user_data) {
+  wake_gate *gate = (wake_gate *)user_data;
+  atomic_fetch_add_explicit(&gate->calls, 1, memory_order_relaxed);
+  atomic_store_explicit(&gate->entered, 1, memory_order_release);
+  while (!atomic_load_explicit(&gate->release, memory_order_acquire)) sched_yield();
 }
 
 static int contains_bytes(const uint8_t *haystack, size_t length,
@@ -2048,6 +2063,9 @@ int main(int argc, char **argv) {
   runtime_options.max_effect_response_bytes = 1024 * 1024;
   runtime_options.max_ws_sockets = 4;
   runtime_options.max_ws_incoming_bytes = 128 * 1024;
+  wake_gate wake = {0};
+  runtime_options.wake = count_wake;
+  runtime_options.wake_user_data = &wake;
   check(api.runtime_create(&runtime_options, &runtime, NULL), "create bounded runtime");
 
   mc_host_vm_api_v1 vm_api = MC_HOST_INIT(mc_host_vm_api_v1);
@@ -2618,7 +2636,19 @@ int main(int argc, char **argv) {
         "close replacement attachment plan");
   check(vm_api.kernel_close(runtime, kernel_handle, NULL), "close kernel");
   check(attachment_api.plan_close(runtime, plan, NULL), "close attachment plan");
-  check(api.runtime_close(runtime, NULL), "close runtime");
+  need(atomic_load_explicit(&wake.entered, memory_order_acquire) != 0,
+       "real guest output and effects delivered wake hints");
+  need(api.runtime_close(runtime, NULL) == MC_HOST_BUSY,
+       "runtime close waits for application wake callback");
+  atomic_store_explicit(&wake.release, 1, memory_order_release);
+  mc_host_result_t close_result = MC_HOST_BUSY;
+  for (int attempt = 0; attempt < 100000 && close_result == MC_HOST_BUSY; ++attempt) {
+    close_result = api.runtime_close(runtime, NULL);
+    if (close_result == MC_HOST_BUSY) sched_yield();
+  }
+  check(close_result, "close runtime after wake delivery");
+  need(atomic_load_explicit(&wake.calls, memory_order_relaxed) > 0,
+       "wake callback ran on the real VM path");
   free(delta);
   free(full);
   free(image);

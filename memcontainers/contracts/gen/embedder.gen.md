@@ -155,7 +155,7 @@ ABI **1.0**.
 | `HEADER` | 8 | 4 |
 | `BUFFER` | 24 | 8 |
 | `ERROR` | 48 | 8 |
-| `RUNTIME_OPTIONS` | 56 | 4 |
+| `RUNTIME_OPTIONS` | 72 | 8 |
 | `LIBRARY_INFO` | 24 | 8 |
 | `API` | 56 | 8 |
 | `BYTES` | 16 | 8 |
