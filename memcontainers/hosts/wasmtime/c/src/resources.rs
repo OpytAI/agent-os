@@ -53,6 +53,7 @@ pub struct RuntimeLimits {
     pub max_compiled_modules: usize,
     pub max_image_bytes: usize,
     pub max_snapshot_handles: usize,
+    pub max_operation_result_bytes: usize,
 }
 
 impl RuntimeLimits {
@@ -76,6 +77,7 @@ impl RuntimeLimits {
         max_compiled_modules: u32,
         max_image_bytes: u32,
         max_snapshot_handles: u32,
+        max_operation_result_bytes: u32,
     ) -> Result<Self, u32> {
         if max_vms > MAX_VMS as u32
             || max_drive_ticks > MAX_DRIVE_TICKS
@@ -94,12 +96,14 @@ impl RuntimeLimits {
             || max_compiled_modules > contract::MC_HOST_HARD_MAX_COMPILED_MODULES
             || max_image_bytes > contract::MC_HOST_HARD_MAX_IMAGE_BYTES
             || max_snapshot_handles > contract::MC_HOST_HARD_MAX_SNAPSHOT_HANDLES
+            || max_operation_result_bytes > contract::MC_HOST_HARD_MAX_OPERATION_RESULT_BYTES
         {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
         if (max_output_bytes != 0 && max_output_bytes < 4)
             || (max_output_records != 0 && max_output_records < 4)
             || (max_effect_bytes != 0 && max_effect_bytes < 4)
+            || (max_operation_result_bytes != 0 && max_operation_result_bytes < 64)
         {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
@@ -192,6 +196,11 @@ impl RuntimeLimits {
                 contract::MC_HOST_DEFAULT_MAX_SNAPSHOT_HANDLES
             } else {
                 max_snapshot_handles
+            } as usize,
+            max_operation_result_bytes: if max_operation_result_bytes == 0 {
+                contract::MC_HOST_DEFAULT_MAX_OPERATION_RESULT_BYTES
+            } else {
+                max_operation_result_bytes
             } as usize,
         })
     }
@@ -2323,7 +2332,11 @@ impl RuntimeState {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
 
-        let record = Arc::new(OperationRecord::new(vm_handle, kind));
+        let record = Arc::new(OperationRecord::new(
+            vm_handle,
+            kind,
+            self.limits.max_operation_result_bytes,
+        ));
         let handle = {
             let mut resources = self
                 .resources
@@ -2391,7 +2404,11 @@ impl RuntimeState {
         if vm.live_operations()?.len() >= self.limits.max_operations_per_vm {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
-        let record = Arc::new(OperationRecord::new(vm_handle, kind));
+        let record = Arc::new(OperationRecord::new(
+            vm_handle,
+            kind,
+            self.limits.max_operation_result_bytes,
+        ));
         let handle = {
             let mut resources = self
                 .resources
@@ -2450,6 +2467,7 @@ impl RuntimeState {
         let record = Arc::new(OperationRecord::new(
             vm_handle,
             contract::MC_HOST_OP_COMMIT_LAYER,
+            self.limits.max_operation_result_bytes,
         ));
         let handle = {
             let mut resources = self
@@ -2508,7 +2526,11 @@ impl RuntimeState {
         } else {
             contract::MC_HOST_OP_UNMOUNT
         };
-        let record = Arc::new(OperationRecord::new(vm_handle, kind));
+        let record = Arc::new(OperationRecord::new(
+            vm_handle,
+            kind,
+            self.limits.max_operation_result_bytes,
+        ));
         let handle = {
             let mut resources = self
                 .resources
@@ -2560,7 +2582,12 @@ impl RuntimeState {
         if vm.live_operations()?.len() >= self.limits.max_operations_per_vm {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
-        let record = Arc::new(OperationRecord::new_retry(vm_handle, kind, action));
+        let record = Arc::new(OperationRecord::new_retry(
+            vm_handle,
+            kind,
+            action,
+            self.limits.max_operation_result_bytes,
+        ));
         let handle = {
             let mut resources = self
                 .resources
@@ -2610,7 +2637,11 @@ impl RuntimeState {
         if vm.live_operations()?.len() >= self.limits.max_operations_per_vm {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
-        let record = Arc::new(OperationRecord::new_catalog(vm_handle, update));
+        let record = Arc::new(OperationRecord::new_catalog(
+            vm_handle,
+            update,
+            self.limits.max_operation_result_bytes,
+        ));
         let handle = self
             .resources
             .lock()

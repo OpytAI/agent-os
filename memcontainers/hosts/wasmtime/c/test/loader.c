@@ -165,6 +165,24 @@ int main(int argc, char **argv) {
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
            runtime == 0, "reject snapshot handle limit above hard cap");
   options.known.max_snapshot_handles = 0;
+  options.known.max_operation_result_bytes = MC_HOST_HARD_MAX_OPERATION_RESULT_BYTES + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject operation result quota above hard cap");
+  options.known.max_operation_result_bytes = 63;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
+           runtime == 0, "reject operation result quota below envelope floor");
+  options.known.max_operation_result_bytes = 0;
+  options.known.reserved_resource_options = 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
+           runtime == 0, "reject nonzero reserved runtime option");
+  options.known.reserved_resource_options = 0;
+  options.known.header.size = 96;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK && runtime != 0,
+       "pre-result runtime options remain accepted");
+  need(api.runtime_close(runtime, NULL) == MC_HOST_OK,
+       "close pre-result-options runtime");
+  runtime = 0;
+  options.known.header.size = sizeof(mc_host_runtime_options_v1);
   options.known.header.size = 36;
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK && runtime != 0,
        "old runtime options remain accepted");

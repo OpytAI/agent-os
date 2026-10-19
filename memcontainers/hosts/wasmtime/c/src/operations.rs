@@ -6,11 +6,14 @@ use ctl_rust::{ExecOutcome, SvcResponse};
 use embedder_rust::{self as contract, OperationResult};
 use host::{ControlAttempt, ControlRetryAction, KernelHost, NativeCatalogUpdate};
 
-const MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
+fn result_overhead() -> usize {
+    OperationResult::default().encode().len()
+}
 
 pub struct OperationRecord {
     pub vm: u64,
     pub kind: u32,
+    max_result_bytes: usize,
     state: Mutex<OperationState>,
 }
 
@@ -41,23 +44,30 @@ pub struct OperationObserved {
 }
 
 impl OperationRecord {
-    pub fn new(vm: u64, kind: u32) -> Self {
+    pub fn new(vm: u64, kind: u32, max_result_bytes: usize) -> Self {
         Self {
             vm,
             kind,
+            max_result_bytes,
             state: Mutex::new(OperationState::New),
         }
     }
 
-    pub fn new_retry(vm: u64, kind: u32, action: ControlRetryAction) -> Self {
+    pub fn new_retry(
+        vm: u64,
+        kind: u32,
+        action: ControlRetryAction,
+        max_result_bytes: usize,
+    ) -> Self {
         Self {
             vm,
             kind,
+            max_result_bytes,
             state: Mutex::new(OperationState::NewRetry(action)),
         }
     }
 
-    pub fn new_catalog(vm: u64, update: NativeCatalogUpdate) -> Self {
+    pub fn new_catalog(vm: u64, update: NativeCatalogUpdate, max_result_bytes: usize) -> Self {
         let mut actions = [
             "/etc",
             "/etc/tools",
@@ -67,15 +77,19 @@ impl OperationRecord {
         .into_iter()
         .map(|path| ControlRetryAction::Mkdir(path.to_owned()))
         .collect::<Vec<_>>();
-        actions.extend(update.records.into_iter().map(|(sha, data)| {
-            ControlRetryAction::Write {
-                path: format!("/etc/tools/catalog/records/{sha}"),
-                data,
-            }
-        }));
+        actions.extend(
+            update
+                .records
+                .into_iter()
+                .map(|(sha, data)| ControlRetryAction::Write {
+                    path: format!("/etc/tools/catalog/records/{sha}"),
+                    data,
+                }),
+        );
         Self {
             vm,
             kind: contract::MC_HOST_OP_CATALOG_INJECT,
+            max_result_bytes,
             state: Mutex::new(OperationState::CatalogStage(CatalogStage {
                 actions,
                 cursor: 0,
@@ -107,7 +121,7 @@ impl OperationRecord {
         if !matches!(*state, OperationState::New) {
             return Err(contract::MC_HOST_INTERNAL);
         }
-        if payload.len() > MAX_RESULT_BYTES.saturating_sub(64) {
+        if payload.len() > self.max_result_bytes.saturating_sub(result_overhead()) {
             *state = OperationState::Failed(contract::MC_HOST_RESOURCE_LIMIT);
             return Ok(());
         }
@@ -117,7 +131,7 @@ impl OperationRecord {
             payload,
         }
         .encode();
-        *state = if frame.len() > MAX_RESULT_BYTES {
+        *state = if frame.len() > self.max_result_bytes {
             OperationState::Failed(contract::MC_HOST_RESOURCE_LIMIT)
         } else {
             OperationState::Ready(Arc::from(frame))
@@ -217,7 +231,7 @@ impl OperationRecord {
                 }
             }
             ControlAttempt::Complete { status, payload } => {
-                if payload.len() > MAX_RESULT_BYTES.saturating_sub(64) {
+                if payload.len() > self.max_result_bytes.saturating_sub(result_overhead()) {
                     *state = OperationState::Failed(contract::MC_HOST_RESOURCE_LIMIT);
                 } else {
                     let frame = OperationResult {
@@ -226,7 +240,7 @@ impl OperationRecord {
                         payload,
                     }
                     .encode();
-                    if frame.len() > MAX_RESULT_BYTES {
+                    if frame.len() > self.max_result_bytes {
                         *state = OperationState::Failed(contract::MC_HOST_RESOURCE_LIMIT);
                     } else {
                         *state = OperationState::Ready(Arc::from(frame));
@@ -263,16 +277,20 @@ impl OperationRecord {
                 return Ok(());
             }
         };
+        let overhead = ExecOutcome::default()
+            .encode()
+            .len()
+            .checked_add(result_overhead());
         let raw_size = result
             .stdout
             .len()
             .checked_add(result.stderr.len())
-            .and_then(|n| n.checked_add(64));
+            .and_then(|n| overhead.and_then(|overhead| n.checked_add(overhead)));
         let Some(raw_size) = raw_size else {
             *state = OperationState::Failed(contract::MC_HOST_RESOURCE_LIMIT);
             return Ok(());
         };
-        if raw_size > MAX_RESULT_BYTES {
+        if raw_size > self.max_result_bytes {
             *state = OperationState::Failed(contract::MC_HOST_RESOURCE_LIMIT);
             return Ok(());
         }
@@ -287,7 +305,7 @@ impl OperationRecord {
             payload: outcome.encode(),
         }
         .encode();
-        if frame.len() > MAX_RESULT_BYTES {
+        if frame.len() > self.max_result_bytes {
             *state = OperationState::Failed(contract::MC_HOST_RESOURCE_LIMIT);
         } else {
             *state = OperationState::Ready(Arc::from(frame));
@@ -316,7 +334,7 @@ impl OperationRecord {
             body: result.body,
         }
         .encode();
-        if payload.len() > MAX_RESULT_BYTES.saturating_sub(64) {
+        if payload.len() > self.max_result_bytes.saturating_sub(result_overhead()) {
             *state = OperationState::Failed(contract::MC_HOST_RESOURCE_LIMIT);
             return Ok(());
         }
@@ -326,7 +344,7 @@ impl OperationRecord {
             payload,
         }
         .encode();
-        if frame.len() > MAX_RESULT_BYTES {
+        if frame.len() > self.max_result_bytes {
             *state = OperationState::Failed(contract::MC_HOST_RESOURCE_LIMIT);
         } else {
             *state = OperationState::Ready(Arc::from(frame));
@@ -350,7 +368,7 @@ impl OperationRecord {
         let bytes = host
             .exec_stdout_peek(job)
             .map_err(|_| contract::MC_HOST_KERNEL_ERROR)?;
-        if bytes.len() > MAX_RESULT_BYTES {
+        if bytes.len() > self.max_result_bytes {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
         Ok(bytes)
@@ -372,9 +390,7 @@ impl OperationRecord {
             OperationState::New
             | OperationState::NewRetry(_)
             | OperationState::PendingRetry(_)
-            | OperationState::CatalogStage(_) => {
-                *state = OperationState::Cancelled
-            }
+            | OperationState::CatalogStage(_) => *state = OperationState::Cancelled,
             OperationState::Ready(_) | OperationState::Failed(_) | OperationState::Cancelled => {}
         }
         Ok(())

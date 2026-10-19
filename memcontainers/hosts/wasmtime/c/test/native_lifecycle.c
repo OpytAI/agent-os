@@ -1937,7 +1937,7 @@ static void run_control_command(const mc_host_vm_api_v1 *vm_api,
 static void cancel_vm_with_operation(const mc_host_vm_api_v1 *vm_api,
                                      const mc_host_operation_api_v1 *op_api,
                                      mc_host_runtime_t runtime, mc_host_handle_t vm) {
-  wire request = shell_request("git --version");
+  wire request = shell_request("git --version; git --version; git --version; git --version");
   mc_host_handle_t operation = 0;
   check(op_api->start(runtime, vm,
                       (mc_host_bytes_v1){request.bytes, request.length},
@@ -2154,6 +2154,77 @@ static void verify_identical_capture(const mc_host_vm_api_v1 *vm_api,
         "finish deterministic C capture");
   check(vm_api->vm_close(runtime, vm, NULL),
         "close deterministic C VM");
+}
+
+static void verify_operation_result_quota(const mc_host_api_v1 *api,
+                                          const mc_host_vm_api_v1 *vm_api,
+                                          const mc_host_operation_api_v1 *op_api,
+                                          const mc_host_output_api_v1 *output_api,
+                                          const uint8_t *kernel, size_t kernel_len,
+                                          const uint8_t *image, size_t image_len) {
+  mc_host_runtime_options_v1 options = MC_HOST_INIT(mc_host_runtime_options_v1);
+  options.max_operation_result_bytes = 64;
+  mc_host_runtime_t runtime = 0;
+  check(api->runtime_create(&options, &runtime, NULL), "create result-quota runtime");
+  mc_host_handle_t kernel_handle = 0;
+  mc_host_kernel_info_v1 kernel_info = MC_HOST_INIT(mc_host_kernel_info_v1);
+  check(vm_api->kernel_load(runtime, (mc_host_bytes_v1){kernel, kernel_len},
+                            &kernel_handle, &kernel_info, NULL), "load quota kernel");
+  mc_host_bytes_v1 layer = {image, image_len};
+  mc_host_vm_create_options_v1 create = MC_HOST_INIT(mc_host_vm_create_options_v1);
+  create.layers = &layer;
+  create.layer_count = 1;
+  create.requested_workers = -1;
+  mc_host_handle_t vm = 0;
+  check(vm_api->vm_create(runtime, kernel_handle, 0, &create, &vm, NULL),
+        "boot real base image under result quota");
+  drive_to_prompt(vm_api, output_api, runtime, vm, NULL);
+  wire request = shell_request("git --version");
+  mc_host_handle_t operation = 0;
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){request.bytes, request.length},
+                      &operation, NULL), "start real command under result quota");
+  mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 drive = MC_HOST_INIT(mc_host_drive_options_v1);
+    drive.max_ticks = 128;
+    drive.stop_mask = MC_HOST_DRIVE_ON_OPERATION;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &drive, &driven, NULL),
+          "drive real command under result quota");
+    check(op_api->poll(runtime, operation, &status, NULL),
+          "poll real command under result quota");
+    if (status.state != MC_HOST_OP_PENDING) break;
+  }
+  need(status.state == MC_HOST_OP_FAILED && status.error == MC_HOST_RESOURCE_LIMIT &&
+           status.result_length == 0,
+       "oversized real command result fails without truncation");
+  check(op_api->close(runtime, operation, NULL), "close failed quota operation");
+  request = shell_request("echo x");
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){request.bytes, request.length},
+                      &operation, NULL), "start small real command under result quota");
+  status = (mc_host_operation_status_v1)MC_HOST_INIT(mc_host_operation_status_v1);
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 drive = MC_HOST_INIT(mc_host_drive_options_v1);
+    drive.max_ticks = 128;
+    drive.stop_mask = MC_HOST_DRIVE_ON_OPERATION;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &drive, &driven, NULL),
+          "drive small real command under result quota");
+    check(op_api->poll(runtime, operation, &status, NULL),
+          "poll small real command under result quota");
+    if (status.state != MC_HOST_OP_PENDING) break;
+  }
+  need(status.state == MC_HOST_OP_READY && status.result_length <= 64,
+       "small real command remains readable under result quota");
+  check(op_api->close(runtime, operation, NULL), "close small quota operation");
+  const uint8_t command[] = "echo quota-survived\n";
+  check(vm_api->terminal_input(runtime, vm,
+          (mc_host_bytes_v1){command, sizeof(command) - 1}, NULL),
+        "send terminal command after result quota failure");
+  drive_to_prompt(vm_api, output_api, runtime, vm, "quota-survived");
+  check(vm_api->vm_close(runtime, vm, NULL), "close quota VM");
+  check(vm_api->kernel_close(runtime, kernel_handle, NULL), "close quota kernel");
+  check(api->runtime_close(runtime, NULL), "close result-quota runtime");
 }
 
 int main(int argc, char **argv) {
@@ -2726,6 +2797,8 @@ int main(int argc, char **argv) {
   uint8_t *base_image = read_artifact(argv[4], &base_image_length);
   verify_identical_capture(&vm_api, &op_api, &snap_api, runtime, kernel_handle,
                            base_image, base_image_length, rust_full, rust_full_length);
+  verify_operation_result_quota(&api, &vm_api, &op_api, &output_api,
+                                kernel, kernel_len, base_image, base_image_length);
   free(base_image);
   verify_rust_host_snapshot(&vm_api, &op_api, &snap_api, runtime, kernel_handle,
                             rust_bundle + 4 + rust_base_length,

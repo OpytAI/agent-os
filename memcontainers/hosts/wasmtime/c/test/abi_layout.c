@@ -47,6 +47,8 @@ CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_kernel_bytes, MAX_K
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_compiled_modules, MAX_COMPILED_MODULES);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_image_bytes, MAX_IMAGE_BYTES);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_snapshot_handles, MAX_SNAPSHOT_HANDLES);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, reserved_resource_options, RESERVED_RESOURCE_OPTIONS);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_operation_result_bytes, MAX_OPERATION_RESULT_BYTES);
 
 CHECK_LAYOUT(mc_host_library_info_v1, LIBRARY_INFO);
 CHECK_FIELD(mc_host_library_info_v1, LIBRARY_INFO, header, HEADER);

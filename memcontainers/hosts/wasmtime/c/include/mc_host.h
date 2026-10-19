@@ -87,6 +87,9 @@ typedef struct mc_host_runtime_options_v1 {
   uint32_t max_compiled_modules;
   uint32_t max_image_bytes;
   uint32_t max_snapshot_handles;
+  uint32_t reserved_resource_options;
+  /* Maximum encoded result of one control operation. */
+  uint32_t max_operation_result_bytes;
 } mc_host_runtime_options_v1;
 
 typedef struct mc_host_library_info_v1 {
