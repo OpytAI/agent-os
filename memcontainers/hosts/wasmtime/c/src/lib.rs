@@ -93,6 +93,11 @@ struct RuntimeOptions {
     max_ws_incoming_bytes: u32,
     wake: Option<notifier::WakeCallback>,
     wake_user_data: *mut c_void,
+    max_kernels: u32,
+    max_kernel_bytes: u32,
+    max_compiled_modules: u32,
+    max_image_bytes: u32,
+    max_snapshot_handles: u32,
 }
 
 #[repr(C)]
@@ -494,6 +499,26 @@ const _: () = {
     assert!(
         offset_of!(RuntimeOptions, wake_user_data)
             == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_WAKE_USER_DATA_OFFSET
+    );
+    assert!(
+        offset_of!(RuntimeOptions, max_kernels)
+            == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_MAX_KERNELS_OFFSET
+    );
+    assert!(
+        offset_of!(RuntimeOptions, max_kernel_bytes)
+            == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_MAX_KERNEL_BYTES_OFFSET
+    );
+    assert!(
+        offset_of!(RuntimeOptions, max_compiled_modules)
+            == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_MAX_COMPILED_MODULES_OFFSET
+    );
+    assert!(
+        offset_of!(RuntimeOptions, max_image_bytes)
+            == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_MAX_IMAGE_BYTES_OFFSET
+    );
+    assert!(
+        offset_of!(RuntimeOptions, max_snapshot_handles)
+            == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_MAX_SNAPSHOT_HANDLES_OFFSET
     );
 
     assert!(size_of::<LibraryInfo>() == contract::MC_HOST_LAYOUT_LIBRARY_INFO_SIZE);
@@ -1192,7 +1217,7 @@ fn ranges_overlap(a: usize, a_len: usize, b: usize, b_len: usize) -> bool {
 
 unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimits, ResultCode> {
     if options.is_null() {
-        return RuntimeLimits::new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, 0);
+        return RuntimeLimits::new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, 0, 0, 0, 0, 0, 0);
     }
     if (options as usize) % align_of::<Header>() != 0 {
         return Err(contract::MC_HOST_INVALID_ARGUMENT);
@@ -1203,6 +1228,7 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
     const PRE_TOTAL_OPTIONS_SIZE: usize = 28;
     const PRE_EFFECT_OPTIONS_SIZE: usize = 36;
     const PRE_WAKE_OPTIONS_SIZE: usize = 56;
+    const PRE_RESOURCE_OPTIONS_SIZE: usize = 72;
     if !valid_header(header, size_of::<Header>())
         || header.size as usize > MAX_INPUT_STRUCT_SIZE
         || !matches!(
@@ -1212,12 +1238,13 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
                 | PRE_TOTAL_OPTIONS_SIZE
                 | PRE_EFFECT_OPTIONS_SIZE
                 | PRE_WAKE_OPTIONS_SIZE
+                | PRE_RESOURCE_OPTIONS_SIZE
         ) && (header.size as usize) < size_of::<RuntimeOptions>()
     {
         return Err(contract::MC_HOST_INVALID_ARGUMENT);
     }
     if header.size as usize == size_of::<Header>() {
-        return RuntimeLimits::new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, 0);
+        return RuntimeLimits::new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, 0, 0, 0, 0, 0, 0);
     }
     let tail_len = (header.size as usize).saturating_sub(size_of::<RuntimeOptions>());
     if tail_len != 0 {
@@ -1272,14 +1299,42 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
             unsafe { ptr::read((options as *const u8).add(52).cast::<u32>()) },
         )
     };
-    let (wake, wake_user_data) = if (header.size as usize) < size_of::<RuntimeOptions>() {
+    let (wake, wake_user_data) = if (header.size as usize) < PRE_RESOURCE_OPTIONS_SIZE {
         (None, 0)
     } else {
-        let options = unsafe { ptr::read(options) };
-        if options.wake.is_none() && !options.wake_user_data.is_null() {
+        if (options as usize) % align_of::<RuntimeOptions>() != 0 {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
-        (options.wake, options.wake_user_data as usize)
+        let wake = unsafe {
+            ptr::read(
+                (options as *const u8)
+                    .add(56)
+                    .cast::<Option<notifier::WakeCallback>>(),
+            )
+        };
+        let user_data = unsafe { ptr::read((options as *const u8).add(64).cast::<*mut c_void>()) };
+        if wake.is_none() && !user_data.is_null() {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        (wake, user_data as usize)
+    };
+    let (
+        max_kernels,
+        max_kernel_bytes,
+        max_compiled_modules,
+        max_image_bytes,
+        max_snapshot_handles,
+    ) = if (header.size as usize) < size_of::<RuntimeOptions>() {
+        (0, 0, 0, 0, 0)
+    } else {
+        let options = unsafe { ptr::read(options) };
+        (
+            options.max_kernels,
+            options.max_kernel_bytes,
+            options.max_compiled_modules,
+            options.max_image_bytes,
+            options.max_snapshot_handles,
+        )
     };
     RuntimeLimits::new(
         max_vms,
@@ -1296,6 +1351,11 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
         max_ws_incoming_bytes,
         wake,
         wake_user_data,
+        max_kernels,
+        max_kernel_bytes,
+        max_compiled_modules,
+        max_image_bytes,
+        max_snapshot_handles,
     )
 }
 

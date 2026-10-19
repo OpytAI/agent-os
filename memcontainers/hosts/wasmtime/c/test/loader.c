@@ -145,6 +145,26 @@ int main(int argc, char **argv) {
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
            runtime == 0, "reject inbound socket bytes above hard cap");
   options.known.max_ws_incoming_bytes = 0;
+  options.known.max_kernels = MC_HOST_HARD_MAX_KERNELS + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject kernel handle limit above hard cap");
+  options.known.max_kernels = 0;
+  options.known.max_kernel_bytes = MC_HOST_HARD_MAX_KERNEL_BYTES + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject kernel byte limit above hard cap");
+  options.known.max_kernel_bytes = 0;
+  options.known.max_compiled_modules = MC_HOST_HARD_MAX_COMPILED_MODULES + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject module limit above hard cap");
+  options.known.max_compiled_modules = 0;
+  options.known.max_image_bytes = MC_HOST_HARD_MAX_IMAGE_BYTES + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject image limit above hard cap");
+  options.known.max_image_bytes = 0;
+  options.known.max_snapshot_handles = MC_HOST_HARD_MAX_SNAPSHOT_HANDLES + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject snapshot handle limit above hard cap");
+  options.known.max_snapshot_handles = 0;
   options.known.header.size = 36;
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK && runtime != 0,
        "old runtime options remain accepted");
@@ -160,6 +180,12 @@ int main(int argc, char **argv) {
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
            runtime == 0, "reject wake user data without callback");
   options.known.wake_user_data = NULL;
+  options.known.header.size = 72;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK && runtime != 0,
+       "pre-resource runtime options remain accepted");
+  need(api.runtime_close(runtime, NULL) == MC_HOST_OK, "close pre-resource options runtime");
+  runtime = 0;
+  options.known.header.size = sizeof(options);
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK,
        "accept zero future option");
   need(runtime != 0, "runtime handle");

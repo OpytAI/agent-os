@@ -2181,6 +2181,13 @@ int main(int argc, char **argv) {
   runtime_options.max_effect_response_bytes = 1024 * 1024;
   runtime_options.max_ws_sockets = 4;
   runtime_options.max_ws_incoming_bytes = 128 * 1024;
+  need(kernel_len > 1 && kernel_len <= UINT32_MAX && image_len <= UINT32_MAX,
+       "real artifacts fit native runtime quota fields");
+  runtime_options.max_kernels = 1;
+  runtime_options.max_kernel_bytes = (uint32_t)kernel_len;
+  runtime_options.max_compiled_modules = 1;
+  runtime_options.max_image_bytes = (uint32_t)image_len;
+  runtime_options.max_snapshot_handles = 8;
   wake_gate wake = {0};
   runtime_options.wake = count_wake;
   runtime_options.wake_user_data = &wake;
@@ -2288,6 +2295,19 @@ int main(int argc, char **argv) {
   check(vm_api.kernel_load(runtime, (mc_host_bytes_v1){kernel, kernel_len},
                            &kernel_handle, &kernel_info, NULL), "load real kernel");
   need(kernel_handle != 0, "kernel handle");
+  mc_host_handle_t excess_kernel = 0;
+  need(vm_api.kernel_load(runtime, (mc_host_bytes_v1){kernel, kernel_len},
+                          &excess_kernel, &kernel_info, NULL) == MC_HOST_RESOURCE_LIMIT &&
+       excess_kernel == 0, "configured kernel handle quota rejects a second real kernel");
+  mc_host_runtime_options_v1 byte_limited = MC_HOST_INIT(mc_host_runtime_options_v1);
+  byte_limited.max_kernel_bytes = (uint32_t)kernel_len - 1;
+  mc_host_runtime_t byte_runtime = 0;
+  check(api.runtime_create(&byte_limited, &byte_runtime, NULL),
+        "create runtime below real kernel size");
+  need(vm_api.kernel_load(byte_runtime, (mc_host_bytes_v1){kernel, kernel_len},
+                          &excess_kernel, &kernel_info, NULL) == MC_HOST_RESOURCE_LIMIT &&
+       excess_kernel == 0, "kernel byte quota rejects real artifact before compile");
+  check(api.runtime_close(byte_runtime, NULL), "close kernel byte quota runtime");
   mc_host_bytes_v1 layer = {image, image_len};
   mc_host_vm_create_options_v1 create = MC_HOST_INIT(mc_host_vm_create_options_v1);
   create.layers = &layer;
@@ -2351,6 +2371,7 @@ int main(int argc, char **argv) {
        "real snapshot supports a tighter runtime quota");
   mc_host_runtime_options_v1 tight_options = MC_HOST_INIT(mc_host_runtime_options_v1);
   tight_options.max_snapshot_bytes = (uint32_t)full_info.length - 1;
+  tight_options.max_image_bytes = 1;
   mc_host_runtime_t tight_runtime = 0;
   check(api.runtime_create(&tight_options, &tight_runtime, NULL),
         "create runtime with snapshot quota below a real capture");
@@ -2359,6 +2380,10 @@ int main(int argc, char **argv) {
   check(vm_api.kernel_load(tight_runtime, (mc_host_bytes_v1){kernel, kernel_len},
                            &tight_kernel, &tight_kernel_info, NULL),
         "load real kernel into quota runtime");
+  mc_host_handle_t tight_image_vm = 0;
+  need(vm_api.vm_create(tight_runtime, tight_kernel, 0, &create,
+                        &tight_image_vm, NULL) == MC_HOST_RESOURCE_LIMIT &&
+       tight_image_vm == 0, "image quota rejects real layer before copy");
   mc_host_handle_t tight_baseline = 0;
   mc_host_snapshot_info_v1 tight_info = MC_HOST_INIT(mc_host_snapshot_info_v1);
   need(snap_api.baseline_import(tight_runtime, tight_kernel,
@@ -2440,6 +2465,51 @@ int main(int argc, char **argv) {
   check(vm_api.kernel_close(aggregate_runtime, aggregate_kernel, NULL),
         "close aggregate quota kernel");
   check(api.runtime_close(aggregate_runtime, NULL), "close aggregate quota runtime");
+
+  mc_host_runtime_options_v1 handle_options = MC_HOST_INIT(mc_host_runtime_options_v1);
+  handle_options.max_snapshot_handles = 1;
+  mc_host_runtime_t handle_runtime = 0;
+  check(api.runtime_create(&handle_options, &handle_runtime, NULL),
+        "create one-snapshot-handle runtime");
+  mc_host_handle_t handle_kernel = 0;
+  mc_host_kernel_info_v1 handle_kernel_info = MC_HOST_INIT(mc_host_kernel_info_v1);
+  check(vm_api.kernel_load(handle_runtime, (mc_host_bytes_v1){kernel, kernel_len},
+                           &handle_kernel, &handle_kernel_info, NULL),
+        "load real kernel into handle quota runtime");
+  mc_host_handle_t handle_baseline = 0;
+  mc_host_snapshot_info_v1 handle_info = MC_HOST_INIT(mc_host_snapshot_info_v1);
+  check(snap_api.baseline_import(handle_runtime, handle_kernel,
+                                 (mc_host_bytes_v1){full, full_info.length},
+                                 &handle_baseline, &handle_info, NULL),
+        "retain one real baseline within handle quota");
+  mc_host_handle_t refused_baseline = 0;
+  need(snap_api.baseline_import(handle_runtime, handle_kernel,
+                                (mc_host_bytes_v1){full, full_info.length},
+                                &refused_baseline, &handle_info, NULL) == MC_HOST_RESOURCE_LIMIT &&
+       refused_baseline == 0, "snapshot handle quota rejects second real baseline");
+  mc_host_handle_t handle_vm = 0;
+  check(vm_api.vm_create(handle_runtime, handle_kernel, 0, &create, &handle_vm, NULL),
+        "boot guest under snapshot handle quota");
+  drive_to_prompt(&vm_api, &output_api, handle_runtime, handle_vm, NULL);
+  mc_host_handle_t refused_capture = 0;
+  mc_host_snapshot_info_v1 handle_capture_info = MC_HOST_INIT(mc_host_snapshot_info_v1);
+  need(snap_api.begin(handle_runtime, handle_vm, &aggregate_capture,
+                      &refused_capture, &handle_capture_info, NULL) == MC_HOST_RESOURCE_LIMIT &&
+       refused_capture == 0, "snapshot handle quota refuses capture before allocation");
+  check(snap_api.baseline_close(handle_runtime, handle_baseline, NULL),
+        "release baseline handle quota");
+  mc_host_handle_t allowed_capture = 0;
+  check(snap_api.begin(handle_runtime, handle_vm, &aggregate_capture,
+                       &allowed_capture, &handle_capture_info, NULL),
+        "capture succeeds after releasing snapshot handle");
+  check(snap_api.finish(handle_runtime, allowed_capture, NULL),
+        "release allowed snapshot handle");
+  check(vm_api.vm_close(handle_runtime, handle_vm, NULL),
+        "close snapshot handle quota guest");
+  check(vm_api.kernel_close(handle_runtime, handle_kernel, NULL),
+        "close snapshot handle quota kernel");
+  check(api.runtime_close(handle_runtime, NULL),
+        "close snapshot handle quota runtime");
 
   mc_host_handle_t baseline = 0;
   mc_host_snapshot_info_v1 baseline_info = MC_HOST_INIT(mc_host_snapshot_info_v1);

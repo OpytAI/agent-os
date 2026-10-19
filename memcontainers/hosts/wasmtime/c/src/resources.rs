@@ -32,10 +32,7 @@ pub const OPERATION_KIND: u8 = 7;
 pub const PLAN_KIND: u8 = 8;
 pub const EFFECT_KIND: u8 = 9;
 pub const SOCKET_KIND: u8 = 10;
-const MAX_KERNELS: usize = 64;
-const MAX_KERNEL_BYTES: usize = 256 * 1024 * 1024;
 const MAX_VMS: usize = contract::MC_HOST_HARD_MAX_VMS as usize;
-const MAX_IMAGE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_DRIVE_TICKS: u32 = contract::MC_HOST_HARD_MAX_DRIVE_TICKS;
 const MAX_PLANS: usize = 64;
 
@@ -51,6 +48,11 @@ pub struct RuntimeLimits {
     pub relay: RelayLimits,
     pub wake: Option<WakeCallback>,
     pub wake_user_data: usize,
+    pub max_kernels: usize,
+    pub max_kernel_bytes: usize,
+    pub max_compiled_modules: usize,
+    pub max_image_bytes: usize,
+    pub max_snapshot_handles: usize,
 }
 
 impl RuntimeLimits {
@@ -69,6 +71,11 @@ impl RuntimeLimits {
         max_ws_incoming_bytes: u32,
         wake: Option<WakeCallback>,
         wake_user_data: usize,
+        max_kernels: u32,
+        max_kernel_bytes: u32,
+        max_compiled_modules: u32,
+        max_image_bytes: u32,
+        max_snapshot_handles: u32,
     ) -> Result<Self, u32> {
         if max_vms > MAX_VMS as u32
             || max_drive_ticks > MAX_DRIVE_TICKS
@@ -82,6 +89,11 @@ impl RuntimeLimits {
             || max_effect_response_bytes > contract::MC_HOST_HARD_MAX_EFFECT_RESPONSE_BYTES
             || max_ws_sockets > contract::MC_HOST_HARD_MAX_WS_SOCKETS
             || max_ws_incoming_bytes > contract::MC_HOST_HARD_MAX_WS_INCOMING_BYTES
+            || max_kernels > contract::MC_HOST_HARD_MAX_KERNELS
+            || max_kernel_bytes > contract::MC_HOST_HARD_MAX_KERNEL_BYTES
+            || max_compiled_modules > contract::MC_HOST_HARD_MAX_COMPILED_MODULES
+            || max_image_bytes > contract::MC_HOST_HARD_MAX_IMAGE_BYTES
+            || max_snapshot_handles > contract::MC_HOST_HARD_MAX_SNAPSHOT_HANDLES
         {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
@@ -156,6 +168,31 @@ impl RuntimeLimits {
             },
             wake,
             wake_user_data,
+            max_kernels: if max_kernels == 0 {
+                contract::MC_HOST_DEFAULT_MAX_KERNELS
+            } else {
+                max_kernels
+            } as usize,
+            max_kernel_bytes: if max_kernel_bytes == 0 {
+                contract::MC_HOST_DEFAULT_MAX_KERNEL_BYTES
+            } else {
+                max_kernel_bytes
+            } as usize,
+            max_compiled_modules: if max_compiled_modules == 0 {
+                contract::MC_HOST_DEFAULT_MAX_COMPILED_MODULES
+            } else {
+                max_compiled_modules
+            } as usize,
+            max_image_bytes: if max_image_bytes == 0 {
+                contract::MC_HOST_DEFAULT_MAX_IMAGE_BYTES
+            } else {
+                max_image_bytes
+            } as usize,
+            max_snapshot_handles: if max_snapshot_handles == 0 {
+                contract::MC_HOST_DEFAULT_MAX_SNAPSHOT_HANDLES
+            } else {
+                max_snapshot_handles
+            } as usize,
         })
     }
 }
@@ -855,7 +892,10 @@ impl RuntimeState {
         Ok(Self {
             namespace,
             limits,
-            cache: Arc::new(KernelModuleCache::bounded(MAX_KERNELS, MAX_KERNEL_BYTES)),
+            cache: Arc::new(KernelModuleCache::bounded(
+                limits.max_compiled_modules,
+                limits.max_kernel_bytes,
+            )),
             notifier,
             resources: Mutex::new(Resources {
                 kernels: HandleTable::new(KERNEL_KIND),
@@ -885,6 +925,10 @@ impl RuntimeState {
                 && resources.effects.live == 0
                 && resources.sockets.live == 0
         })
+    }
+
+    pub fn max_image_bytes(&self) -> usize {
+        self.limits.max_image_bytes
     }
 
     pub fn create_plan(&self) -> Result<u64, u32> {
@@ -1510,7 +1554,7 @@ impl RuntimeState {
         if wasm.is_empty() {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
-        if wasm.len() > MAX_KERNEL_BYTES {
+        if wasm.len() > self.limits.max_kernel_bytes {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
         {
@@ -1518,11 +1562,11 @@ impl RuntimeState {
                 .resources
                 .lock()
                 .map_err(|_| contract::MC_HOST_INTERNAL)?;
-            if resources.kernels.live >= MAX_KERNELS
+            if resources.kernels.live >= self.limits.max_kernels
                 || resources
                     .kernel_bytes
                     .checked_add(wasm.len())
-                    .is_none_or(|total| total > MAX_KERNEL_BYTES)
+                    .is_none_or(|total| total > self.limits.max_kernel_bytes)
             {
                 return Err(contract::MC_HOST_RESOURCE_LIMIT);
             }
@@ -1540,11 +1584,11 @@ impl RuntimeState {
             .resources
             .lock()
             .map_err(|_| contract::MC_HOST_INTERNAL)?;
-        if resources.kernels.live >= MAX_KERNELS
+        if resources.kernels.live >= self.limits.max_kernels
             || resources
                 .kernel_bytes
                 .checked_add(wasm.len())
-                .is_none_or(|total| total > MAX_KERNEL_BYTES)
+                .is_none_or(|total| total > self.limits.max_kernel_bytes)
         {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
@@ -1591,15 +1635,18 @@ impl RuntimeState {
         config: VmConfig,
     ) -> Result<u64, u32> {
         if config.layers.len() > 64
-            || config
-                .layers
-                .iter()
-                .try_fold(0usize, |total, layer| total.checked_add(layer.len()))
-                .is_none_or(|total| total > MAX_IMAGE_BYTES)
             || config.requested_workers.is_some_and(|workers| workers < 0)
             || !(0..=4).contains(&config.contract_tier)
         {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        if config
+            .layers
+            .iter()
+            .try_fold(0usize, |total, layer| total.checked_add(layer.len()))
+            .is_none_or(|total| total > self.limits.max_image_bytes)
+        {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
         let capabilities = self.plan_capabilities(plan_handle)?;
         let kernel_bytes = {
@@ -2072,6 +2119,9 @@ impl RuntimeState {
             .resources
             .lock()
             .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if resources.baselines.live + resources.snapshots.live >= self.limits.max_snapshot_handles {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
         if resources
             .snapshot_bytes
             .checked_add(bytes.len())
@@ -2159,6 +2209,11 @@ impl RuntimeState {
                 .resources
                 .lock()
                 .map_err(|_| contract::MC_HOST_INTERNAL)?;
+            if resources.baselines.live + resources.snapshots.live
+                >= self.limits.max_snapshot_handles
+            {
+                return Err(contract::MC_HOST_RESOURCE_LIMIT);
+            }
             let available = self
                 .limits
                 .max_snapshot_total_bytes
@@ -2191,6 +2246,9 @@ impl RuntimeState {
             .resources
             .lock()
             .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if resources.baselines.live + resources.snapshots.live >= self.limits.max_snapshot_handles {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
         let length = bytes.len();
         let record = Arc::new(SnapshotRecord {
             bytes,

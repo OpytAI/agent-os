@@ -82,6 +82,11 @@ typedef struct mc_host_runtime_options_v1 {
   uint32_t max_ws_incoming_bytes;
   mc_host_wake_fn wake;
   void *wake_user_data;
+  uint32_t max_kernels;
+  uint32_t max_kernel_bytes;
+  uint32_t max_compiled_modules;
+  uint32_t max_image_bytes;
+  uint32_t max_snapshot_handles;
 } mc_host_runtime_options_v1;
 
 typedef struct mc_host_library_info_v1 {

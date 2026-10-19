@@ -26,7 +26,7 @@ layout "ERROR" size=48 align=8 {
   offset "reserved" value=17
   offset "message" value=24
 }
-layout "RUNTIME_OPTIONS" size=72 align=8 {
+layout "RUNTIME_OPTIONS" size=96 align=8 {
   offset "header" value=0
   offset "max_vms" value=8
   offset "max_drive_ticks" value=12
@@ -42,6 +42,11 @@ layout "RUNTIME_OPTIONS" size=72 align=8 {
   offset "max_ws_incoming_bytes" value=52
   offset "wake" value=56
   offset "wake_user_data" value=64
+  offset "max_kernels" value=72
+  offset "max_kernel_bytes" value=76
+  offset "max_compiled_modules" value=80
+  offset "max_image_bytes" value=84
+  offset "max_snapshot_handles" value=88
 }
 layout "LIBRARY_INFO" size=24 align=8 {
   offset "header" value=0
@@ -327,6 +332,16 @@ constant "MC_HOST_HARD_MAX_WS_SOCKETS" value=256 type="u32"
 constant "MC_HOST_DEFAULT_MAX_WS_INCOMING_BYTES" value=16777216 type="u32"
 constant "MC_HOST_HARD_MAX_WS_INCOMING_BYTES" value=16777216 type="u32"
 constant "MC_HOST_MIN_NATIVE_STACK_BYTES" value=8388608 type="u32"
+constant "MC_HOST_DEFAULT_MAX_KERNELS" value=64 type="u32"
+constant "MC_HOST_HARD_MAX_KERNELS" value=64 type="u32"
+constant "MC_HOST_DEFAULT_MAX_KERNEL_BYTES" value=268435456 type="u32"
+constant "MC_HOST_HARD_MAX_KERNEL_BYTES" value=268435456 type="u32"
+constant "MC_HOST_DEFAULT_MAX_COMPILED_MODULES" value=64 type="u32"
+constant "MC_HOST_HARD_MAX_COMPILED_MODULES" value=64 type="u32"
+constant "MC_HOST_DEFAULT_MAX_IMAGE_BYTES" value=268435456 type="u32"
+constant "MC_HOST_HARD_MAX_IMAGE_BYTES" value=268435456 type="u32"
+constant "MC_HOST_DEFAULT_MAX_SNAPSHOT_HANDLES" value=64 type="u32"
+constant "MC_HOST_HARD_MAX_SNAPSHOT_HANDLES" value=64 type="u32"
 
 constant "MC_HOST_TICK_WAITING" value=0 type="u32"
 constant "MC_HOST_TICK_RUNNABLE" value=1 type="u32"

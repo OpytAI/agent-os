@@ -9,7 +9,6 @@ use super::resources::{VmConfig, VmReport};
 use super::*;
 
 const MAX_KERNEL_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_INPUT_BYTES: u64 = 16 * 1024 * 1024;
 
 pub(super) unsafe fn bytes<'a>(value: Bytes, maximum: u64) -> Result<&'a [u8], ResultCode> {
@@ -168,6 +167,8 @@ pub unsafe extern "C" fn vm_create(
         ) {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
+        let active = ActiveRuntime::acquire(runtime)?;
+        let max_image_bytes = active.state.max_image_bytes() as u64;
         let mut layers = Vec::with_capacity(options.layer_count as usize);
         let mut total = 0u64;
         for index in 0..options.layer_count as usize {
@@ -175,10 +176,10 @@ pub unsafe extern "C" fn vm_create(
             total = total
                 .checked_add(descriptor.len)
                 .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
-            if total > MAX_IMAGE_BYTES {
+            if total > max_image_bytes {
                 return Err(contract::MC_HOST_RESOURCE_LIMIT);
             }
-            let layer = unsafe { bytes(descriptor, MAX_IMAGE_BYTES)? };
+            let layer = unsafe { bytes(descriptor, max_image_bytes)? };
             if ranges_overlap(
                 layer.as_ptr() as usize,
                 layer.len(),
@@ -205,7 +206,6 @@ pub unsafe extern "C" fn vm_create(
             terminal_size,
         };
         unsafe { *out_vm = 0 };
-        let active = ActiveRuntime::acquire(runtime)?;
         let handle = active.state.create_vm(kernel, plan, config)?;
         unsafe { *out_vm = handle };
         Ok(())

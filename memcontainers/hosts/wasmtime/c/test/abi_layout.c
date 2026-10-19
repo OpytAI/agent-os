@@ -42,6 +42,11 @@ CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_ws_sockets, MAX_WS_
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_ws_incoming_bytes, MAX_WS_INCOMING_BYTES);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, wake, WAKE);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, wake_user_data, WAKE_USER_DATA);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_kernels, MAX_KERNELS);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_kernel_bytes, MAX_KERNEL_BYTES);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_compiled_modules, MAX_COMPILED_MODULES);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_image_bytes, MAX_IMAGE_BYTES);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_snapshot_handles, MAX_SNAPSHOT_HANDLES);
 
 CHECK_LAYOUT(mc_host_library_info_v1, LIBRARY_INFO);
 CHECK_FIELD(mc_host_library_info_v1, LIBRARY_INFO, header, HEADER);
