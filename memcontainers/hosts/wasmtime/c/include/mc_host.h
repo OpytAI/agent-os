@@ -65,6 +65,11 @@ typedef struct mc_host_runtime_options_v1 {
   uint32_t max_snapshot_total_bytes;
   /* Maximum outstanding control operations on one VM. */
   uint32_t max_operations_per_vm;
+  uint32_t max_effect_events;
+  uint32_t max_effect_bytes;
+  uint32_t max_effect_response_bytes;
+  uint32_t max_ws_sockets;
+  uint32_t max_ws_incoming_bytes;
 } mc_host_runtime_options_v1;
 
 typedef struct mc_host_library_info_v1 {

@@ -26,7 +26,7 @@ layout "ERROR" size=48 align=8 {
   offset "reserved" value=17
   offset "message" value=24
 }
-layout "RUNTIME_OPTIONS" size=36 align=4 {
+layout "RUNTIME_OPTIONS" size=56 align=4 {
   offset "header" value=0
   offset "max_vms" value=8
   offset "max_drive_ticks" value=12
@@ -35,6 +35,11 @@ layout "RUNTIME_OPTIONS" size=36 align=4 {
   offset "max_snapshot_bytes" value=24
   offset "max_snapshot_total_bytes" value=28
   offset "max_operations_per_vm" value=32
+  offset "max_effect_events" value=36
+  offset "max_effect_bytes" value=40
+  offset "max_effect_response_bytes" value=44
+  offset "max_ws_sockets" value=48
+  offset "max_ws_incoming_bytes" value=52
 }
 layout "LIBRARY_INFO" size=24 align=8 {
   offset "header" value=0
@@ -309,6 +314,16 @@ constant "MC_HOST_DEFAULT_MAX_SNAPSHOT_TOTAL_BYTES" value=1073741824 type="u32"
 constant "MC_HOST_HARD_MAX_SNAPSHOT_TOTAL_BYTES" value=1073741824 type="u32"
 constant "MC_HOST_DEFAULT_MAX_OPERATIONS_PER_VM" value=64 type="u32"
 constant "MC_HOST_HARD_MAX_OPERATIONS_PER_VM" value=64 type="u32"
+constant "MC_HOST_DEFAULT_MAX_EFFECT_EVENTS" value=256 type="u32"
+constant "MC_HOST_HARD_MAX_EFFECT_EVENTS" value=256 type="u32"
+constant "MC_HOST_DEFAULT_MAX_EFFECT_BYTES" value=4194304 type="u32"
+constant "MC_HOST_HARD_MAX_EFFECT_BYTES" value=4194304 type="u32"
+constant "MC_HOST_DEFAULT_MAX_EFFECT_RESPONSE_BYTES" value=67108864 type="u32"
+constant "MC_HOST_HARD_MAX_EFFECT_RESPONSE_BYTES" value=67108864 type="u32"
+constant "MC_HOST_DEFAULT_MAX_WS_SOCKETS" value=256 type="u32"
+constant "MC_HOST_HARD_MAX_WS_SOCKETS" value=256 type="u32"
+constant "MC_HOST_DEFAULT_MAX_WS_INCOMING_BYTES" value=16777216 type="u32"
+constant "MC_HOST_HARD_MAX_WS_INCOMING_BYTES" value=16777216 type="u32"
 
 constant "MC_HOST_TICK_WAITING" value=0 type="u32"
 constant "MC_HOST_TICK_RUNNABLE" value=1 type="u32"

@@ -881,6 +881,82 @@ static void run_http_relay(const mc_host_vm_api_v1 *vm_api,
   need(pthread_join(server, NULL) == 0, "join real HTTP server");
 }
 
+static void run_effect_pressure(const mc_host_vm_api_v1 *vm_api,
+                                const mc_host_operation_api_v1 *op_api,
+                                const mc_host_effect_api_v1 *effect_api,
+                                mc_host_runtime_t runtime, mc_host_handle_t vm) {
+  const char script[] =
+      "local sys=require('sys'); "
+      "assert(sys.net.fetch('http://127.0.0.1:1/pressure')==nil); "
+      "print('pressure-ok')";
+  wire write = filesystem_request(MC_HOST_OP_FS_WRITE, "/tmp/native-pressure.luau",
+                                  (const uint8_t *)script, sizeof(script) - 1);
+  mc_host_handle_t write_op = 0;
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){write.bytes, write.length},
+                      &write_op, NULL), "write guest effect pressure script");
+  mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
+  for (int attempt = 0; attempt < 2048; ++attempt) {
+    mc_host_drive_options_v1 drive = MC_HOST_INIT(mc_host_drive_options_v1);
+    drive.max_ticks = 128;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &drive, &driven, NULL), "drive pressure script write");
+    check(op_api->poll(runtime, write_op, &status, NULL), "poll pressure script write");
+    if (status.state == MC_HOST_OP_READY) break;
+  }
+  need(status.state == MC_HOST_OP_READY, "pressure script written");
+  check(op_api->close(runtime, write_op, NULL), "close pressure script write");
+
+  mc_host_handle_t jobs[9] = {0};
+  wire command = shell_request("luau /tmp/native-pressure.luau");
+  for (size_t i = 0; i < 9; ++i) {
+    check(op_api->start(runtime, vm,
+                        (mc_host_bytes_v1){command.bytes, command.length},
+                        &jobs[i], NULL), "start concurrent guest HTTP pressure job");
+  }
+  mc_host_effect_stats_v1 stats = MC_HOST_INIT(mc_host_effect_stats_v1);
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 drive = MC_HOST_INIT(mc_host_drive_options_v1);
+    drive.max_ticks = 128;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &drive, &driven, NULL), "drive concurrent guest HTTP");
+    check(effect_api->stats(runtime, vm, &stats, NULL), "inspect full effect queue");
+    if (stats.refused_http > 0) break;
+  }
+  need(stats.refused_http > 0 && stats.queued_events == 8,
+       "real guest exceeds configured eight-slot effect queue");
+  for (size_t i = 0; i < 8; ++i) {
+    mc_host_handle_t event = 0;
+    mc_host_effect_info_v1 info = MC_HOST_INIT(mc_host_effect_info_v1);
+    check(effect_api->next(runtime, vm, UINT64_C(1) << MC_HOST_EVENT_HTTP_REQUEST,
+                           &event, &info, NULL), "lease pressured HTTP request");
+    need(info.kind == MC_HOST_EVENT_HTTP_REQUEST, "pressure event is guest HTTP");
+    check(effect_api->cancel(runtime, event, NULL), "deny pressured HTTP request");
+  }
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 drive = MC_HOST_INIT(mc_host_drive_options_v1);
+    drive.max_ticks = 128;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &drive, &driven, NULL), "complete pressure jobs");
+    size_t ready = 0;
+    for (size_t i = 0; i < 9; ++i) {
+      check(op_api->poll(runtime, jobs[i], &status, NULL), "poll pressured guest job");
+      ready += status.state == MC_HOST_OP_READY;
+    }
+    if (ready == 9) break;
+  }
+  for (size_t i = 0; i < 9; ++i) {
+    check(op_api->poll(runtime, jobs[i], &status, NULL), "read pressure job status");
+    need(status.state == MC_HOST_OP_READY && status.result_length < 4096,
+         "pressured guest job completes");
+    uint8_t result[4096];
+    mc_host_buffer_v1 buffer = {result, sizeof(result), 0};
+    check(op_api->result(runtime, jobs[i], &buffer, NULL), "read pressure job result");
+    need(contains_bytes(result, buffer.required, "pressure-ok", 11),
+         "pressured guest observes network denial");
+    check(op_api->close(runtime, jobs[i], NULL), "close pressure job");
+  }
+}
+
 static void run_native_connection(const mc_host_vm_api_v1 *vm_api,
                                   const mc_host_operation_api_v1 *op_api,
                                   const mc_host_effect_api_v1 *effect_api,
@@ -1967,6 +2043,11 @@ int main(int argc, char **argv) {
   runtime_options.max_snapshot_bytes = 480 * 1024 * 1024;
   runtime_options.max_snapshot_total_bytes = 900 * 1024 * 1024;
   runtime_options.max_operations_per_vm = 16;
+  runtime_options.max_effect_events = 8;
+  runtime_options.max_effect_bytes = 64 * 1024;
+  runtime_options.max_effect_response_bytes = 1024 * 1024;
+  runtime_options.max_ws_sockets = 4;
+  runtime_options.max_ws_incoming_bytes = 128 * 1024;
   check(api.runtime_create(&runtime_options, &runtime, NULL), "create bounded runtime");
 
   mc_host_vm_api_v1 vm_api = MC_HOST_INIT(mc_host_vm_api_v1);
@@ -2419,6 +2500,7 @@ int main(int argc, char **argv) {
                      &snapshot_unmount_op, NULL), "unmount snapshot driver from source");
   check(op_api.close(runtime, snapshot_unmount_op, NULL),
         "close snapshot unmount operation");
+  run_effect_pressure(&vm_api, &op_api, &effect_api, runtime, vm);
   cancel_mount_relay(&vm_api, &op_api, &effect_api, runtime, vm);
   run_native_connection(&vm_api, &op_api, &effect_api, &snap_api,
                         &output_api, &attachment_api, runtime, kernel_handle, &create);

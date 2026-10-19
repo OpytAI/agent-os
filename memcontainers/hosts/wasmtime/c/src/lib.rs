@@ -85,6 +85,11 @@ struct RuntimeOptions {
     max_snapshot_bytes: u32,
     max_snapshot_total_bytes: u32,
     max_operations_per_vm: u32,
+    max_effect_events: u32,
+    max_effect_bytes: u32,
+    max_effect_response_bytes: u32,
+    max_ws_sockets: u32,
+    max_ws_incoming_bytes: u32,
 }
 
 #[repr(C)]
@@ -459,6 +464,26 @@ const _: () = {
     assert!(
         offset_of!(RuntimeOptions, max_operations_per_vm)
             == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_MAX_OPERATIONS_PER_VM_OFFSET
+    );
+    assert!(
+        offset_of!(RuntimeOptions, max_effect_events)
+            == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_MAX_EFFECT_EVENTS_OFFSET
+    );
+    assert!(
+        offset_of!(RuntimeOptions, max_effect_bytes)
+            == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_MAX_EFFECT_BYTES_OFFSET
+    );
+    assert!(
+        offset_of!(RuntimeOptions, max_effect_response_bytes)
+            == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_MAX_EFFECT_RESPONSE_BYTES_OFFSET
+    );
+    assert!(
+        offset_of!(RuntimeOptions, max_ws_sockets)
+            == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_MAX_WS_SOCKETS_OFFSET
+    );
+    assert!(
+        offset_of!(RuntimeOptions, max_ws_incoming_bytes)
+            == contract::MC_HOST_LAYOUT_RUNTIME_OPTIONS_MAX_WS_INCOMING_BYTES_OFFSET
     );
 
     assert!(size_of::<LibraryInfo>() == contract::MC_HOST_LAYOUT_LIBRARY_INFO_SIZE);
@@ -1151,7 +1176,7 @@ fn ranges_overlap(a: usize, a_len: usize, b: usize, b_len: usize) -> bool {
 
 unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimits, ResultCode> {
     if options.is_null() {
-        return RuntimeLimits::new(0, 0, 0, 0, 0, 0, 0);
+        return RuntimeLimits::new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
     if (options as usize) % align_of::<Header>() != 0 {
         return Err(contract::MC_HOST_INVALID_ARGUMENT);
@@ -1160,17 +1185,21 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
     const OLD_OPTIONS_SIZE: usize = 16;
     const PRE_SNAPSHOT_OPTIONS_SIZE: usize = 24;
     const PRE_TOTAL_OPTIONS_SIZE: usize = 28;
+    const PRE_EFFECT_OPTIONS_SIZE: usize = 36;
     if !valid_header(header, size_of::<Header>())
         || header.size as usize > MAX_INPUT_STRUCT_SIZE
         || !matches!(
             header.size as usize,
-            8 | OLD_OPTIONS_SIZE | PRE_SNAPSHOT_OPTIONS_SIZE | PRE_TOTAL_OPTIONS_SIZE
+            8 | OLD_OPTIONS_SIZE
+                | PRE_SNAPSHOT_OPTIONS_SIZE
+                | PRE_TOTAL_OPTIONS_SIZE
+                | PRE_EFFECT_OPTIONS_SIZE
         ) && (header.size as usize) < size_of::<RuntimeOptions>()
     {
         return Err(contract::MC_HOST_INVALID_ARGUMENT);
     }
     if header.size as usize == size_of::<Header>() {
-        return RuntimeLimits::new(0, 0, 0, 0, 0, 0, 0);
+        return RuntimeLimits::new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
     let tail_len = (header.size as usize).saturating_sub(size_of::<RuntimeOptions>());
     if tail_len != 0 {
@@ -1200,15 +1229,32 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
         unsafe { ptr::read((options as *const u8).add(24).cast::<u32>()) }
     };
     let (max_snapshot_total_bytes, max_operations_per_vm) =
-        if (header.size as usize) < size_of::<RuntimeOptions>() {
+        if (header.size as usize) < PRE_EFFECT_OPTIONS_SIZE {
             (0, 0)
         } else {
-            let options = unsafe { ptr::read(options) };
             (
-                options.max_snapshot_total_bytes,
-                options.max_operations_per_vm,
+                unsafe { ptr::read((options as *const u8).add(28).cast::<u32>()) },
+                unsafe { ptr::read((options as *const u8).add(32).cast::<u32>()) },
             )
         };
+    let (
+        max_effect_events,
+        max_effect_bytes,
+        max_effect_response_bytes,
+        max_ws_sockets,
+        max_ws_incoming_bytes,
+    ) = if (header.size as usize) < size_of::<RuntimeOptions>() {
+        (0, 0, 0, 0, 0)
+    } else {
+        let options = unsafe { ptr::read(options) };
+        (
+            options.max_effect_events,
+            options.max_effect_bytes,
+            options.max_effect_response_bytes,
+            options.max_ws_sockets,
+            options.max_ws_incoming_bytes,
+        )
+    };
     RuntimeLimits::new(
         max_vms,
         max_drive_ticks,
@@ -1217,6 +1263,11 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
         max_snapshot_bytes,
         max_snapshot_total_bytes,
         max_operations_per_vm,
+        max_effect_events,
+        max_effect_bytes,
+        max_effect_response_bytes,
+        max_ws_sockets,
+        max_ws_incoming_bytes,
     )
 }
 

@@ -122,6 +122,35 @@ int main(int argc, char **argv) {
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
            runtime == 0, "reject operation limit above hard cap");
   options.known.max_operations_per_vm = 0;
+  options.known.max_effect_events = MC_HOST_HARD_MAX_EFFECT_EVENTS + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject effect slot limit above hard cap");
+  options.known.max_effect_events = 0;
+  options.known.max_effect_bytes = MC_HOST_HARD_MAX_EFFECT_BYTES + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject effect queue bytes above hard cap");
+  options.known.max_effect_bytes = 3;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
+           runtime == 0, "reject effect queue smaller than high water");
+  options.known.max_effect_bytes = 0;
+  options.known.max_effect_response_bytes = MC_HOST_HARD_MAX_EFFECT_RESPONSE_BYTES + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject response quota above hard cap");
+  options.known.max_effect_response_bytes = 0;
+  options.known.max_ws_sockets = MC_HOST_HARD_MAX_WS_SOCKETS + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject socket quota above hard cap");
+  options.known.max_ws_sockets = 0;
+  options.known.max_ws_incoming_bytes = MC_HOST_HARD_MAX_WS_INCOMING_BYTES + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject inbound socket bytes above hard cap");
+  options.known.max_ws_incoming_bytes = 0;
+  options.known.header.size = 36;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK && runtime != 0,
+       "old runtime options remain accepted");
+  need(api.runtime_close(runtime, NULL) == MC_HOST_OK, "close legacy options runtime");
+  runtime = 0;
+  options.known.header.size = sizeof(options);
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK,
        "accept zero future option");
   need(runtime != 0, "runtime handle");

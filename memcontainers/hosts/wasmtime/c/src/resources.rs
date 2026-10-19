@@ -19,7 +19,7 @@ use host::{
 use sha2::{Digest, Sha256};
 
 use super::operations::OperationRecord;
-use super::relay::{EffectBody, Relay};
+use super::relay::{EffectBody, Relay, RelayLimits};
 use super::{pack_kind, unpack, MAX_GENERATION, MAX_INDEX};
 
 pub const KERNEL_KIND: u8 = 2;
@@ -47,6 +47,7 @@ pub struct RuntimeLimits {
     pub max_snapshot_bytes: usize,
     pub max_snapshot_total_bytes: usize,
     pub max_operations_per_vm: usize,
+    pub relay: RelayLimits,
 }
 
 impl RuntimeLimits {
@@ -58,6 +59,11 @@ impl RuntimeLimits {
         max_snapshot_bytes: u32,
         max_snapshot_total_bytes: u32,
         max_operations_per_vm: u32,
+        max_effect_events: u32,
+        max_effect_bytes: u32,
+        max_effect_response_bytes: u32,
+        max_ws_sockets: u32,
+        max_ws_incoming_bytes: u32,
     ) -> Result<Self, u32> {
         if max_vms > MAX_VMS as u32
             || max_drive_ticks > MAX_DRIVE_TICKS
@@ -66,11 +72,17 @@ impl RuntimeLimits {
             || max_snapshot_bytes > contract::MC_HOST_HARD_MAX_SNAPSHOT_BYTES
             || max_snapshot_total_bytes > contract::MC_HOST_HARD_MAX_SNAPSHOT_TOTAL_BYTES
             || max_operations_per_vm > contract::MC_HOST_HARD_MAX_OPERATIONS_PER_VM
+            || max_effect_events > contract::MC_HOST_HARD_MAX_EFFECT_EVENTS
+            || max_effect_bytes > contract::MC_HOST_HARD_MAX_EFFECT_BYTES
+            || max_effect_response_bytes > contract::MC_HOST_HARD_MAX_EFFECT_RESPONSE_BYTES
+            || max_ws_sockets > contract::MC_HOST_HARD_MAX_WS_SOCKETS
+            || max_ws_incoming_bytes > contract::MC_HOST_HARD_MAX_WS_INCOMING_BYTES
         {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
         if (max_output_bytes != 0 && max_output_bytes < 4)
             || (max_output_records != 0 && max_output_records < 4)
+            || (max_effect_bytes != 0 && max_effect_bytes < 4)
         {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
@@ -109,6 +121,33 @@ impl RuntimeLimits {
                 contract::MC_HOST_DEFAULT_MAX_OPERATIONS_PER_VM as usize
             } else {
                 max_operations_per_vm as usize
+            },
+            relay: RelayLimits {
+                max_events: if max_effect_events == 0 {
+                    contract::MC_HOST_DEFAULT_MAX_EFFECT_EVENTS
+                } else {
+                    max_effect_events
+                } as usize,
+                max_event_bytes: if max_effect_bytes == 0 {
+                    contract::MC_HOST_DEFAULT_MAX_EFFECT_BYTES
+                } else {
+                    max_effect_bytes
+                } as usize,
+                max_total_response_bytes: if max_effect_response_bytes == 0 {
+                    contract::MC_HOST_DEFAULT_MAX_EFFECT_RESPONSE_BYTES
+                } else {
+                    max_effect_response_bytes
+                } as usize,
+                max_ws_sockets: if max_ws_sockets == 0 {
+                    contract::MC_HOST_DEFAULT_MAX_WS_SOCKETS
+                } else {
+                    max_ws_sockets
+                } as usize,
+                max_ws_incoming_bytes: if max_ws_incoming_bytes == 0 {
+                    contract::MC_HOST_DEFAULT_MAX_WS_INCOMING_BYTES
+                } else {
+                    max_ws_incoming_bytes
+                } as usize,
             },
         })
     }
@@ -1566,6 +1605,7 @@ impl RuntimeState {
                 capabilities
                     .as_ref()
                     .is_some_and(|plan| plan.http_identity.is_some()),
+                self.limits.relay,
             )
         });
         if let Some(relay) = &relay {
@@ -1799,6 +1839,7 @@ impl RuntimeState {
                 capabilities
                     .as_ref()
                     .is_some_and(|plan| plan.http_identity.is_some()),
+                self.limits.relay,
             )
         });
         if let Some(relay) = &relay {

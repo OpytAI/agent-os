@@ -16,14 +16,17 @@ use host::{
     ToolApprover,
 };
 
-const MAX_EVENTS: usize = 256;
-const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
-const EVENT_HIGH_WATER: usize = 3 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-const MAX_TOTAL_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const WS_WINDOW_BYTES: usize = 1024 * 1024;
-const MAX_WS_SOCKETS: usize = 256;
-const MAX_WS_INCOMING_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+pub struct RelayLimits {
+    pub max_events: usize,
+    pub max_event_bytes: usize,
+    pub max_total_response_bytes: usize,
+    pub max_ws_sockets: usize,
+    pub max_ws_incoming_bytes: usize,
+}
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum EventPhase {
@@ -76,6 +79,7 @@ pub struct EffectBody {
 
 struct Inner {
     closed: bool,
+    limits: RelayLimits,
     routes: BTreeSet<String>,
     persist_enabled: bool,
     http_enabled: bool,
@@ -146,13 +150,13 @@ impl Inner {
         if self.closed {
             return None;
         }
-        if self.slots.len() >= MAX_EVENTS
+        if self.slots.len() >= self.limits.max_events
             || self
                 .queued_bytes
                 .checked_add(payload.len())
-                .is_none_or(|total| total > MAX_EVENT_BYTES)
+                .is_none_or(|total| total > self.limits.max_event_bytes)
             || self.next_bridge_handle == i32::MAX
-            || self.next_event_id > u64::MAX - MAX_EVENTS as u64
+            || self.next_event_id > u64::MAX - self.limits.max_events as u64
         {
             let counter = &mut self.refused[family_index(kind)];
             *counter = counter.saturating_add(1);
@@ -277,10 +281,16 @@ pub struct LeasedEvent {
 }
 
 impl Relay {
-    pub fn new(routes: BTreeSet<String>, persist_enabled: bool, http_enabled: bool) -> Arc<Self> {
+    pub fn new(
+        routes: BTreeSet<String>,
+        persist_enabled: bool,
+        http_enabled: bool,
+        limits: RelayLimits,
+    ) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(Inner {
                 closed: false,
+                limits,
                 routes,
                 persist_enabled,
                 http_enabled,
@@ -343,7 +353,7 @@ impl Relay {
     pub fn above_high_water(&self) -> bool {
         self.inner
             .lock()
-            .is_ok_and(|inner| inner.queued_bytes >= EVENT_HIGH_WATER)
+            .is_ok_and(|inner| inner.queued_bytes >= inner.limits.max_event_bytes * 3 / 4)
     }
 
     pub fn ready(&self) -> bool {
@@ -421,7 +431,7 @@ impl Relay {
             .values()
             .map(|state| state.incoming_bytes)
             .sum();
-        if total_incoming + data.len() > MAX_WS_INCOMING_BYTES {
+        if total_incoming + data.len() > inner.limits.max_ws_incoming_bytes {
             return Err(contract::MC_HOST_WOULD_BLOCK);
         }
         let state = inner.sockets.get_mut(&socket).expect("validated socket");
@@ -669,7 +679,7 @@ impl Relay {
         if inner
             .response_bytes
             .checked_add(response_len)
-            .is_none_or(|total| total > MAX_TOTAL_RESPONSE_BYTES)
+            .is_none_or(|total| total > inner.limits.max_total_response_bytes)
         {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
@@ -737,7 +747,7 @@ impl Relay {
             .response_bytes
             .checked_add(reserved_bytes)
             .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
-        if total > MAX_TOTAL_RESPONSE_BYTES {
+        if total > inner.limits.max_total_response_bytes {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
         let event = inner
@@ -1213,7 +1223,7 @@ impl NetCapability for RelayNet {
             return -1;
         };
         if !inner.http_enabled
-            || inner.sockets.len() >= MAX_WS_SOCKETS
+            || inner.sockets.len() >= inner.limits.max_ws_sockets
             || url.len() > 16 * 1024
             || (!url.starts_with("ws://") && !url.starts_with("wss://"))
         {
@@ -1260,13 +1270,11 @@ impl NetCapability for RelayNet {
         if !state.open || state.outgoing_bytes + data.len() > WS_WINDOW_BYTES {
             return -EAGAIN;
         }
-        let Some(event_handle) = inner.enqueue(
-            contract::MC_HOST_EVENT_WS_SEND,
-            WsSendRequest {
-                data: data.to_vec(),
-            }
-            .encode(),
-        ) else {
+        let payload = WsSendRequest { data: data.to_vec() }.encode();
+        if payload.len() > inner.limits.max_event_bytes {
+            return -EMSGSIZE;
+        }
+        let Some(event_handle) = inner.enqueue(contract::MC_HOST_EVENT_WS_SEND, payload) else {
             return -EAGAIN;
         };
         inner.attach_socket(event_handle, handle, data.len());
@@ -1289,8 +1297,8 @@ impl NetCapability for RelayNet {
         }
         (state.open
             && state.outgoing_bytes < WS_WINDOW_BYTES
-            && inner.slots.len() < MAX_EVENTS
-            && inner.queued_bytes <= MAX_EVENT_BYTES - WS_WINDOW_BYTES - 16) as i32
+            && inner.slots.len() < inner.limits.max_events
+            && inner.queued_bytes < inner.limits.max_event_bytes) as i32
     }
     fn ws_recv(&mut self, handle: i32, buf: &mut [u8]) -> i32 {
         let Ok(mut inner) = self.0.inner.lock() else {
