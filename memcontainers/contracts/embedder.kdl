@@ -26,7 +26,7 @@ layout "ERROR" size=48 align=8 {
   offset "reserved" value=17
   offset "message" value=24
 }
-layout "RUNTIME_OPTIONS" size=104 align=8 {
+layout "RUNTIME_OPTIONS" size=112 align=8 {
   offset "header" value=0
   offset "max_vms" value=8
   offset "max_drive_ticks" value=12
@@ -49,6 +49,8 @@ layout "RUNTIME_OPTIONS" size=104 align=8 {
   offset "max_snapshot_handles" value=88
   offset "reserved_resource_options" value=92
   offset "max_operation_result_bytes" value=96
+  offset "reserved_result_options" value=100
+  offset "max_message_bytes" value=104
 }
 layout "LIBRARY_INFO" size=24 align=8 {
   offset "header" value=0
@@ -346,6 +348,8 @@ constant "MC_HOST_DEFAULT_MAX_SNAPSHOT_HANDLES" value=64 type="u32"
 constant "MC_HOST_HARD_MAX_SNAPSHOT_HANDLES" value=64 type="u32"
 constant "MC_HOST_DEFAULT_MAX_OPERATION_RESULT_BYTES" value=16777216 type="u32"
 constant "MC_HOST_HARD_MAX_OPERATION_RESULT_BYTES" value=16777216 type="u32"
+constant "MC_HOST_DEFAULT_MAX_MESSAGE_BYTES" value=18874368 type="u32"
+constant "MC_HOST_HARD_MAX_MESSAGE_BYTES" value=18874368 type="u32"
 
 constant "MC_HOST_TICK_WAITING" value=0 type="u32"
 constant "MC_HOST_TICK_RUNNABLE" value=1 type="u32"

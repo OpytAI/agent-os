@@ -179,6 +179,9 @@ unsafe extern "C" fn respond(
 ) -> ResultCode {
     guard(error, || {
         let frame = unsafe { bytes(frame, 16 * 1024 * 1024 + 128)? };
+        if frame.len() > ActiveRuntime::acquire(runtime)?.state.max_message_bytes() {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
         let (kind, payload) = decode_response(event, frame)?;
         ActiveRuntime::acquire(runtime)?
             .state
@@ -195,6 +198,9 @@ unsafe extern "C" fn response_begin(
 ) -> ResultCode {
     guard(error, || {
         let frame = unsafe { bytes(metadata, 16 * 1024 + 256)? };
+        if frame.len() > ActiveRuntime::acquire(runtime)?.state.max_message_bytes() {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
         let (kind, payload) = decode_response(event, frame)?;
         let declared =
             usize::try_from(declared_body_len).map_err(|_| contract::MC_HOST_RESOURCE_LIMIT)?;

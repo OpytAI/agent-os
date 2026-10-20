@@ -31,6 +31,9 @@ unsafe extern "C" fn plan_add(
 ) -> ResultCode {
     guard(error, || {
         let frame = unsafe { bytes(definition, 1024 * 1024)? };
+        if frame.len() > ActiveRuntime::acquire(runtime)?.state.max_message_bytes() {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
         let definition =
             AttachmentDefinition::decode(frame).map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
         match definition.kind {

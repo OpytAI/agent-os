@@ -54,6 +54,7 @@ pub struct RuntimeLimits {
     pub max_image_bytes: usize,
     pub max_snapshot_handles: usize,
     pub max_operation_result_bytes: usize,
+    pub max_message_bytes: usize,
 }
 
 impl RuntimeLimits {
@@ -78,6 +79,7 @@ impl RuntimeLimits {
         max_image_bytes: u32,
         max_snapshot_handles: u32,
         max_operation_result_bytes: u32,
+        max_message_bytes: u32,
     ) -> Result<Self, u32> {
         if max_vms > MAX_VMS as u32
             || max_drive_ticks > MAX_DRIVE_TICKS
@@ -97,6 +99,7 @@ impl RuntimeLimits {
             || max_image_bytes > contract::MC_HOST_HARD_MAX_IMAGE_BYTES
             || max_snapshot_handles > contract::MC_HOST_HARD_MAX_SNAPSHOT_HANDLES
             || max_operation_result_bytes > contract::MC_HOST_HARD_MAX_OPERATION_RESULT_BYTES
+            || max_message_bytes > contract::MC_HOST_HARD_MAX_MESSAGE_BYTES
         {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
@@ -104,9 +107,15 @@ impl RuntimeLimits {
             || (max_output_records != 0 && max_output_records < 4)
             || (max_effect_bytes != 0 && max_effect_bytes < 4)
             || (max_operation_result_bytes != 0 && max_operation_result_bytes < 64)
+            || (max_message_bytes != 0 && max_message_bytes < 128)
         {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
+        let max_message_bytes = if max_message_bytes == 0 {
+            contract::MC_HOST_DEFAULT_MAX_MESSAGE_BYTES
+        } else {
+            max_message_bytes
+        } as usize;
         Ok(Self {
             max_vms: if max_vms == 0 {
                 contract::MC_HOST_DEFAULT_MAX_VMS as usize
@@ -149,11 +158,12 @@ impl RuntimeLimits {
                 } else {
                     max_effect_events
                 } as usize,
-                max_event_bytes: if max_effect_bytes == 0 {
+                max_event_bytes: (if max_effect_bytes == 0 {
                     contract::MC_HOST_DEFAULT_MAX_EFFECT_BYTES
                 } else {
                     max_effect_bytes
-                } as usize,
+                } as usize)
+                    .min(max_message_bytes.saturating_sub(64)),
                 max_total_response_bytes: if max_effect_response_bytes == 0 {
                     contract::MC_HOST_DEFAULT_MAX_EFFECT_RESPONSE_BYTES
                 } else {
@@ -197,11 +207,13 @@ impl RuntimeLimits {
             } else {
                 max_snapshot_handles
             } as usize,
-            max_operation_result_bytes: if max_operation_result_bytes == 0 {
+            max_operation_result_bytes: (if max_operation_result_bytes == 0 {
                 contract::MC_HOST_DEFAULT_MAX_OPERATION_RESULT_BYTES
             } else {
                 max_operation_result_bytes
-            } as usize,
+            } as usize)
+                .min(max_message_bytes),
+            max_message_bytes,
         })
     }
 }
@@ -938,6 +950,10 @@ impl RuntimeState {
 
     pub fn max_image_bytes(&self) -> usize {
         self.limits.max_image_bytes
+    }
+
+    pub fn max_message_bytes(&self) -> usize {
+        self.limits.max_message_bytes
     }
 
     pub fn create_plan(&self) -> Result<u64, u32> {

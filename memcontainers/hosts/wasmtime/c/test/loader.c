@@ -172,6 +172,24 @@ int main(int argc, char **argv) {
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
            runtime == 0, "reject operation result quota below envelope floor");
   options.known.max_operation_result_bytes = 0;
+  options.known.max_message_bytes = MC_HOST_HARD_MAX_MESSAGE_BYTES + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject message quota above hard cap");
+  options.known.max_message_bytes = 127;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
+           runtime == 0, "reject message quota below envelope floor");
+  options.known.max_message_bytes = 0;
+  options.known.reserved_result_options = 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
+           runtime == 0, "reject nonzero reserved result option");
+  options.known.reserved_result_options = 0;
+  options.known.header.size = 104;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK && runtime != 0,
+       "pre-message runtime options remain accepted");
+  need(api.runtime_close(runtime, NULL) == MC_HOST_OK,
+       "close pre-message-options runtime");
+  runtime = 0;
+  options.known.header.size = sizeof(mc_host_runtime_options_v1);
   options.known.reserved_resource_options = 1;
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
            runtime == 0, "reject nonzero reserved runtime option");

@@ -101,6 +101,9 @@ pub unsafe extern "C" fn start(
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
         let frame = unsafe { bytes(request, MAX_REQUEST_BYTES)? };
+        if frame.len() > ActiveRuntime::acquire(runtime)?.state.max_message_bytes() {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
         if ranges_overlap(
             frame.as_ptr() as usize,
             frame.len(),
@@ -131,7 +134,9 @@ pub unsafe extern "C" fn start(
                     records,
                 )
                 .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
-                ActiveRuntime::acquire(runtime)?.state.start_catalog(vm, update)?
+                ActiveRuntime::acquire(runtime)?
+                    .state
+                    .start_catalog(vm, update)?
             }
             contract::MC_HOST_OP_MOUNT | contract::MC_HOST_OP_UNMOUNT => {
                 let request = MountRequest::decode(&envelope.payload)

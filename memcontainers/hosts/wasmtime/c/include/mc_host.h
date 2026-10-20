@@ -90,6 +90,9 @@ typedef struct mc_host_runtime_options_v1 {
   uint32_t reserved_resource_options;
   /* Maximum encoded result of one control operation. */
   uint32_t max_operation_result_bytes;
+  uint32_t reserved_result_options;
+  /* Maximum encoded native message frame. Zero selects the default. */
+  uint32_t max_message_bytes;
 } mc_host_runtime_options_v1;
 
 typedef struct mc_host_library_info_v1 {

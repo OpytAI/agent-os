@@ -1937,7 +1937,7 @@ static void run_control_command(const mc_host_vm_api_v1 *vm_api,
 static void cancel_vm_with_operation(const mc_host_vm_api_v1 *vm_api,
                                      const mc_host_operation_api_v1 *op_api,
                                      mc_host_runtime_t runtime, mc_host_handle_t vm) {
-  wire request = shell_request("git --version; git --version; git --version; git --version");
+  wire request = shell_request("git --version");
   mc_host_handle_t operation = 0;
   check(op_api->start(runtime, vm,
                       (mc_host_bytes_v1){request.bytes, request.length},
@@ -2164,6 +2164,7 @@ static void verify_operation_result_quota(const mc_host_api_v1 *api,
                                           const uint8_t *image, size_t image_len) {
   mc_host_runtime_options_v1 options = MC_HOST_INIT(mc_host_runtime_options_v1);
   options.max_operation_result_bytes = 64;
+  options.max_message_bytes = 128;
   mc_host_runtime_t runtime = 0;
   check(api->runtime_create(&options, &runtime, NULL), "create result-quota runtime");
   mc_host_handle_t kernel_handle = 0;
@@ -2179,7 +2180,17 @@ static void verify_operation_result_quota(const mc_host_api_v1 *api,
   check(vm_api->vm_create(runtime, kernel_handle, 0, &create, &vm, NULL),
         "boot real base image under result quota");
   drive_to_prompt(vm_api, output_api, runtime, vm, NULL);
-  wire request = shell_request("git --version");
+  char oversized_command[160];
+  memset(oversized_command, 'x', sizeof(oversized_command) - 1);
+  oversized_command[sizeof(oversized_command) - 1] = '\0';
+  wire oversized_request = shell_request(oversized_command);
+  mc_host_handle_t rejected_operation = 0;
+  need(op_api->start(runtime, vm,
+           (mc_host_bytes_v1){oversized_request.bytes, oversized_request.length},
+           &rejected_operation, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           rejected_operation == 0,
+       "oversized encoded request is rejected before guest execution");
+  wire request = shell_request("git --version; git --version; git --version; git --version");
   mc_host_handle_t operation = 0;
   check(op_api->start(runtime, vm, (mc_host_bytes_v1){request.bytes, request.length},
                       &operation, NULL), "start real command under result quota");
