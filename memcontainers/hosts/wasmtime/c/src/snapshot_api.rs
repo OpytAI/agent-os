@@ -336,7 +336,9 @@ unsafe extern "C" fn attachment_manifest(
         if caller.capacity < frame.len() as u64 {
             return Err(contract::MC_HOST_BUFFER_TOO_SMALL);
         }
-        unsafe { ptr::copy_nonoverlapping(frame.as_ptr(), caller.data, frame.len()) };
+        if !frame.is_empty() {
+            unsafe { ptr::copy_nonoverlapping(frame.as_ptr(), caller.data, frame.len()) };
+        }
         Ok(())
     })
 }

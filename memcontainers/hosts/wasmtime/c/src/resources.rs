@@ -1674,6 +1674,16 @@ impl RuntimeState {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
         let capabilities = self.plan_capabilities(plan_handle)?;
+        let native_net = capabilities
+            .as_ref()
+            .filter(|plan| plan.native_net)
+            .map(|plan| {
+                RealNet::new()
+                    .with_connections(plan.connections.clone())
+                    .with_connection_policies(plan.policies.clone())
+                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)
+            })
+            .transpose()?;
         let kernel_bytes = {
             let mut resources = self
                 .resources
@@ -1728,13 +1738,8 @@ impl RuntimeState {
             }
             if relay.http_enabled() {
                 builder = builder.with_net(relay.net_adapter());
-            } else if capabilities.as_ref().is_some_and(|plan| plan.native_net) {
-                let plan = capabilities.as_ref().expect("native net plan");
-                let net = RealNet::new()
-                    .with_connections(plan.connections.clone())
-                    .with_connection_policies(plan.policies.clone())
-                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?
-                    .with_tool_approver(relay.approver());
+            } else if let Some(net) = native_net {
+                let net = net.with_tool_approver(relay.approver());
                 builder = builder.with_net(Box::new(net));
             }
         }
@@ -1837,6 +1842,16 @@ impl RuntimeState {
         } else {
             None
         };
+        let native_net = capabilities
+            .as_ref()
+            .filter(|plan| plan.native_net)
+            .map(|plan| {
+                RealNet::new()
+                    .with_connections(plan.connections.clone())
+                    .with_connection_policies(plan.policies.clone())
+                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)
+            })
+            .transpose()?;
         if mode == contract::MC_HOST_RESTORE_STRICT {
             if let Some(bytes) = manifest_bytes {
                 let manifest = SnapshotAttachmentManifest::decode(bytes)
@@ -1963,13 +1978,8 @@ impl RuntimeState {
             }
             if relay.http_enabled() {
                 builder = builder.with_net(relay.net_adapter());
-            } else if capabilities.as_ref().is_some_and(|plan| plan.native_net) {
-                let plan = capabilities.as_ref().expect("native net plan");
-                let net = RealNet::new()
-                    .with_connections(plan.connections.clone())
-                    .with_connection_policies(plan.policies.clone())
-                    .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?
-                    .with_tool_approver(relay.approver());
+            } else if let Some(net) = native_net {
+                let net = net.with_tool_approver(relay.approver());
                 builder = builder.with_net(Box::new(net));
             }
         }
