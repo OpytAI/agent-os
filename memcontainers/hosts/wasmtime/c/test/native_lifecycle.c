@@ -2224,6 +2224,8 @@ static void verify_operation_result_quota(const mc_host_api_v1 *api,
   mc_host_runtime_options_v1 options = MC_HOST_INIT(mc_host_runtime_options_v1);
   options.max_operation_result_bytes = 64;
   options.max_message_bytes = 128;
+  options.max_output_bytes = 1024;
+  options.max_output_records = 4096;
   mc_host_runtime_t runtime = 0;
   check(api->runtime_create(&options, &runtime, NULL), "create result-quota runtime");
   mc_host_handle_t kernel_handle = 0;
@@ -2292,6 +2294,49 @@ static void verify_operation_result_quota(const mc_host_api_v1 *api,
           (mc_host_bytes_v1){command, sizeof(command) - 1}, NULL),
         "send terminal command after result quota failure");
   drive_to_prompt(vm_api, output_api, runtime, vm, "quota-survived");
+  uint8_t wide_command[2048];
+  memcpy(wide_command, "echo ", 5);
+  memset(wide_command + 5, 'x', sizeof(wide_command) - 6);
+  wide_command[sizeof(wide_command) - 1] = '\n';
+  check(vm_api->terminal_input(runtime, vm,
+        (mc_host_bytes_v1){wide_command, sizeof(wide_command)}, NULL),
+        "send large real terminal command into bounded output queue");
+  int saw_gap = 0, returned_to_prompt = 0;
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 drive = MC_HOST_INIT(mc_host_drive_options_v1);
+    drive.max_ticks = 128;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &drive, &driven, NULL),
+          "drive large terminal output under quota");
+    for (;;) {
+      mc_host_handle_t lease = 0;
+      mc_host_output_record_v1 record = MC_HOST_INIT(mc_host_output_record_v1);
+      mc_host_result_t next = output_api->next(runtime, vm, &lease, &record, NULL);
+      if (next == MC_HOST_WOULD_BLOCK) break;
+      check(next, "lease pressured terminal output");
+      if (record.kind == MC_HOST_OUTPUT_GAP) {
+        need(record.length > 0 && record.byte_end > record.byte_offset &&
+             record.first_lost_sequence <= record.last_lost_sequence,
+             "terminal gap identifies lost real guest bytes");
+        saw_gap = 1;
+      }
+      check(output_api->ack(runtime, lease, NULL),
+            "ack pressured terminal output");
+    }
+    need(driven.status.state != MC_HOST_VM_POISONED &&
+         driven.status.state != MC_HOST_VM_EXITED,
+         "guest remains alive after terminal pressure");
+    if (driven.status.flags & MC_HOST_VM_FLAG_AT_PROMPT) {
+      returned_to_prompt = 1;
+      break;
+    }
+  }
+  mc_host_output_stats_v1 output_stats = MC_HOST_INIT(mc_host_output_stats_v1);
+  check(output_api->stats(runtime, vm, &output_stats, NULL),
+        "inspect terminal output loss statistics");
+  need(saw_gap && returned_to_prompt && output_stats.dropped_bytes > 0 &&
+       !(output_stats.flags & MC_HOST_OUTPUT_POISONED),
+       "single large guest command records bounded output loss");
   check(vm_api->vm_close(runtime, vm, NULL), "close quota VM");
   check(vm_api->kernel_close(runtime, kernel_handle, NULL), "close quota kernel");
   check(api->runtime_close(runtime, NULL), "close result-quota runtime");
