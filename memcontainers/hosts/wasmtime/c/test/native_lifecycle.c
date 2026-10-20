@@ -848,6 +848,10 @@ static void run_http_relay(const mc_host_vm_api_v1 *vm_api,
       need(mc_host_wire_encode_effect_response(&effect_response, answer.bytes,
                   sizeof(answer.bytes), &answer.length) == MC_HOST_WIRE_OK,
            "encode native effect response");
+      need(effect_api->response_begin(runtime, event,
+            (mc_host_bytes_v1){answer.bytes, answer.length},
+            64 * 1024, NULL) == MC_HOST_RESOURCE_LIMIT,
+           "per-response limit rejects oversized real HTTP response");
       check(effect_api->response_begin(runtime, event,
           (mc_host_bytes_v1){answer.bytes, answer.length}, body_length, NULL),
           "begin streamed HTTP response");
@@ -970,6 +974,61 @@ static void run_effect_pressure(const mc_host_vm_api_v1 *vm_api,
          "pressured guest observes network denial");
     check(op_api->close(runtime, jobs[i], NULL), "close pressure job");
   }
+  uint64_t refused_before_large_event = stats.refused_http;
+  const char large_script[] =
+      "local sys=require('sys'); "
+      "local url='http://127.0.0.1:1/'..string.rep('x',32768); "
+      "assert(sys.net.fetch(url)==nil); print('large-event-refused')";
+  wire large_write = filesystem_request(MC_HOST_OP_FS_WRITE,
+      "/tmp/native-large-event.luau", (const uint8_t *)large_script,
+      sizeof(large_script) - 1);
+  mc_host_handle_t large_write_op = 0;
+  check(op_api->start(runtime, vm,
+        (mc_host_bytes_v1){large_write.bytes, large_write.length},
+        &large_write_op, NULL), "write oversized guest event script");
+  for (int attempt = 0; attempt < 2048; ++attempt) {
+    mc_host_drive_options_v1 drive = MC_HOST_INIT(mc_host_drive_options_v1);
+    drive.max_ticks = 128;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &drive, &driven, NULL),
+          "drive oversized event script write");
+    check(op_api->poll(runtime, large_write_op, &status, NULL),
+          "poll oversized event script write");
+    if (status.state == MC_HOST_OP_READY) break;
+  }
+  need(status.state == MC_HOST_OP_READY, "oversized event script written");
+  check(op_api->close(runtime, large_write_op, NULL),
+        "close oversized event script write");
+  command = shell_request("luau /tmp/native-large-event.luau");
+  mc_host_handle_t large_operation = 0;
+  check(op_api->start(runtime, vm,
+        (mc_host_bytes_v1){command.bytes, command.length},
+        &large_operation, NULL), "start oversized guest HTTP event");
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 drive = MC_HOST_INIT(mc_host_drive_options_v1);
+    drive.max_ticks = 128;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &drive, &driven, NULL),
+          "drive oversized guest HTTP event");
+    check(op_api->poll(runtime, large_operation, &status, NULL),
+          "poll oversized guest HTTP event");
+    if (status.state == MC_HOST_OP_READY) break;
+  }
+  need(status.state == MC_HOST_OP_READY && status.result_length < 4096,
+       "oversized guest HTTP event returns to caller");
+  uint8_t large_result[4096];
+  mc_host_buffer_v1 large_buffer = {large_result, sizeof(large_result), 0};
+  check(op_api->result(runtime, large_operation, &large_buffer, NULL),
+        "read oversized guest HTTP event result");
+  need(contains_bytes(large_result, large_buffer.required,
+                      "large-event-refused", 19),
+       "guest observes oversized event refusal");
+  check(effect_api->stats(runtime, vm, &stats, NULL),
+        "inspect oversized event refusal counter");
+  need(stats.refused_http > refused_before_large_event && stats.queued_events == 0,
+       "per-event byte ceiling refuses large guest request without queueing it");
+  check(op_api->close(runtime, large_operation, NULL),
+        "close oversized guest HTTP operation");
 }
 
 typedef struct stack_probe {
@@ -2261,6 +2320,8 @@ int main(int argc, char **argv) {
   runtime_options.max_effect_events = 8;
   runtime_options.max_effect_bytes = 64 * 1024;
   runtime_options.max_effect_response_bytes = 1024 * 1024;
+  runtime_options.max_effect_event_bytes = 32 * 1024;
+  runtime_options.max_effect_single_response_bytes = 64 * 1024;
   runtime_options.max_ws_sockets = 4;
   runtime_options.max_ws_incoming_bytes = 128 * 1024;
   need(kernel_len > 1 && kernel_len <= UINT32_MAX && image_len <= UINT32_MAX,

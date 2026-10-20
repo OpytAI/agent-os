@@ -51,6 +51,9 @@ CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, reserved_resource_optio
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_operation_result_bytes, MAX_OPERATION_RESULT_BYTES);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, reserved_result_options, RESERVED_RESULT_OPTIONS);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_message_bytes, MAX_MESSAGE_BYTES);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, reserved_message_options, RESERVED_MESSAGE_OPTIONS);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_effect_event_bytes, MAX_EFFECT_EVENT_BYTES);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_effect_single_response_bytes, MAX_EFFECT_SINGLE_RESPONSE_BYTES);
 
 CHECK_LAYOUT(mc_host_library_info_v1, LIBRARY_INFO);
 CHECK_FIELD(mc_host_library_info_v1, LIBRARY_INFO, header, HEADER);

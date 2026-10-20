@@ -179,6 +179,26 @@ int main(int argc, char **argv) {
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
            runtime == 0, "reject message quota below envelope floor");
   options.known.max_message_bytes = 0;
+  options.known.max_effect_event_bytes = MC_HOST_HARD_MAX_EFFECT_EVENT_BYTES + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject per-event limit above hard cap");
+  options.known.max_effect_event_bytes = 0;
+  options.known.max_effect_single_response_bytes =
+      MC_HOST_HARD_MAX_EFFECT_SINGLE_RESPONSE_BYTES + 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
+           runtime == 0, "reject per-response limit above hard cap");
+  options.known.max_effect_single_response_bytes = 0;
+  options.known.reserved_message_options = 1;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
+           runtime == 0, "reject nonzero reserved message option");
+  options.known.reserved_message_options = 0;
+  options.known.header.size = 112;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK && runtime != 0,
+       "pre-event-quota runtime options remain accepted");
+  need(api.runtime_close(runtime, NULL) == MC_HOST_OK,
+       "close pre-event-quota-options runtime");
+  runtime = 0;
+  options.known.header.size = sizeof(mc_host_runtime_options_v1);
   options.known.reserved_result_options = 1;
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
            runtime == 0, "reject nonzero reserved result option");

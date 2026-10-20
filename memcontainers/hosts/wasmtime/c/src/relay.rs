@@ -17,14 +17,15 @@ use host::{
     ToolApprover,
 };
 
-const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const WS_WINDOW_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy)]
 pub struct RelayLimits {
     pub max_events: usize,
     pub max_event_bytes: usize,
+    pub max_single_event_bytes: usize,
     pub max_total_response_bytes: usize,
+    pub max_single_response_bytes: usize,
     pub max_ws_sockets: usize,
     pub max_ws_incoming_bytes: usize,
 }
@@ -153,6 +154,7 @@ impl Inner {
             return None;
         }
         if self.slots.len() >= self.limits.max_events
+            || payload.len() > self.limits.max_single_event_bytes
             || self
                 .queued_bytes
                 .checked_add(payload.len())
@@ -627,10 +629,10 @@ impl Relay {
             .len()
             .checked_add(response.body.len())
             .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
-        if response_len > MAX_RESPONSE_BYTES {
+        let mut inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if response_len > inner.limits.max_single_response_bytes {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
-        let mut inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
         let event = inner
             .events
             .get(&id)
@@ -750,10 +752,10 @@ impl Relay {
             .len()
             .checked_add(declared_body_len)
             .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
-        if reserved_bytes > MAX_RESPONSE_BYTES {
+        let mut inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if reserved_bytes > inner.limits.max_single_response_bytes {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
-        let mut inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
         let event = inner
             .events
             .get(&id)

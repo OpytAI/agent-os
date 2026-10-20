@@ -80,6 +80,8 @@ impl RuntimeLimits {
         max_snapshot_handles: u32,
         max_operation_result_bytes: u32,
         max_message_bytes: u32,
+        max_effect_event_bytes: u32,
+        max_effect_single_response_bytes: u32,
     ) -> Result<Self, u32> {
         if max_vms > MAX_VMS as u32
             || max_drive_ticks > MAX_DRIVE_TICKS
@@ -100,6 +102,9 @@ impl RuntimeLimits {
             || max_snapshot_handles > contract::MC_HOST_HARD_MAX_SNAPSHOT_HANDLES
             || max_operation_result_bytes > contract::MC_HOST_HARD_MAX_OPERATION_RESULT_BYTES
             || max_message_bytes > contract::MC_HOST_HARD_MAX_MESSAGE_BYTES
+            || max_effect_event_bytes > contract::MC_HOST_HARD_MAX_EFFECT_EVENT_BYTES
+            || max_effect_single_response_bytes
+                > contract::MC_HOST_HARD_MAX_EFFECT_SINGLE_RESPONSE_BYTES
         {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
@@ -108,6 +113,7 @@ impl RuntimeLimits {
             || (max_effect_bytes != 0 && max_effect_bytes < 4)
             || (max_operation_result_bytes != 0 && max_operation_result_bytes < 64)
             || (max_message_bytes != 0 && max_message_bytes < 128)
+            || (max_effect_event_bytes != 0 && max_effect_event_bytes < 4)
         {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
@@ -164,10 +170,21 @@ impl RuntimeLimits {
                     max_effect_bytes
                 } as usize)
                     .min(max_message_bytes.saturating_sub(64)),
+                max_single_event_bytes: (if max_effect_event_bytes == 0 {
+                    contract::MC_HOST_DEFAULT_MAX_EFFECT_EVENT_BYTES
+                } else {
+                    max_effect_event_bytes
+                } as usize)
+                    .min(max_message_bytes.saturating_sub(64)),
                 max_total_response_bytes: if max_effect_response_bytes == 0 {
                     contract::MC_HOST_DEFAULT_MAX_EFFECT_RESPONSE_BYTES
                 } else {
                     max_effect_response_bytes
+                } as usize,
+                max_single_response_bytes: if max_effect_single_response_bytes == 0 {
+                    contract::MC_HOST_DEFAULT_MAX_EFFECT_SINGLE_RESPONSE_BYTES
+                } else {
+                    max_effect_single_response_bytes
                 } as usize,
                 max_ws_sockets: if max_ws_sockets == 0 {
                     contract::MC_HOST_DEFAULT_MAX_WS_SOCKETS
