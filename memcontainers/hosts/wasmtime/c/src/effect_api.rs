@@ -20,7 +20,7 @@ unsafe extern "C" fn next(
     out_info: *mut EffectInfo,
     error: *mut Error,
 ) -> ResultCode {
-    guard(error, || {
+    guard_vm(error, runtime, vm, || {
         if out_event.is_null() || (out_event as usize) % align_of::<u64>() != 0 {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
@@ -302,7 +302,7 @@ unsafe extern "C" fn stats(
     out_stats: *mut EffectStats,
     error: *mut Error,
 ) -> ResultCode {
-    guard(error, || {
+    guard_vm(error, runtime, vm, || {
         let size = unsafe { output_size(out_stats)? };
         let state = ActiveRuntime::acquire(runtime)?.state.effect_stats(vm)?;
         let value = EffectStats {

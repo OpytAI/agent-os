@@ -638,6 +638,23 @@ impl VmRecord {
     }
 
     pub fn status(&self) -> Result<VmReport, u32> {
+        let observed = *self
+            .observed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if observed.poisoned {
+            return Ok(VmReport {
+                observed,
+                output: self.output.stats(),
+                inflight_egress: 0,
+                pending_commits: 0,
+                workers: 0,
+                at_prompt: false,
+                operation_ready: false,
+                operation_pending: false,
+                effect_ready: self.relay.as_ref().is_some_and(|relay| relay.ready()),
+            });
+        }
         let mut host = self.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
         match host.as_mut() {
             Some(host) => self.report(host),
@@ -662,16 +679,22 @@ impl VmRecord {
     }
 
     pub fn input(&self, bytes: &[u8]) -> Result<(), u32> {
-        let mut host = self.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
+        let mut host = self.host.try_lock().map_err(|error| match error {
+            std::sync::TryLockError::Poisoned(_) => contract::MC_HOST_POISONED,
+            std::sync::TryLockError::WouldBlock => contract::MC_HOST_BUSY,
+        })?;
         let host = host.as_mut().ok_or(contract::MC_HOST_INVALID_STATE)?;
-        if self
+        let observed = self
             .observed
             .lock()
-            .map_err(|_| contract::MC_HOST_INTERNAL)?
-            .closing
-        {
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if observed.closing {
             return Err(contract::MC_HOST_INVALID_STATE);
         }
+        if observed.poisoned {
+            return Err(contract::MC_HOST_POISONED);
+        }
+        drop(observed);
         if host.exit_code().is_some() {
             return Err(contract::MC_HOST_INVALID_STATE);
         }
@@ -680,16 +703,22 @@ impl VmRecord {
     }
 
     pub fn resize(&self, cols: i32, rows: i32) -> Result<(), u32> {
-        let mut host = self.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
+        let mut host = self.host.try_lock().map_err(|error| match error {
+            std::sync::TryLockError::Poisoned(_) => contract::MC_HOST_POISONED,
+            std::sync::TryLockError::WouldBlock => contract::MC_HOST_BUSY,
+        })?;
         let host = host.as_mut().ok_or(contract::MC_HOST_INVALID_STATE)?;
-        if self
+        let observed = self
             .observed
             .lock()
-            .map_err(|_| contract::MC_HOST_INTERNAL)?
-            .closing
-        {
+            .map_err(|_| contract::MC_HOST_INTERNAL)?;
+        if observed.closing {
             return Err(contract::MC_HOST_INVALID_STATE);
         }
+        if observed.poisoned {
+            return Err(contract::MC_HOST_POISONED);
+        }
+        drop(observed);
         if host.exit_code().is_some() {
             return Err(contract::MC_HOST_INVALID_STATE);
         }
@@ -971,6 +1000,18 @@ impl RuntimeState {
 
     pub fn max_message_bytes(&self) -> usize {
         self.limits.max_message_bytes
+    }
+
+    pub fn poison_vm(&self, handle: u64) {
+        if let Ok(vm) = self.vm(handle) {
+            let mut observed = vm
+                .observed
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            observed.poisoned = true;
+            drop(observed);
+            vm.observed.clear_poison();
+        }
     }
 
     pub fn create_plan(&self) -> Result<u64, u32> {
@@ -2838,7 +2879,8 @@ impl RuntimeState {
         };
         let host_guard = match vm.host.try_lock() {
             Ok(guard) => guard,
-            Err(_) => {
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
                 if !was_closing {
                     vm.observed
                         .lock()
@@ -2929,7 +2971,11 @@ impl RuntimeState {
 
     pub fn cancel_and_close_vm(&self, handle: u64) -> Result<(), u32> {
         let vm = self.vm(handle)?;
-        let mut host = vm.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
+        let mut host = match vm.host.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return Err(contract::MC_HOST_BUSY),
+        };
         {
             let mut observed = vm.observed.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
             observed.closing = true;

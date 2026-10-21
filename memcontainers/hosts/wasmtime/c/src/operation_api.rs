@@ -96,7 +96,7 @@ pub unsafe extern "C" fn start(
     out_operation: *mut u64,
     error: *mut Error,
 ) -> ResultCode {
-    guard(error, || {
+    guard_vm(error, runtime, vm, || {
         if out_operation.is_null() || (out_operation as usize) % align_of::<u64>() != 0 {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
@@ -230,7 +230,7 @@ pub unsafe extern "C" fn poll(
     out: *mut OperationStatus,
     error: *mut Error,
 ) -> ResultCode {
-    guard(error, || {
+    guard_operation(error, runtime, operation, || {
         let size = unsafe { output_size(out)? };
         let record = ActiveRuntime::acquire(runtime)?
             .state
@@ -259,7 +259,7 @@ pub unsafe extern "C" fn result(
     buffer: *mut Buffer,
     error: *mut Error,
 ) -> ResultCode {
-    guard(error, || {
+    guard_operation(error, runtime, operation, || {
         if buffer.is_null() || (buffer as usize) % align_of::<Buffer>() != 0 {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
@@ -301,7 +301,7 @@ pub unsafe extern "C" fn peek(
     out_copied: *mut u64,
     error: *mut Error,
 ) -> ResultCode {
-    guard(error, || {
+    guard_operation(error, runtime, operation, || {
         if channel != host::output_queue::STDOUT {
             return Err(contract::MC_HOST_UNSUPPORTED);
         }
@@ -357,7 +357,7 @@ pub unsafe extern "C" fn peek(
 }
 
 pub unsafe extern "C" fn cancel(runtime: u64, operation: u64, error: *mut Error) -> ResultCode {
-    guard(error, || {
+    guard_operation(error, runtime, operation, || {
         ActiveRuntime::acquire(runtime)?
             .state
             .operation_cancel(operation)
@@ -365,7 +365,7 @@ pub unsafe extern "C" fn cancel(runtime: u64, operation: u64, error: *mut Error)
 }
 
 pub unsafe extern "C" fn close(runtime: u64, operation: u64, error: *mut Error) -> ResultCode {
-    guard(error, || {
+    guard_operation(error, runtime, operation, || {
         ActiveRuntime::acquire(runtime)?
             .state
             .operation_close(operation)

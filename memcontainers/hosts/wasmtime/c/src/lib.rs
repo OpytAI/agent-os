@@ -1505,18 +1505,76 @@ unsafe fn write_error(error: *mut Error, code: ResultCode, message: &str) {
     };
 }
 
-fn guard(error: *mut Error, action: impl FnOnce() -> Result<(), ResultCode>) -> ResultCode {
+#[derive(Clone, Copy)]
+enum PanicOwner {
+    Vm(u64, u64),
+    Operation(u64, u64),
+}
+
+fn guard_context(
+    error: *mut Error,
+    owner: Option<PanicOwner>,
+    action: impl FnOnce() -> Result<(), ResultCode>,
+) -> ResultCode {
     let outcome = catch_unwind(AssertUnwindSafe(action));
     let (code, message) = match outcome {
         Ok(Ok(())) => (contract::MC_HOST_OK, ""),
         Ok(Err(code)) => (code, "native host call rejected"),
-        Err(_) => (
-            contract::MC_HOST_INTERNAL,
-            "panic contained at native host boundary",
-        ),
+        Err(_) => {
+            if let Some(owner) = owner {
+                let _ = catch_unwind(AssertUnwindSafe(|| {
+                    let runtime = match owner {
+                        PanicOwner::Vm(runtime, _) | PanicOwner::Operation(runtime, _) => runtime,
+                    };
+                    if let Ok(active) = ActiveRuntime::acquire(runtime) {
+                        let vm = match owner {
+                            PanicOwner::Vm(_, vm) => Some(vm),
+                            PanicOwner::Operation(_, operation) => active
+                                .state
+                                .operation(operation)
+                                .ok()
+                                .map(|record| record.vm),
+                        };
+                        if let Some(vm) = vm {
+                            active.state.poison_vm(vm);
+                        }
+                    }
+                }));
+            }
+            (
+                contract::MC_HOST_INTERNAL,
+                "panic contained at native host boundary",
+            )
+        }
     };
     unsafe { write_error(error, code, message) };
     code
+}
+
+fn guard(error: *mut Error, action: impl FnOnce() -> Result<(), ResultCode>) -> ResultCode {
+    guard_context(error, None, action)
+}
+
+fn guard_vm(
+    error: *mut Error,
+    runtime: u64,
+    vm: u64,
+    action: impl FnOnce() -> Result<(), ResultCode>,
+) -> ResultCode {
+    guard_context(error, Some(PanicOwner::Vm(runtime, vm)), action)
+}
+
+fn guard_operation(
+    error: *mut Error,
+    runtime: u64,
+    operation: u64,
+    action: impl FnOnce() -> Result<(), ResultCode>,
+) -> ResultCode {
+    guard_context(
+        error,
+        Some(PanicOwner::Operation(runtime, operation)),
+        action,
+    )
 }
 
 unsafe extern "C" fn runtime_create(

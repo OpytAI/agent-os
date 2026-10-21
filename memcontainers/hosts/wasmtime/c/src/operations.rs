@@ -397,8 +397,13 @@ impl OperationRecord {
     }
 
     pub fn cancel_after_store_drop(&self) -> Result<(), u32> {
-        let mut state = self.state.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *state = OperationState::Cancelled;
+        drop(state);
+        self.state.clear_poison();
         Ok(())
     }
 }

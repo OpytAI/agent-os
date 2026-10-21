@@ -333,7 +333,7 @@ pub unsafe extern "C" fn vm_fork(
     out_vm: *mut u64,
     error: *mut Error,
 ) -> ResultCode {
-    guard(error, || {
+    guard_vm(error, runtime, source, || {
         if out_vm.is_null() || (out_vm as usize) % align_of::<u64>() != 0 {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
@@ -389,7 +389,7 @@ pub unsafe extern "C" fn vm_status(
     out: *mut VmStatus,
     error: *mut Error,
 ) -> ResultCode {
-    guard(error, || {
+    guard_vm(error, runtime, vm, || {
         let size = unsafe { output_size(out)? };
         let active = ActiveRuntime::acquire(runtime)?;
         let report = active.state.vm(vm)?.status()?;
@@ -406,7 +406,7 @@ pub unsafe extern "C" fn vm_drive(
     out: *mut DriveResult,
     error: *mut Error,
 ) -> ResultCode {
-    guard(error, || {
+    guard_vm(error, runtime, vm, || {
         let options = unsafe { input(options)? };
         let size = unsafe { output_size(out)? };
         if options.reserved != 0 {
@@ -433,7 +433,7 @@ pub unsafe extern "C" fn vm_drive(
 }
 
 pub unsafe extern "C" fn vm_close(runtime: u64, vm: u64, error: *mut Error) -> ResultCode {
-    guard(error, || {
+    guard_vm(error, runtime, vm, || {
         ActiveRuntime::acquire(runtime)?.state.close_vm(vm)
     })
 }
@@ -443,7 +443,7 @@ pub unsafe extern "C" fn vm_cancel_and_close(
     vm: u64,
     error: *mut Error,
 ) -> ResultCode {
-    guard(error, || {
+    guard_vm(error, runtime, vm, || {
         ActiveRuntime::acquire(runtime)?
             .state
             .cancel_and_close_vm(vm)
@@ -456,7 +456,7 @@ pub unsafe extern "C" fn terminal_input(
     input: Bytes,
     error: *mut Error,
 ) -> ResultCode {
-    guard(error, || {
+    guard_vm(error, runtime, vm, || {
         let input = unsafe { bytes(input, MAX_INPUT_BYTES)? };
         ActiveRuntime::acquire(runtime)?.state.vm(vm)?.input(input)
     })
@@ -469,7 +469,7 @@ pub unsafe extern "C" fn terminal_resize(
     rows: u32,
     error: *mut Error,
 ) -> ResultCode {
-    guard(error, || {
+    guard_vm(error, runtime, vm, || {
         let cols = i32::try_from(cols).map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
         let rows = i32::try_from(rows).map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
         if cols == 0 || rows == 0 {

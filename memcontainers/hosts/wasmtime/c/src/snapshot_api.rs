@@ -106,7 +106,7 @@ pub unsafe extern "C" fn begin(
     out_info: *mut SnapshotInfo,
     error: *mut Error,
 ) -> ResultCode {
-    guard(error, || {
+    guard_vm(error, runtime, vm, || {
         if out_snapshot.is_null() || (out_snapshot as usize) % align_of::<u64>() != 0 {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
@@ -263,7 +263,7 @@ pub unsafe extern "C" fn readiness(
     out: *mut SnapshotReadiness,
     error: *mut Error,
 ) -> ResultCode {
-    guard(error, || {
+    guard_vm(error, runtime, vm, || {
         let size = unsafe { output_size(out)? };
         let observed = ActiveRuntime::acquire(runtime)?
             .state

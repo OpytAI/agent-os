@@ -113,7 +113,7 @@ unsafe extern "C" fn vm_attach_update(
     plan: u64,
     error: *mut Error,
 ) -> ResultCode {
-    guard(error, || {
+    guard_vm(error, runtime, vm, || {
         ActiveRuntime::acquire(runtime)?
             .state
             .vm_attach_update(vm, plan)
@@ -126,7 +126,7 @@ unsafe extern "C" fn vm_attachment_manifest(
     buffer: *mut Buffer,
     error: *mut Error,
 ) -> ResultCode {
-    guard(error, || {
+    guard_vm(error, runtime, vm, || {
         if buffer.is_null() || (buffer as usize) % align_of::<Buffer>() != 0 {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
