@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #define MC_HOST_ABI_MAJOR UINT16_C(1)
-#define MC_HOST_ABI_MINOR UINT16_C(0)
+#define MC_HOST_ABI_MINOR UINT16_C(1)
 #define MC_HOST_LAYOUT_HEADER_SIZE 8
 #define MC_HOST_LAYOUT_HEADER_ALIGN 4
 #define MC_HOST_LAYOUT_HEADER_SIZE_OFFSET 0
@@ -16,7 +16,7 @@
 #define MC_HOST_LAYOUT_BUFFER_DATA_OFFSET 0
 #define MC_HOST_LAYOUT_BUFFER_CAPACITY_OFFSET 8
 #define MC_HOST_LAYOUT_BUFFER_REQUIRED_OFFSET 16
-#define MC_HOST_LAYOUT_ERROR_SIZE 48
+#define MC_HOST_LAYOUT_ERROR_SIZE 56
 #define MC_HOST_LAYOUT_ERROR_ALIGN 8
 #define MC_HOST_LAYOUT_ERROR_HEADER_OFFSET 0
 #define MC_HOST_LAYOUT_ERROR_DOMAIN_OFFSET 8
@@ -24,6 +24,7 @@
 #define MC_HOST_LAYOUT_ERROR_RETRYABLE_OFFSET 16
 #define MC_HOST_LAYOUT_ERROR_RESERVED_OFFSET 17
 #define MC_HOST_LAYOUT_ERROR_MESSAGE_OFFSET 24
+#define MC_HOST_LAYOUT_ERROR_OPERATION_ID_OFFSET 48
 #define MC_HOST_LAYOUT_RUNTIME_OPTIONS_SIZE 120
 #define MC_HOST_LAYOUT_RUNTIME_OPTIONS_ALIGN 8
 #define MC_HOST_LAYOUT_RUNTIME_OPTIONS_HEADER_OFFSET 0
@@ -97,7 +98,7 @@
 #define MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_SNAPSHOT_OFFSET 8
 #define MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_BASELINE_OFFSET 24
 #define MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_MODE_OFFSET 40
-#define MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_RESERVED_OFFSET 44
+#define MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_FLAGS_OFFSET 44
 #define MC_HOST_LAYOUT_DRIVE_OPTIONS_SIZE 24
 #define MC_HOST_LAYOUT_DRIVE_OPTIONS_ALIGN 8
 #define MC_HOST_LAYOUT_DRIVE_OPTIONS_HEADER_OFFSET 0
@@ -248,7 +249,7 @@
 #define MC_HOST_LAYOUT_EFFECT_STATS_REFUSED_HTTP_OFFSET 56
 #define MC_HOST_LAYOUT_EFFECT_STATS_REFUSED_WS_OFFSET 64
 #define MC_HOST_LAYOUT_EFFECT_STATS_REFUSED_APPROVAL_OFFSET 72
-#define MC_HOST_LAYOUT_EFFECT_API_SIZE 120
+#define MC_HOST_LAYOUT_EFFECT_API_SIZE 136
 #define MC_HOST_LAYOUT_EFFECT_API_ALIGN 8
 #define MC_HOST_LAYOUT_EFFECT_API_HEADER_OFFSET 0
 #define MC_HOST_LAYOUT_EFFECT_API_NEXT_OFFSET 8
@@ -265,6 +266,8 @@
 #define MC_HOST_LAYOUT_EFFECT_API_INFO_OFFSET 96
 #define MC_HOST_LAYOUT_EFFECT_API_CANCEL_OFFSET 104
 #define MC_HOST_LAYOUT_EFFECT_API_STATS_OFFSET 112
+#define MC_HOST_LAYOUT_EFFECT_API_TRANSCRIPT_NEXT_OFFSET 120
+#define MC_HOST_LAYOUT_EFFECT_API_TRANSCRIPT_ACK_OFFSET 128
 #define MC_HOST_OK UINT32_C(0)
 #define MC_HOST_BUFFER_TOO_SMALL UINT32_C(1)
 #define MC_HOST_WOULD_BLOCK UINT32_C(2)
@@ -365,6 +368,7 @@
 #define MC_HOST_VM_FLAG_HAS_EXIT_CODE UINT32_C(1)
 #define MC_HOST_VM_FLAG_AT_PROMPT UINT32_C(2)
 #define MC_HOST_VM_CREATE_DETERMINISTIC UINT32_C(1)
+#define MC_HOST_VM_RESTORE_DETERMINISTIC UINT32_C(1)
 #define MC_HOST_RESTORE_STRICT UINT32_C(1)
 #define MC_HOST_RESTORE_DETACHED UINT32_C(2)
 #define MC_HOST_DRIVE_STOP_BUDGET UINT32_C(1)
@@ -430,6 +434,10 @@
 #define MC_HOST_EVENT_OPERATION_CANCEL UINT32_C(13)
 #define MC_HOST_WS_CLOSE_GUEST UINT32_C(1)
 #define MC_HOST_WS_CLOSE_VM UINT32_C(2)
+#define MC_HOST_TRANSCRIPT_REQUEST UINT32_C(1)
+#define MC_HOST_TRANSCRIPT_RESPONSE UINT32_C(2)
+#define MC_HOST_TRANSCRIPT_WS_INBOUND UINT32_C(3)
+#define MC_HOST_TRANSCRIPT_WS_CLOSE UINT32_C(4)
 
 
 /* Portable message codec. Decoded byte views borrow the input frame. */
@@ -2179,6 +2187,54 @@ static inline mc_host_wire_result mc_host_wire_encode_live_attachment_manifest(c
             mc_host_wire_put_u8(&w, value->native_net);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
         if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
+        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
+    }
+    return MC_HOST_WIRE_OK;
+}
+#define MC_HOST_WIRE_EFFECT_TRANSCRIPT_ENTRY_MAX_FRAME_BYTES ((size_t)UINT32_C(16777472))
+
+typedef struct mc_host_wire_effect_transcript_entry {
+    int64_t sequence;
+    uint32_t direction;
+    uint32_t kind;
+    int64_t event_id;
+    uint8_t failed;
+    mc_host_wire_bytes head;
+    mc_host_wire_bytes body;
+} mc_host_wire_effect_transcript_entry;
+static inline mc_host_wire_result mc_host_wire_decode_effect_transcript_entry(const uint8_t *data, size_t len, mc_host_wire_effect_transcript_entry *out) {
+    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 16777472) return MC_HOST_WIRE_TOO_LARGE;
+    memset(out, 0, sizeof(*out));
+    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
+    if (mc_host_wire_get_u16(&r) != 56 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
+    if (mc_host_wire_get_u8(&r) != 1 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_UNSUPPORTED_VERSION;
+        out->sequence = mc_host_wire_get_u64(&r);
+        out->direction = mc_host_wire_get_u32(&r);
+        out->kind = mc_host_wire_get_u32(&r);
+        out->event_id = mc_host_wire_get_u64(&r);
+        out->failed = mc_host_wire_get_flag(&r);
+        out->head = mc_host_wire_get_bytes(&r, 0);
+        out->body = mc_host_wire_get_bytes(&r, 0);
+    if (r.error != MC_HOST_WIRE_OK) return r.error;
+    return r.off == r.len ? MC_HOST_WIRE_OK : MC_HOST_WIRE_TRAILING_BYTES;
+}
+static inline mc_host_wire_result mc_host_wire_encode_effect_transcript_entry(const mc_host_wire_effect_transcript_entry *value, uint8_t *data, size_t capacity, size_t *required) {
+    if (!value || !required || (capacity && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    for (int pass = 0; pass < 2; ++pass) {
+        mc_host_wire_writer w = {pass ? data : NULL, capacity, 0, MC_HOST_WIRE_OK};
+        mc_host_wire_put_u16(&w, 56);
+        mc_host_wire_put_u8(&w, 1);
+            mc_host_wire_put_u64(&w, (uint64_t)value->sequence);
+            mc_host_wire_put_u32(&w, (uint32_t)value->direction);
+            mc_host_wire_put_u32(&w, (uint32_t)value->kind);
+            mc_host_wire_put_u64(&w, (uint64_t)value->event_id);
+            if (value->failed > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
+            mc_host_wire_put_u8(&w, value->failed);
+            mc_host_wire_put_bytes(&w, value->head, 0);
+            mc_host_wire_put_bytes(&w, value->body, 0);
+        if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 16777472) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;

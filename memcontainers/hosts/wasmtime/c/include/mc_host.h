@@ -59,6 +59,8 @@ typedef struct mc_host_error_v1 {
   uint8_t retryable;
   uint8_t reserved[7];
   mc_host_buffer_v1 message;
+  /* Zero when no operation is associated with the error. */
+  uint64_t operation_id;
 } mc_host_error_v1;
 
 typedef struct mc_host_runtime_options_v1 {
@@ -136,6 +138,7 @@ typedef struct mc_host_vm_create_options_v1 {
   int32_t contract_budget_mib;
   int64_t contract_fuel;
   int32_t requested_workers; /* -1 uses the host default. */
+  /* DETERMINISTIC records application effects; native network is unsupported. */
   uint32_t flags;
   uint32_t terminal_cols;
   uint32_t terminal_rows;
@@ -146,7 +149,7 @@ typedef struct mc_host_vm_restore_options_v1 {
   mc_host_bytes_v1 snapshot;
   mc_host_bytes_v1 baseline;
   uint32_t mode;
-  uint32_t reserved;
+  uint32_t flags; /* DETERMINISTIC requires application-managed effects. */
 } mc_host_vm_restore_options_v1;
 
 typedef struct mc_host_drive_options_v1 {
@@ -406,6 +409,14 @@ typedef struct mc_host_effect_api_v1 {
       mc_host_runtime_t, mc_host_handle_t, mc_host_error_v1 *);
   mc_host_result_t (MC_HOST_CALL *stats)(
       mc_host_runtime_t, mc_host_handle_t, mc_host_effect_stats_v1 *, mc_host_error_v1 *);
+  /* Deterministic VMs retain ordered external inputs until acknowledged.
+   * The byte limit is max_effect_bytes + max_effect_response_bytes. A full
+   * transcript refuses further effects until the caller drains it. Records
+   * can contain application data. BUFFER_TOO_SMALL does not consume a record. */
+  mc_host_result_t (MC_HOST_CALL *transcript_next)(
+      mc_host_runtime_t, mc_host_handle_t, mc_host_buffer_v1 *, mc_host_error_v1 *);
+  mc_host_result_t (MC_HOST_CALL *transcript_ack)(
+      mc_host_runtime_t, mc_host_handle_t, uint64_t, mc_host_error_v1 *);
 } mc_host_effect_api_v1;
 
 #define MC_HOST_INIT(type_) { { (uint32_t)sizeof(type_), 1u, 0u } }

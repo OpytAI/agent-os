@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::io::{Seek, SeekFrom, Write};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Result};
@@ -481,8 +481,34 @@ pub struct KernelModuleCache {
 }
 
 struct CompiledModules {
-    entries: HashMap<SnapshotDigest, (Arc<[u8]>, Engine, Module)>,
+    entries: HashMap<SnapshotDigest, (Arc<[u8]>, Arc<CompileSlot>)>,
     retained_bytes: usize,
+}
+
+struct CompileSlot {
+    result: Mutex<Option<Result<(Engine, Module), String>>>,
+    ready: Condvar,
+}
+
+impl CompileSlot {
+    fn wait(&self) -> Result<(Engine, Module)> {
+        let mut result = self
+            .result
+            .lock()
+            .map_err(|_| anyhow!("compiled-kernel slot poisoned"))?;
+        while result.is_none() {
+            result = self
+                .ready
+                .wait(result)
+                .map_err(|_| anyhow!("compiled-kernel slot poisoned"))?;
+        }
+        result
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .map(Clone::clone)
+            .map_err(|e| anyhow!("{e}"))
+    }
 }
 
 #[derive(Debug)]
@@ -523,17 +549,17 @@ impl KernelModuleCache {
 
     fn get_or_compile(&self, wasm: &[u8]) -> Result<(Engine, Module)> {
         let key = sha256_digest(wasm);
-        // Hold this lock across compilation. Two simultaneous loads of one
-        // kernel then share the exact same compiled module.
         let mut entries = self
             .entries
             .lock()
             .map_err(|_| anyhow!("compiled-kernel cache lock poisoned"))?;
-        if let Some((cached_bytes, engine, module)) = entries.entries.get(&key) {
+        if let Some((cached_bytes, slot)) = entries.entries.get(&key) {
             if cached_bytes.as_ref() != wasm {
                 return Err(anyhow!("compiled-kernel digest collision"));
             }
-            return Ok((engine.clone(), module.clone()));
+            let slot = Arc::clone(slot);
+            drop(entries);
+            return slot.wait();
         }
         if entries.entries.len() >= self.max_modules
             || entries
@@ -543,20 +569,49 @@ impl KernelModuleCache {
         {
             return Err(KernelCacheLimit.into());
         }
-        let mut config = Config::new();
-        // Keep the established stack cap. A deeper guest should trap inside
-        // Wasmtime rather than exhaust a suitably sized native test thread.
-        config
-            .wasm_tail_call(true)
-            .max_wasm_stack(KERNEL_WASM_STACK_BYTES)
-            .async_stack_size(KERNEL_WASM_STACK_BYTES);
-        let engine = Engine::new(&config).map_err(|e| anyhow!("creating wasmtime engine: {e}"))?;
-        let module = wt(Module::new(&engine, wasm), "compiling kernel.wasm")?;
         entries.retained_bytes += wasm.len();
+        let slot = Arc::new(CompileSlot {
+            result: Mutex::new(None),
+            ready: Condvar::new(),
+        });
         entries
             .entries
-            .insert(key, (Arc::from(wasm), engine.clone(), module.clone()));
-        Ok((engine, module))
+            .insert(key, (Arc::from(wasm), Arc::clone(&slot)));
+        drop(entries);
+
+        // The reservation is per digest. Other digests can compile concurrently.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut config = Config::new();
+            config
+                .wasm_tail_call(true)
+                .max_wasm_stack(KERNEL_WASM_STACK_BYTES)
+                .async_stack_size(KERNEL_WASM_STACK_BYTES);
+            let engine =
+                Engine::new(&config).map_err(|e| anyhow!("creating wasmtime engine: {e}"))?;
+            let module = wt(Module::new(&engine, wasm), "compiling kernel.wasm")?;
+            Ok::<_, anyhow::Error>((engine, module))
+        }))
+        .unwrap_or_else(|_| Err(anyhow!("compiled-kernel creation panicked")))
+        .map_err(|e| e.to_string());
+        let failed = result.is_err();
+        {
+            let mut state = slot
+                .result
+                .lock()
+                .map_err(|_| anyhow!("compiled-kernel slot poisoned"))?;
+            *state = Some(result);
+        }
+        slot.ready.notify_all();
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| anyhow!("compiled-kernel cache lock poisoned"))?;
+        if failed {
+            entries.entries.remove(&key);
+            entries.retained_bytes -= wasm.len();
+        }
+        drop(entries);
+        slot.wait()
     }
 }
 

@@ -269,7 +269,7 @@ fn vm_restore_common(
         ) {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
-        if options.reserved != 0
+        if options.flags & !contract::MC_HOST_VM_RESTORE_DETERMINISTIC != 0
             || (options.mode != contract::MC_HOST_RESTORE_DETACHED
                 && options.mode != contract::MC_HOST_RESTORE_STRICT)
             || (options.mode == contract::MC_HOST_RESTORE_DETACHED && plan != 0)
@@ -318,10 +318,15 @@ fn vm_restore_common(
         }
         unsafe { *out_vm = 0 };
         let active = ActiveRuntime::acquire(runtime)?;
-        let vm =
-            active
-                .state
-                .restore_vm(kernel, plan, options.mode, snapshot, baseline, manifest)?;
+        let vm = active.state.restore_vm(
+            kernel,
+            plan,
+            options.mode,
+            snapshot,
+            baseline,
+            manifest,
+            options.flags & contract::MC_HOST_VM_RESTORE_DETERMINISTIC != 0,
+        )?;
         unsafe { *out_vm = vm };
         Ok(())
     })

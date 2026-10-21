@@ -436,6 +436,7 @@ struct KernelRecord {
 
 pub struct VmRecord {
     kernel_handle: u64,
+    deterministic: bool,
     host: Mutex<Option<KernelHost>>,
     pub output: Arc<OutputQueue>,
     observed: Mutex<VmObserved>,
@@ -1534,6 +1535,22 @@ impl RuntimeState {
             .stats()
     }
 
+    pub fn effect_transcript_next(&self, vm_handle: u64) -> Result<Option<Vec<u8>>, u32> {
+        let vm = self.vm(vm_handle)?;
+        vm.relay
+            .as_ref()
+            .ok_or(contract::MC_HOST_UNSUPPORTED)?
+            .transcript_next()
+    }
+
+    pub fn effect_transcript_ack(&self, vm_handle: u64, sequence: u64) -> Result<(), u32> {
+        let vm = self.vm(vm_handle)?;
+        vm.relay
+            .as_ref()
+            .ok_or(contract::MC_HOST_UNSUPPORTED)?
+            .transcript_ack(sequence)
+    }
+
     pub fn effect_release(&self, handle: u64) -> Result<(), u32> {
         let (_, event_id, relay) = self.effect_record(handle)?;
         relay.release(event_id, handle)?;
@@ -1779,6 +1796,9 @@ impl RuntimeState {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
         let capabilities = self.plan_capabilities(plan_handle)?;
+        if config.deterministic && capabilities.as_ref().is_some_and(|plan| plan.native_net) {
+            return Err(contract::MC_HOST_UNSUPPORTED);
+        }
         let native_net = capabilities
             .as_ref()
             .filter(|plan| plan.native_net)
@@ -1834,6 +1854,7 @@ impl RuntimeState {
                     .is_some_and(|plan| plan.http_identity.is_some()),
                 self.limits.relay,
                 self.notifier.clone(),
+                config.deterministic,
             )
         });
         if let Some(relay) = &relay {
@@ -1870,6 +1891,7 @@ impl RuntimeState {
         let exit_code = host.exit_code();
         let vm = Arc::new(VmRecord {
             kernel_handle,
+            deterministic: config.deterministic,
             host: Mutex::new(Some(host)),
             output,
             observed: Mutex::new(VmObserved {
@@ -1913,6 +1935,7 @@ impl RuntimeState {
         snapshot: &[u8],
         baseline: Option<&[u8]>,
         manifest_bytes: Option<&[u8]>,
+        deterministic: bool,
     ) -> Result<u64, u32> {
         self.restore_vm_inner(
             kernel_handle,
@@ -1921,6 +1944,7 @@ impl RuntimeState {
             snapshot,
             baseline,
             manifest_bytes,
+            deterministic,
             false,
         )
     }
@@ -1933,6 +1957,7 @@ impl RuntimeState {
         snapshot: &[u8],
         baseline: Option<&[u8]>,
         manifest_bytes: Option<&[u8]>,
+        deterministic: bool,
         fork_catalog: bool,
     ) -> Result<u64, u32> {
         if snapshot.is_empty()
@@ -1947,6 +1972,9 @@ impl RuntimeState {
         } else {
             None
         };
+        if deterministic && capabilities.as_ref().is_some_and(|plan| plan.native_net) {
+            return Err(contract::MC_HOST_UNSUPPORTED);
+        }
         let native_net = capabilities
             .as_ref()
             .filter(|plan| plan.native_net)
@@ -2074,6 +2102,7 @@ impl RuntimeState {
                     .is_some_and(|plan| plan.http_identity.is_some()),
                 self.limits.relay,
                 self.notifier.clone(),
+                deterministic,
             )
         });
         if let Some(relay) = &relay {
@@ -2087,6 +2116,9 @@ impl RuntimeState {
                 let net = net.with_tool_approver(relay.approver());
                 builder = builder.with_net(Box::new(net));
             }
+        }
+        if deterministic {
+            builder = builder.deterministic();
         }
         let restored = match baseline.as_deref() {
             Some(base) => builder.restore_incremental(&snapshot, base),
@@ -2136,6 +2168,7 @@ impl RuntimeState {
         let exit_code = host.exit_code();
         let vm = Arc::new(VmRecord {
             kernel_handle,
+            deterministic,
             host: Mutex::new(Some(host)),
             output,
             observed: Mutex::new(VmObserved {
@@ -2203,6 +2236,7 @@ impl RuntimeState {
                 &snapshot.bytes,
                 None,
                 Some(&snapshot.attachment_manifest),
+                source.deterministic,
                 true,
             );
             let closed_plan = if plan_handle == 0 {

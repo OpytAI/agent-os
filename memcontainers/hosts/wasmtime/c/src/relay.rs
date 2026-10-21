@@ -9,8 +9,8 @@ use constants_rust::{
     EAGAIN, EMSGSIZE, PERSIST_OP_DELETE, PERSIST_OP_GET, PERSIST_OP_LIST, PERSIST_OP_PUT,
 };
 use embedder_rust::{
-    self as contract, EffectCancel, HostCallEvent, HttpEffectRequest, PersistEffectRequest,
-    ToolApprovalRequest, WsCloseEvent, WsConnectRequest, WsSendRequest,
+    self as contract, EffectCancel, EffectTranscriptEntry, HostCallEvent, HttpEffectRequest,
+    PersistEffectRequest, ToolApprovalRequest, WsCloseEvent, WsConnectRequest, WsSendRequest,
 };
 use host::{
     HostCallCapability, NetCapability, PersistCapability, ToolApprovalDecision, ToolApprovalFacts,
@@ -96,6 +96,59 @@ struct Inner {
     response_bytes: usize,
     approvals: HashMap<i32, mpsc::Sender<ToolApprovalDecision>>,
     refused: [u64; 5],
+    transcript: Option<Transcript>,
+}
+
+struct Transcript {
+    records: VecDeque<(u64, Vec<u8>)>,
+    retained_bytes: usize,
+    max_bytes: usize,
+    next_sequence: u64,
+}
+
+impl Inner {
+    fn record_transcript(
+        &mut self,
+        direction: u32,
+        kind: u32,
+        event_id: u64,
+        failed: bool,
+        head: &[u8],
+        body: &[u8],
+    ) -> Result<(), u32> {
+        let Some(transcript) = &mut self.transcript else {
+            return Ok(());
+        };
+        if transcript.next_sequence > i64::MAX as u64 {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        let frame = EffectTranscriptEntry {
+            sequence: transcript.next_sequence as i64,
+            direction,
+            kind,
+            event_id: event_id as i64,
+            failed,
+            head: head.to_vec(),
+            body: body.to_vec(),
+        }
+        .encode();
+        if frame.len() > contract::EFFECT_TRANSCRIPT_ENTRY_MAX_FRAME_BYTES {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        let total = transcript
+            .retained_bytes
+            .checked_add(frame.len())
+            .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
+        if total > transcript.max_bytes {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        transcript
+            .records
+            .push_back((transcript.next_sequence, frame));
+        transcript.retained_bytes = total;
+        transcript.next_sequence += 1;
+        Ok(())
+    }
 }
 
 pub struct RelayStats {
@@ -300,6 +353,7 @@ impl Relay {
         http_enabled: bool,
         limits: RelayLimits,
         notifier: Option<Arc<Notifier>>,
+        deterministic: bool,
     ) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(Inner {
@@ -319,12 +373,46 @@ impl Relay {
                 response_bytes: 0,
                 approvals: HashMap::new(),
                 refused: [0; 5],
+                transcript: deterministic.then(|| Transcript {
+                    records: VecDeque::new(),
+                    retained_bytes: 0,
+                    max_bytes: limits
+                        .max_event_bytes
+                        .saturating_add(limits.max_total_response_bytes),
+                    next_sequence: 1,
+                }),
             }),
         })
     }
 
     pub fn adapter(self: &Arc<Self>) -> Box<dyn HostCallCapability> {
         Box::new(RelayHostCall(Arc::clone(self)))
+    }
+
+    pub fn transcript_next(&self) -> Result<Option<Vec<u8>>, u32> {
+        let inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let transcript = inner
+            .transcript
+            .as_ref()
+            .ok_or(contract::MC_HOST_UNSUPPORTED)?;
+        Ok(transcript.records.front().map(|(_, frame)| frame.clone()))
+    }
+
+    pub fn transcript_ack(&self, sequence: u64) -> Result<(), u32> {
+        let mut inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
+        let transcript = inner
+            .transcript
+            .as_mut()
+            .ok_or(contract::MC_HOST_UNSUPPORTED)?;
+        if transcript.records.front().map(|(id, _)| *id) != Some(sequence) {
+            return Err(contract::MC_HOST_INVALID_STATE);
+        }
+        let (_, frame) = transcript
+            .records
+            .pop_front()
+            .ok_or(contract::MC_HOST_INTERNAL)?;
+        transcript.retained_bytes -= frame.len();
+        Ok(())
     }
 
     pub fn persist_enabled(&self) -> bool {
@@ -449,10 +537,20 @@ impl Relay {
         if total_incoming + data.len() > inner.limits.max_ws_incoming_bytes {
             return Err(contract::MC_HOST_WOULD_BLOCK);
         }
-        let state = inner.sockets.get_mut(&socket).expect("validated socket");
+        let state = inner.sockets.get(&socket).expect("validated socket");
         if state.incoming_bytes + data.len() > WS_WINDOW_BYTES {
             return Err(contract::MC_HOST_WOULD_BLOCK);
         }
+        let socket_id = state.native_handle.ok_or(contract::MC_HOST_INTERNAL)?;
+        inner.record_transcript(
+            contract::MC_HOST_TRANSCRIPT_WS_INBOUND,
+            contract::MC_HOST_EVENT_WS_CONNECT,
+            socket_id,
+            false,
+            &[],
+            data,
+        )?;
+        let state = inner.sockets.get_mut(&socket).expect("validated socket");
         state.incoming_bytes += data.len();
         state.incoming.push_back(data.to_vec());
         if let Some(notifier) = &inner.notifier {
@@ -465,11 +563,24 @@ impl Relay {
         let mut inner = self.inner.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
         let state = inner
             .sockets
-            .get_mut(&socket)
+            .get(&socket)
             .ok_or(contract::MC_HOST_STALE_HANDLE)?;
         if state.guest_closed {
             return Err(contract::MC_HOST_CANCELLED);
         }
+        let socket_id = state.native_handle.ok_or(contract::MC_HOST_INTERNAL)?;
+        inner.record_transcript(
+            contract::MC_HOST_TRANSCRIPT_WS_CLOSE,
+            contract::MC_HOST_EVENT_WS_CLOSE,
+            socket_id,
+            false,
+            &[],
+            &[],
+        )?;
+        let state = inner
+            .sockets
+            .get_mut(&socket)
+            .ok_or(contract::MC_HOST_INTERNAL)?;
         state.failed = true;
         if let Some(notifier) = &inner.notifier {
             notifier.notify();
@@ -522,13 +633,39 @@ impl Relay {
             {
                 return Err(contract::MC_HOST_INVALID_STATE);
             }
-            if event.kind == contract::MC_HOST_EVENT_WS_CONNECT {
-                inner
-                    .sockets
-                    .get_mut(&socket)
-                    .expect("validated socket")
-                    .native_handle = socket_handle;
-            }
+        }
+        let kind = inner
+            .events
+            .get(&id)
+            .ok_or(contract::MC_HOST_INTERNAL)?
+            .kind;
+        if inner.transcript.is_some() {
+            let payload = inner
+                .events
+                .get(&id)
+                .ok_or(contract::MC_HOST_INTERNAL)?
+                .payload
+                .clone();
+            inner.record_transcript(
+                contract::MC_HOST_TRANSCRIPT_REQUEST,
+                kind,
+                handle,
+                false,
+                &[],
+                &payload,
+            )?;
+        }
+        if kind == contract::MC_HOST_EVENT_WS_CONNECT {
+            let socket = inner
+                .events
+                .get(&id)
+                .and_then(|event| event.socket)
+                .ok_or(contract::MC_HOST_INTERNAL)?;
+            inner
+                .sockets
+                .get_mut(&socket)
+                .ok_or(contract::MC_HOST_INTERNAL)?
+                .native_handle = socket_handle;
         }
         inner
             .events
@@ -652,6 +789,17 @@ impl Relay {
                 .iter()
                 .find_map(|(slot_handle, slot)| (slot.event_id == id).then_some(*slot_handle))
                 .ok_or(contract::MC_HOST_CANCELLED)?;
+            if !inner.approvals.contains_key(&slot_handle) {
+                return Err(contract::MC_HOST_CANCELLED);
+            }
+            inner.record_transcript(
+                contract::MC_HOST_TRANSCRIPT_RESPONSE,
+                kind,
+                handle,
+                response.failed,
+                &response.head,
+                &response.body,
+            )?;
             let sender = inner
                 .approvals
                 .remove(&slot_handle)
@@ -681,11 +829,23 @@ impl Relay {
                 .ok_or(contract::MC_HOST_CANCELLED)?;
             let state = inner
                 .sockets
-                .get_mut(&socket)
+                .get(&socket)
                 .ok_or(contract::MC_HOST_CANCELLED)?;
             if state.guest_closed {
                 return Err(contract::MC_HOST_CANCELLED);
             }
+            inner.record_transcript(
+                contract::MC_HOST_TRANSCRIPT_RESPONSE,
+                kind,
+                handle,
+                response.failed,
+                &response.head,
+                &response.body,
+            )?;
+            let state = inner
+                .sockets
+                .get_mut(&socket)
+                .ok_or(contract::MC_HOST_INTERNAL)?;
             if kind == contract::MC_HOST_EVENT_WS_CONNECT {
                 state.open = !response.failed && !state.failed;
                 state.failed |= response.failed;
@@ -710,13 +870,26 @@ impl Relay {
         {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
-        let Some(slot) = inner
+        if !inner
+            .slots
+            .values()
+            .any(|slot| slot.event_id == id && slot.kind == kind)
+        {
+            return Err(contract::MC_HOST_CANCELLED);
+        }
+        inner.record_transcript(
+            contract::MC_HOST_TRANSCRIPT_RESPONSE,
+            kind,
+            handle,
+            response.failed,
+            &response.head,
+            &response.body,
+        )?;
+        let slot = inner
             .slots
             .values_mut()
             .find(|slot| slot.event_id == id && slot.kind == kind)
-        else {
-            return Err(contract::MC_HOST_CANCELLED);
-        };
+            .ok_or(contract::MC_HOST_INTERNAL)?;
         slot.result = Some(response);
         inner.response_bytes += response_len;
         let event = inner.events.remove(&id).ok_or(contract::MC_HOST_INTERNAL)?;
@@ -832,6 +1005,19 @@ impl Relay {
             .any(|slot| slot.event_id == id && slot.kind == kind)
         {
             return Err(contract::MC_HOST_CANCELLED);
+        }
+        if inner.transcript.is_some() {
+            let failed = stream.response.failed;
+            let head = stream.response.head.clone();
+            let body = stream.response.body.clone();
+            inner.record_transcript(
+                contract::MC_HOST_TRANSCRIPT_RESPONSE,
+                kind,
+                handle,
+                failed,
+                &head,
+                &body,
+            )?;
         }
         let stream = inner
             .events

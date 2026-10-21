@@ -346,4 +346,56 @@ pub(super) static EFFECT_API: EffectApi = EffectApi {
     info,
     cancel,
     stats,
+    transcript_next,
+    transcript_ack,
 };
+
+unsafe extern "C" fn transcript_next(
+    runtime: u64,
+    vm: u64,
+    buffer: *mut Buffer,
+    error: *mut Error,
+) -> ResultCode {
+    guard_vm(error, runtime, vm, || {
+        if buffer.is_null() || (buffer as usize) % align_of::<Buffer>() != 0 {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        let caller = unsafe { ptr::read(buffer) };
+        if caller.capacity != 0 && caller.data.is_null() {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        let frame = ActiveRuntime::acquire(runtime)?
+            .state
+            .effect_transcript_next(vm)?
+            .ok_or(contract::MC_HOST_WOULD_BLOCK)?;
+        if !caller.data.is_null()
+            && ranges_overlap(
+                caller.data as usize,
+                caller.capacity.min(frame.len() as u64) as usize,
+                buffer as usize,
+                size_of::<Buffer>(),
+            )
+        {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        unsafe { (*buffer).required = frame.len() as u64 };
+        if caller.capacity < frame.len() as u64 {
+            return Err(contract::MC_HOST_BUFFER_TOO_SMALL);
+        }
+        unsafe { ptr::copy_nonoverlapping(frame.as_ptr(), caller.data, frame.len()) };
+        Ok(())
+    })
+}
+
+unsafe extern "C" fn transcript_ack(
+    runtime: u64,
+    vm: u64,
+    sequence: u64,
+    error: *mut Error,
+) -> ResultCode {
+    guard_vm(error, runtime, vm, || {
+        ActiveRuntime::acquire(runtime)?
+            .state
+            .effect_transcript_ack(vm, sequence)
+    })
+}

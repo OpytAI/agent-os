@@ -25,6 +25,7 @@ CHECK_FIELD(mc_host_error_v1, ERROR, code, CODE);
 CHECK_FIELD(mc_host_error_v1, ERROR, retryable, RETRYABLE);
 CHECK_FIELD(mc_host_error_v1, ERROR, reserved, RESERVED);
 CHECK_FIELD(mc_host_error_v1, ERROR, message, MESSAGE);
+CHECK_FIELD(mc_host_error_v1, ERROR, operation_id, OPERATION_ID);
 
 CHECK_LAYOUT(mc_host_runtime_options_v1, RUNTIME_OPTIONS);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, header, HEADER);
@@ -97,7 +98,7 @@ CHECK_FIELD(mc_host_vm_restore_options_v1, VM_RESTORE_OPTIONS, header, HEADER);
 CHECK_FIELD(mc_host_vm_restore_options_v1, VM_RESTORE_OPTIONS, snapshot, SNAPSHOT);
 CHECK_FIELD(mc_host_vm_restore_options_v1, VM_RESTORE_OPTIONS, baseline, BASELINE);
 CHECK_FIELD(mc_host_vm_restore_options_v1, VM_RESTORE_OPTIONS, mode, MODE);
-CHECK_FIELD(mc_host_vm_restore_options_v1, VM_RESTORE_OPTIONS, reserved, RESERVED);
+CHECK_FIELD(mc_host_vm_restore_options_v1, VM_RESTORE_OPTIONS, flags, FLAGS);
 
 CHECK_LAYOUT(mc_host_drive_options_v1, DRIVE_OPTIONS);
 CHECK_FIELD(mc_host_drive_options_v1, DRIVE_OPTIONS, header, HEADER);
@@ -249,6 +250,8 @@ CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, ack, ACK);
 CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, info, INFO);
 CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, cancel, CANCEL);
 CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, stats, STATS);
+CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, transcript_next, TRANSCRIPT_NEXT);
+CHECK_FIELD(mc_host_effect_api_v1, EFFECT_API, transcript_ack, TRANSCRIPT_ACK);
 CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, header, HEADER);
 CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, start, START);
 CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, poll, POLL);

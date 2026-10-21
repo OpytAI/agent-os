@@ -31,7 +31,7 @@ int main(int argc, char **argv) {
   mc_host_api_v1 api = MC_HOST_INIT(mc_host_api_v1);
   need(get_api(2, 0, sizeof(api), &api) == MC_HOST_UNSUPPORTED_ABI,
        "reject new major");
-  need(get_api(1, 1, sizeof(api), &api) == MC_HOST_UNSUPPORTED_ABI,
+  need(get_api(1, MC_HOST_ABI_MINOR + 1, sizeof(api), &api) == MC_HOST_UNSUPPORTED_ABI,
        "reject new minor");
   need(get_api(1, 0, sizeof(api), &api) == MC_HOST_OK, "get API");
   uint64_t features = MC_HOST_FEATURE_VM_BASIC | MC_HOST_FEATURE_OUTPUT |

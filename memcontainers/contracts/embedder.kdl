@@ -6,7 +6,7 @@
 // Layout entries are the stable v1 manifest for the public C declarations and
 // their Rust FFI mirrors. Generated constants are checked by both compilers.
 
-abi-version major=1 minor=0
+abi-version major=1 minor=1
 
 layout "HEADER" size=8 align=4 {
   offset "size" value=0
@@ -18,13 +18,14 @@ layout "BUFFER" size=24 align=8 {
   offset "capacity" value=8
   offset "required" value=16
 }
-layout "ERROR" size=48 align=8 {
+layout "ERROR" size=56 align=8 {
   offset "header" value=0
   offset "domain" value=8
   offset "code" value=12
   offset "retryable" value=16
   offset "reserved" value=17
   offset "message" value=24
+  offset "operation_id" value=48
 }
 layout "RUNTIME_OPTIONS" size=120 align=8 {
   offset "header" value=0
@@ -98,7 +99,7 @@ layout "VM_RESTORE_OPTIONS" size=48 align=8 {
   offset "snapshot" value=8
   offset "baseline" value=24
   offset "mode" value=40
-  offset "reserved" value=44
+  offset "flags" value=44
 }
 layout "DRIVE_OPTIONS" size=24 align=8 {
   offset "header" value=0
@@ -250,7 +251,7 @@ layout "EFFECT_STATS" size=80 align=8 {
   offset "refused_ws" value=64
   offset "refused_approval" value=72
 }
-layout "EFFECT_API" size=120 align=8 {
+layout "EFFECT_API" size=136 align=8 {
   offset "header" value=0
   offset "next" value=8
   offset "read" value=16
@@ -266,6 +267,8 @@ layout "EFFECT_API" size=120 align=8 {
   offset "info" value=96
   offset "cancel" value=104
   offset "stats" value=112
+  offset "transcript_next" value=120
+  offset "transcript_ack" value=128
 }
 
 constant "MC_HOST_OK" value=0 type="u32"
@@ -370,6 +373,7 @@ constant "MC_HOST_VM_CLOSING" value=5 type="u32"
 constant "MC_HOST_VM_FLAG_HAS_EXIT_CODE" value=1 type="u32"
 constant "MC_HOST_VM_FLAG_AT_PROMPT" value=2 type="u32"
 constant "MC_HOST_VM_CREATE_DETERMINISTIC" value=1 type="u32"
+constant "MC_HOST_VM_RESTORE_DETERMINISTIC" value=1 type="u32"
 constant "MC_HOST_RESTORE_STRICT" value=1 type="u32"
 constant "MC_HOST_RESTORE_DETACHED" value=2 type="u32"
 constant "MC_HOST_DRIVE_STOP_BUDGET" value=1 type="u32"
@@ -674,4 +678,20 @@ message "LiveAttachmentManifest" id=55 version=1 max-bytes=1048576 {
   field "policy_digest" type="bytes" opt=1
   field "native_net" type="bool"
   doc "Current non-secret VM attachment identities, including live route changes."
+}
+
+constant "MC_HOST_TRANSCRIPT_REQUEST" value=1 type="u32"
+constant "MC_HOST_TRANSCRIPT_RESPONSE" value=2 type="u32"
+constant "MC_HOST_TRANSCRIPT_WS_INBOUND" value=3 type="u32"
+constant "MC_HOST_TRANSCRIPT_WS_CLOSE" value=4 type="u32"
+
+message "EffectTranscriptEntry" id=56 version=1 max-bytes=16777472 {
+  field "sequence" type="i64"
+  field "direction" type="u32"
+  field "kind" type="u32"
+  field "event_id" type="i64"
+  field "failed" type="bool"
+  field "head" type="bytes"
+  field "body" type="bytes"
+  doc "Ordered external effect input or accepted response. The VM owns this bounded log until acknowledged; it is never part of MCSN."
 }

@@ -73,6 +73,7 @@ struct Error {
     retryable: u8,
     reserved: [u8; 7],
     message: Buffer,
+    operation_id: u64,
 }
 
 #[repr(C)]
@@ -166,7 +167,7 @@ struct VmRestoreOptions {
     snapshot: Bytes,
     baseline: Bytes,
     mode: u32,
-    reserved: u32,
+    flags: u32,
 }
 
 #[repr(C)]
@@ -420,6 +421,8 @@ struct EffectApi {
     info: unsafe extern "C" fn(u64, u64, *mut EffectInfo, *mut Error) -> ResultCode,
     cancel: unsafe extern "C" fn(u64, u64, *mut Error) -> ResultCode,
     stats: unsafe extern "C" fn(u64, u64, *mut EffectStats, *mut Error) -> ResultCode,
+    transcript_next: unsafe extern "C" fn(u64, u64, *mut Buffer, *mut Error) -> ResultCode,
+    transcript_ack: unsafe extern "C" fn(u64, u64, u64, *mut Error) -> ResultCode,
 }
 
 // The manifest in embedder.kdl is checked independently by Rust and C. A
@@ -662,8 +665,8 @@ const _: () = {
             == contract::MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_MODE_OFFSET
     );
     assert!(
-        offset_of!(VmRestoreOptions, reserved)
-            == contract::MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_RESERVED_OFFSET
+        offset_of!(VmRestoreOptions, flags)
+            == contract::MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_FLAGS_OFFSET
     );
 
     assert!(size_of::<DriveOptions>() == contract::MC_HOST_LAYOUT_DRIVE_OPTIONS_SIZE);
@@ -1087,6 +1090,14 @@ const _: () = {
     assert!(offset_of!(EffectApi, info) == contract::MC_HOST_LAYOUT_EFFECT_API_INFO_OFFSET);
     assert!(offset_of!(EffectApi, cancel) == contract::MC_HOST_LAYOUT_EFFECT_API_CANCEL_OFFSET);
     assert!(offset_of!(EffectApi, stats) == contract::MC_HOST_LAYOUT_EFFECT_API_STATS_OFFSET);
+    assert!(
+        offset_of!(EffectApi, transcript_next)
+            == contract::MC_HOST_LAYOUT_EFFECT_API_TRANSCRIPT_NEXT_OFFSET
+    );
+    assert!(
+        offset_of!(EffectApi, transcript_ack)
+            == contract::MC_HOST_LAYOUT_EFFECT_API_TRANSCRIPT_ACK_OFFSET
+    );
 };
 
 struct RuntimeSlot {
@@ -1322,7 +1333,7 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
     )
 }
 
-unsafe fn write_error(error: *mut Error, code: ResultCode, message: &str) {
+unsafe fn write_error(error: *mut Error, code: ResultCode, message: &str, operation_id: u64) {
     if error.is_null() {
         return;
     }
@@ -1349,6 +1360,7 @@ unsafe fn write_error(error: *mut Error, code: ResultCode, message: &str) {
             capacity: 0,
             required: message.len() as u64,
         },
+        operation_id,
     };
     value.domain = if code == contract::MC_HOST_OK
         || code == contract::MC_HOST_WOULD_BLOCK
@@ -1360,7 +1372,7 @@ unsafe fn write_error(error: *mut Error, code: ResultCode, message: &str) {
     } else {
         1
     };
-    if count == size_of::<Error>() && (error as usize) % align_of::<Error>() == 0 {
+    if count >= offset_of!(Error, operation_id) && (error as usize) % align_of::<Error>() == 0 {
         let caller_buffer = unsafe { ptr::read(ptr::addr_of!((*error).message)) };
         value.message.data = caller_buffer.data;
         value.message.capacity = caller_buffer.capacity;
@@ -1431,7 +1443,11 @@ fn guard_context(
             )
         }
     };
-    unsafe { write_error(error, code, message) };
+    let operation_id = match owner {
+        Some(PanicOwner::Operation(_, id)) if code != contract::MC_HOST_OK => id,
+        _ => 0,
+    };
+    unsafe { write_error(error, code, message, operation_id) };
     code
 }
 
@@ -1548,14 +1564,15 @@ unsafe extern "C" fn get_interface(
     out: *mut c_void,
     error: *mut Error,
 ) -> ResultCode {
+    let error_size = if !error.is_null() && (error as usize) % align_of::<Header>() == 0 {
+        let header = unsafe { ptr::read(error.cast::<Header>()) };
+        (header.size as usize).min(size_of::<Error>())
+    } else {
+        size_of::<Error>()
+    };
     if !error.is_null()
         && !out.is_null()
-        && ranges_overlap(
-            error as usize,
-            size_of::<Error>(),
-            out as usize,
-            size as usize,
-        )
+        && ranges_overlap(error as usize, error_size, out as usize, size as usize)
     {
         return contract::MC_HOST_INVALID_ARGUMENT;
     }

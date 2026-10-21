@@ -1,6 +1,6 @@
 # Native embedder contract
 
-ABI **1.0**.
+ABI **1.1**.
 
 | Constant | Type | Value |
 | --- | --- | ---: |
@@ -104,6 +104,7 @@ ABI **1.0**.
 | `MC_HOST_VM_FLAG_HAS_EXIT_CODE` | `u32` | 1 |
 | `MC_HOST_VM_FLAG_AT_PROMPT` | `u32` | 2 |
 | `MC_HOST_VM_CREATE_DETERMINISTIC` | `u32` | 1 |
+| `MC_HOST_VM_RESTORE_DETERMINISTIC` | `u32` | 1 |
 | `MC_HOST_RESTORE_STRICT` | `u32` | 1 |
 | `MC_HOST_RESTORE_DETACHED` | `u32` | 2 |
 | `MC_HOST_DRIVE_STOP_BUDGET` | `u32` | 1 |
@@ -169,12 +170,16 @@ ABI **1.0**.
 | `MC_HOST_EVENT_OPERATION_CANCEL` | `u32` | 13 |
 | `MC_HOST_WS_CLOSE_GUEST` | `u32` | 1 |
 | `MC_HOST_WS_CLOSE_VM` | `u32` | 2 |
+| `MC_HOST_TRANSCRIPT_REQUEST` | `u32` | 1 |
+| `MC_HOST_TRANSCRIPT_RESPONSE` | `u32` | 2 |
+| `MC_HOST_TRANSCRIPT_WS_INBOUND` | `u32` | 3 |
+| `MC_HOST_TRANSCRIPT_WS_CLOSE` | `u32` | 4 |
 
 | Layout | Size | Align |
 | --- | ---: | ---: |
 | `HEADER` | 8 | 4 |
 | `BUFFER` | 24 | 8 |
-| `ERROR` | 48 | 8 |
+| `ERROR` | 56 | 8 |
 | `RUNTIME_OPTIONS` | 120 | 8 |
 | `LIBRARY_INFO` | 24 | 8 |
 | `API` | 56 | 8 |
@@ -198,7 +203,7 @@ ABI **1.0**.
 | `ATTACHMENT_API` | 56 | 8 |
 | `EFFECT_INFO` | 24 | 8 |
 | `EFFECT_STATS` | 80 | 8 |
-| `EFFECT_API` | 120 | 8 |
+| `EFFECT_API` | 136 | 8 |
 
 | Message | ID | Version | Maximum frame bytes |
 | --- | ---: | ---: | ---: |
@@ -238,3 +243,4 @@ ABI **1.0**.
 | `ToolApprovalRequest` | 51 | 1 | 4194304 |
 | `ToolApprovalResponse` | 52 | 1 | 1048576 |
 | `LiveAttachmentManifest` | 55 | 1 | 1048576 |
+| `EffectTranscriptEntry` | 56 | 1 | 16777472 |

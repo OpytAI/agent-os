@@ -717,6 +717,10 @@ static void run_persist_relay(const mc_host_vm_api_v1 *vm_api,
            (int32_t)read_u32(result, result_buffer.required, &offset) == -44,
        "absent persistence key becomes guest ENOENT");
   check(op_api->close(runtime, operation, NULL), "close persistence read");
+  mc_host_error_v1 error = MC_HOST_INIT(mc_host_error_v1);
+  need(op_api->poll(runtime, operation, &status, &error) == MC_HOST_STALE_HANDLE &&
+           error.operation_id == operation,
+       "operation error identifies the failed operation");
 }
 
 static void run_http_relay(const mc_host_vm_api_v1 *vm_api,
@@ -1253,8 +1257,10 @@ static void run_native_connection(const mc_host_vm_api_v1 *vm_api,
         "add native connection policy");
   check(attachment_api->plan_seal(runtime, plan, NULL), "seal native connection plan");
 
+  mc_host_vm_create_options_v1 native_create = *create;
+  native_create.flags &= ~MC_HOST_VM_CREATE_DETERMINISTIC;
   mc_host_handle_t vm = 0;
-  check(vm_api->vm_create(runtime, kernel, plan, create, &vm, NULL),
+  check(vm_api->vm_create(runtime, kernel, plan, &native_create, &vm, NULL),
         "boot native connection VM");
   drive_to_prompt(vm_api, output_api, runtime, vm, NULL);
   char script[512];
@@ -2370,6 +2376,40 @@ static void verify_operation_result_quota(const mc_host_api_v1 *api,
   check(api->runtime_close(runtime, NULL), "close result-quota runtime");
 }
 
+static void verify_effect_transcript(const mc_host_effect_api_v1 *api,
+                                     mc_host_runtime_t runtime, mc_host_handle_t vm) {
+  int requests = 0, responses = 0, inbound = 0;
+  int64_t previous = 0;
+  for (;;) {
+    mc_host_buffer_v1 buffer = {0};
+    mc_host_result_t status = api->transcript_next(runtime, vm, &buffer, NULL);
+    if (status == MC_HOST_WOULD_BLOCK) break;
+    need(status == MC_HOST_BUFFER_TOO_SMALL && buffer.required > 0,
+         "probe real effect transcript without consuming it");
+    uint8_t *bytes = malloc((size_t)buffer.required);
+    need(bytes != NULL, "allocate bounded transcript read");
+    buffer.data = bytes;
+    buffer.capacity = buffer.required;
+    check(api->transcript_next(runtime, vm, &buffer, NULL),
+          "read real effect transcript entry");
+    mc_host_wire_effect_transcript_entry entry;
+    need(mc_host_wire_decode_effect_transcript_entry(bytes, (size_t)buffer.required,
+             &entry) == MC_HOST_WIRE_OK && entry.sequence == previous + 1,
+         "ordered generated transcript envelope");
+    previous = entry.sequence;
+    if (entry.direction == MC_HOST_TRANSCRIPT_REQUEST &&
+        entry.kind == MC_HOST_EVENT_HOST_CALL) ++requests;
+    if (entry.direction == MC_HOST_TRANSCRIPT_RESPONSE &&
+        entry.kind == MC_HOST_EVENT_HOST_CALL) ++responses;
+    if (entry.direction == MC_HOST_TRANSCRIPT_WS_INBOUND) ++inbound;
+    check(api->transcript_ack(runtime, vm, (uint64_t)entry.sequence, NULL),
+          "ack real effect transcript entry");
+    free(bytes);
+  }
+  need(requests > 0 && responses > 0 && inbound > 0,
+       "real host calls and inbound WebSocket data are recorded");
+}
+
 int main(int argc, char **argv) {
   need(argc == 7, "release library, kernel, images, and snapshot fixtures");
   size_t kernel_len = 0, image_len = 0;
@@ -2529,6 +2569,7 @@ int main(int argc, char **argv) {
   create.layers = &layer;
   create.layer_count = 1;
   create.requested_workers = -1;
+  create.flags = MC_HOST_VM_CREATE_DETERMINISTIC;
   mc_host_handle_t vm = 0;
   check(vm_api.vm_create(runtime, kernel_handle, plan, &create, &vm, NULL), "boot real image");
   mc_host_drive_options_v1 over_limit = MC_HOST_INIT(mc_host_drive_options_v1);
@@ -2551,6 +2592,7 @@ int main(int argc, char **argv) {
   run_persist_relay(&vm_api, &op_api, &effect_api, runtime, vm);
   run_http_relay(&vm_api, &op_api, &effect_api, runtime, vm);
   run_ws_relay(&vm_api, &op_api, &snap_api, &effect_api, runtime, vm);
+  verify_effect_transcript(&effect_api, runtime, vm);
 
   mc_host_snapshot_readiness_v1 readiness = MC_HOST_INIT(mc_host_snapshot_readiness_v1);
   check(snap_api.readiness(runtime, vm, &readiness, NULL),
@@ -2774,6 +2816,7 @@ int main(int argc, char **argv) {
   restore.snapshot = (mc_host_bytes_v1){delta, delta_info.length};
   restore.baseline = (mc_host_bytes_v1){full, full_info.length};
   restore.mode = MC_HOST_RESTORE_STRICT;
+  restore.flags = MC_HOST_VM_RESTORE_DETERMINISTIC;
   mc_host_handle_t restored = 0;
   mc_host_bytes_v1 manifest_bytes = {manifest, manifest_buffer.required};
   need(vm_api.vm_restore(runtime, kernel_handle, plan, &restore,
@@ -2894,6 +2937,10 @@ int main(int argc, char **argv) {
   check(vm_api.vm_restore_attached(runtime, kernel_handle, plan, &restore,
                                   manifest_bytes, &restored, NULL),
         "strict restore real incremental snapshot with matching attachments");
+  mc_host_buffer_v1 empty_transcript = {0};
+  need(effect_api.transcript_next(runtime, restored, &empty_transcript, NULL) ==
+           MC_HOST_WOULD_BLOCK,
+       "deterministic restore starts with a fresh effect transcript");
   mc_host_handle_t over_limit_vm = 0;
   need(vm_api.vm_restore(runtime, kernel_handle, 0, &restore, &over_limit_vm, NULL) ==
            MC_HOST_RESOURCE_LIMIT && over_limit_vm == 0,

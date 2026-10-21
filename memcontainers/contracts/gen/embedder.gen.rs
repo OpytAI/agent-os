@@ -102,6 +102,7 @@ pub const MC_HOST_VM_CLOSING: u32 = 5;
 pub const MC_HOST_VM_FLAG_HAS_EXIT_CODE: u32 = 1;
 pub const MC_HOST_VM_FLAG_AT_PROMPT: u32 = 2;
 pub const MC_HOST_VM_CREATE_DETERMINISTIC: u32 = 1;
+pub const MC_HOST_VM_RESTORE_DETERMINISTIC: u32 = 1;
 pub const MC_HOST_RESTORE_STRICT: u32 = 1;
 pub const MC_HOST_RESTORE_DETACHED: u32 = 2;
 pub const MC_HOST_DRIVE_STOP_BUDGET: u32 = 1;
@@ -167,6 +168,10 @@ pub const MC_HOST_EVENT_TOOL_APPROVAL: u32 = 12;
 pub const MC_HOST_EVENT_OPERATION_CANCEL: u32 = 13;
 pub const MC_HOST_WS_CLOSE_GUEST: u32 = 1;
 pub const MC_HOST_WS_CLOSE_VM: u32 = 2;
+pub const MC_HOST_TRANSCRIPT_REQUEST: u32 = 1;
+pub const MC_HOST_TRANSCRIPT_RESPONSE: u32 = 2;
+pub const MC_HOST_TRANSCRIPT_WS_INBOUND: u32 = 3;
+pub const MC_HOST_TRANSCRIPT_WS_CLOSE: u32 = 4;
 
 extern crate alloc;
 use alloc::collections::BTreeMap;
@@ -1706,9 +1711,64 @@ impl LiveAttachmentManifest {
     }
 }
 
+/// Ordered external effect input or accepted response. The VM owns this bounded log until acknowledged; it is never part of MCSN.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EffectTranscriptEntry {
+    pub sequence: i64,
+    pub direction: u32,
+    pub kind: u32,
+    pub event_id: i64,
+    pub failed: bool,
+    pub head: Vec<u8>,
+    pub body: Vec<u8>,
+}
+
+pub const EFFECT_TRANSCRIPT_ENTRY_MSG_ID: u16 = 56;
+pub const EFFECT_TRANSCRIPT_ENTRY_VERSION: u8 = 1;
+pub const EFFECT_TRANSCRIPT_ENTRY_MAX_FRAME_BYTES: usize = 16777472;
+impl EffectTranscriptEntry {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ctl_put_u16(&mut out, EFFECT_TRANSCRIPT_ENTRY_MSG_ID);
+        out.push(EFFECT_TRANSCRIPT_ENTRY_VERSION);
+        ctl_put_i64(&mut out, self.sequence);
+        ctl_put_u32(&mut out, self.direction);
+        ctl_put_u32(&mut out, self.kind);
+        ctl_put_i64(&mut out, self.event_id);
+        ctl_put_bool(&mut out, self.failed);
+        ctl_put_bytes(&mut out, &self.head);
+        ctl_put_bytes(&mut out, &self.body);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > EFFECT_TRANSCRIPT_ENTRY_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
+        let mut off = 0usize;
+        if ctl_read_u16(bytes, &mut off)? != EFFECT_TRANSCRIPT_ENTRY_MSG_ID { return Err(WireError::WrongMessage); }
+        if ctl_read_u8(bytes, &mut off)? != EFFECT_TRANSCRIPT_ENTRY_VERSION { return Err(WireError::UnsupportedVersion); }
+        let sequence = ctl_read_i64(bytes, &mut off)?;
+        let direction = ctl_read_u32(bytes, &mut off)?;
+        let kind = ctl_read_u32(bytes, &mut off)?;
+        let event_id = ctl_read_i64(bytes, &mut off)?;
+        let failed = ctl_read_bool(bytes, &mut off)?;
+        let head = ctl_read_bytes(bytes, &mut off)?;
+        let body = ctl_read_bytes(bytes, &mut off)?;
+        if off != bytes.len() { return Err(WireError::TrailingBytes); }
+        Ok(Self {
+            sequence,
+            direction,
+            kind,
+            event_id,
+            failed,
+            head,
+            body,
+        })
+    }
+}
+
 // Native embedder ABI constants.
 pub const MC_HOST_ABI_MAJOR: u16 = 1;
-pub const MC_HOST_ABI_MINOR: u16 = 0;
+pub const MC_HOST_ABI_MINOR: u16 = 1;
 pub const MC_HOST_LAYOUT_HEADER_SIZE: usize = 8;
 pub const MC_HOST_LAYOUT_HEADER_ALIGN: usize = 4;
 pub const MC_HOST_LAYOUT_HEADER_SIZE_OFFSET: usize = 0;
@@ -1719,7 +1779,7 @@ pub const MC_HOST_LAYOUT_BUFFER_ALIGN: usize = 8;
 pub const MC_HOST_LAYOUT_BUFFER_DATA_OFFSET: usize = 0;
 pub const MC_HOST_LAYOUT_BUFFER_CAPACITY_OFFSET: usize = 8;
 pub const MC_HOST_LAYOUT_BUFFER_REQUIRED_OFFSET: usize = 16;
-pub const MC_HOST_LAYOUT_ERROR_SIZE: usize = 48;
+pub const MC_HOST_LAYOUT_ERROR_SIZE: usize = 56;
 pub const MC_HOST_LAYOUT_ERROR_ALIGN: usize = 8;
 pub const MC_HOST_LAYOUT_ERROR_HEADER_OFFSET: usize = 0;
 pub const MC_HOST_LAYOUT_ERROR_DOMAIN_OFFSET: usize = 8;
@@ -1727,6 +1787,7 @@ pub const MC_HOST_LAYOUT_ERROR_CODE_OFFSET: usize = 12;
 pub const MC_HOST_LAYOUT_ERROR_RETRYABLE_OFFSET: usize = 16;
 pub const MC_HOST_LAYOUT_ERROR_RESERVED_OFFSET: usize = 17;
 pub const MC_HOST_LAYOUT_ERROR_MESSAGE_OFFSET: usize = 24;
+pub const MC_HOST_LAYOUT_ERROR_OPERATION_ID_OFFSET: usize = 48;
 pub const MC_HOST_LAYOUT_RUNTIME_OPTIONS_SIZE: usize = 120;
 pub const MC_HOST_LAYOUT_RUNTIME_OPTIONS_ALIGN: usize = 8;
 pub const MC_HOST_LAYOUT_RUNTIME_OPTIONS_HEADER_OFFSET: usize = 0;
@@ -1800,7 +1861,7 @@ pub const MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_HEADER_OFFSET: usize = 0;
 pub const MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_SNAPSHOT_OFFSET: usize = 8;
 pub const MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_BASELINE_OFFSET: usize = 24;
 pub const MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_MODE_OFFSET: usize = 40;
-pub const MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_RESERVED_OFFSET: usize = 44;
+pub const MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_FLAGS_OFFSET: usize = 44;
 pub const MC_HOST_LAYOUT_DRIVE_OPTIONS_SIZE: usize = 24;
 pub const MC_HOST_LAYOUT_DRIVE_OPTIONS_ALIGN: usize = 8;
 pub const MC_HOST_LAYOUT_DRIVE_OPTIONS_HEADER_OFFSET: usize = 0;
@@ -1951,7 +2012,7 @@ pub const MC_HOST_LAYOUT_EFFECT_STATS_REFUSED_PERSIST_OFFSET: usize = 48;
 pub const MC_HOST_LAYOUT_EFFECT_STATS_REFUSED_HTTP_OFFSET: usize = 56;
 pub const MC_HOST_LAYOUT_EFFECT_STATS_REFUSED_WS_OFFSET: usize = 64;
 pub const MC_HOST_LAYOUT_EFFECT_STATS_REFUSED_APPROVAL_OFFSET: usize = 72;
-pub const MC_HOST_LAYOUT_EFFECT_API_SIZE: usize = 120;
+pub const MC_HOST_LAYOUT_EFFECT_API_SIZE: usize = 136;
 pub const MC_HOST_LAYOUT_EFFECT_API_ALIGN: usize = 8;
 pub const MC_HOST_LAYOUT_EFFECT_API_HEADER_OFFSET: usize = 0;
 pub const MC_HOST_LAYOUT_EFFECT_API_NEXT_OFFSET: usize = 8;
@@ -1968,3 +2029,5 @@ pub const MC_HOST_LAYOUT_EFFECT_API_SOCKET_CLOSE_OFFSET: usize = 88;
 pub const MC_HOST_LAYOUT_EFFECT_API_INFO_OFFSET: usize = 96;
 pub const MC_HOST_LAYOUT_EFFECT_API_CANCEL_OFFSET: usize = 104;
 pub const MC_HOST_LAYOUT_EFFECT_API_STATS_OFFSET: usize = 112;
+pub const MC_HOST_LAYOUT_EFFECT_API_TRANSCRIPT_NEXT_OFFSET: usize = 120;
+pub const MC_HOST_LAYOUT_EFFECT_API_TRANSCRIPT_ACK_OFFSET: usize = 128;
