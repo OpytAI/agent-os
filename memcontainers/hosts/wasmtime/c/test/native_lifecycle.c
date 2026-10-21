@@ -27,6 +27,34 @@ static void check(mc_host_result_t result, const char *step) {
   exit(2);
 }
 
+typedef struct status_close_probe {
+  const mc_host_vm_api_v1 *api;
+  mc_host_runtime_t runtime;
+  mc_host_handle_t vm;
+  _Atomic uint32_t observed;
+  _Atomic uint32_t stale;
+} status_close_probe;
+
+static void *observe_until_closed(void *argument) {
+  status_close_probe *probe = (status_close_probe *)argument;
+  for (;;) {
+    mc_host_vm_status_v1 status = MC_HOST_INIT(mc_host_vm_status_v1);
+    mc_host_result_t result = probe->api->vm_status(probe->runtime, probe->vm,
+                                                      &status, NULL);
+    if (result == MC_HOST_OK) {
+      atomic_store_explicit(&probe->observed, 1, memory_order_release);
+      continue;
+    }
+    if (result == MC_HOST_BUSY) {
+      sched_yield();
+      continue;
+    }
+    need(result == MC_HOST_STALE_HANDLE, "concurrent status sees retired VM handle");
+    atomic_store_explicit(&probe->stale, 1, memory_order_release);
+    return NULL;
+  }
+}
+
 typedef struct wake_gate {
   _Atomic uint32_t entered;
   _Atomic uint32_t release;
@@ -2886,7 +2914,15 @@ int main(int argc, char **argv) {
                               (mc_host_bytes_v1){fork_command, sizeof(fork_command) - 1}, NULL),
         "send terminal input to fork child");
   drive_to_prompt(&vm_api, &output_api, runtime, forked, "fork-child");
-  check(vm_api.vm_close(runtime, forked, NULL), "close fork child");
+  status_close_probe close_probe = {&vm_api, runtime, forked, 0, 0};
+  pthread_t observer;
+  need(pthread_create(&observer, NULL, observe_until_closed, &close_probe) == 0,
+       "start concurrent VM observer");
+  while (!atomic_load_explicit(&close_probe.observed, memory_order_acquire)) sched_yield();
+  check(vm_api.vm_close(runtime, forked, NULL), "close fork child during status reads");
+  need(pthread_join(observer, NULL) == 0 &&
+           atomic_load_explicit(&close_probe.stale, memory_order_acquire),
+       "retire VM handle across concurrent status calls");
   wire snapshot_unmount = mount_request(MC_HOST_OP_UNMOUNT, "/mnt/capi");
   mc_host_handle_t snapshot_unmount_op = 0;
   check(op_api.start(runtime, vm,
