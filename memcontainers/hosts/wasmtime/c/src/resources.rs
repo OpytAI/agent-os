@@ -35,6 +35,7 @@ pub const SOCKET_KIND: u8 = 10;
 const MAX_VMS: usize = contract::MC_HOST_HARD_MAX_VMS as usize;
 const MAX_DRIVE_TICKS: u32 = contract::MC_HOST_HARD_MAX_DRIVE_TICKS;
 const MAX_PLANS: usize = 64;
+const MAX_PLAN_DEFINITION_BYTES: usize = contract::MC_HOST_HARD_MAX_PLAN_DEFINITION_BYTES as usize;
 
 #[derive(Clone, Copy)]
 pub struct RuntimeLimits {
@@ -237,6 +238,7 @@ impl RuntimeLimits {
 
 #[derive(Clone, Default)]
 struct PlanRecord {
+    definition_bytes: usize,
     routes: BTreeMap<String, String>,
     host_tools: Vec<HostToolDef>,
     persist_identity: Option<String>,
@@ -246,6 +248,17 @@ struct PlanRecord {
     connection_identities: BTreeMap<String, Vec<String>>,
     policies: Vec<ConnectionPolicyRule>,
     sealed: bool,
+}
+
+impl PlanRecord {
+    fn charge_definition(&mut self, bytes: usize) -> Result<(), u32> {
+        self.definition_bytes = self
+            .definition_bytes
+            .checked_add(bytes)
+            .filter(|total| *total <= MAX_PLAN_DEFINITION_BYTES)
+            .ok_or(contract::MC_HOST_RESOURCE_LIMIT)?;
+        Ok(())
+    }
 }
 
 fn policy_digest(policies: &[ConnectionPolicyRule]) -> Option<Vec<u8>> {
@@ -1032,6 +1045,7 @@ impl RuntimeState {
         plan: u64,
         name: String,
         identity: String,
+        frame_bytes: usize,
     ) -> Result<(), u32> {
         if name.is_empty() || name.contains('\0') || identity.is_empty() || identity.contains('\0')
         {
@@ -1048,11 +1062,17 @@ impl RuntimeState {
         if plan.routes.len() >= 128 || plan.routes.contains_key(&name) {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
+        plan.charge_definition(frame_bytes)?;
         plan.routes.insert(name, identity);
         Ok(())
     }
 
-    pub fn add_host_tool(&self, plan: u64, tool: HostToolDef) -> Result<(), u32> {
+    pub fn add_host_tool(
+        &self,
+        plan: u64,
+        tool: HostToolDef,
+        frame_bytes: usize,
+    ) -> Result<(), u32> {
         if tool.address.is_empty()
             || tool.binding_name.is_empty()
             || (tool.args_mode != "json" && tool.args_mode != "raw")
@@ -1075,11 +1095,17 @@ impl RuntimeState {
         {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
+        plan.charge_definition(frame_bytes)?;
         plan.host_tools.push(tool);
         Ok(())
     }
 
-    pub fn add_persist_provider(&self, plan: u64, identity: String) -> Result<(), u32> {
+    pub fn add_persist_provider(
+        &self,
+        plan: u64,
+        identity: String,
+        frame_bytes: usize,
+    ) -> Result<(), u32> {
         if identity.is_empty() || identity.contains('\0') {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
@@ -1094,11 +1120,17 @@ impl RuntimeState {
         if plan.persist_identity.is_some() {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
+        plan.charge_definition(frame_bytes)?;
         plan.persist_identity = Some(identity);
         Ok(())
     }
 
-    pub fn add_http_application(&self, plan: u64, identity: String) -> Result<(), u32> {
+    pub fn add_http_application(
+        &self,
+        plan: u64,
+        identity: String,
+        frame_bytes: usize,
+    ) -> Result<(), u32> {
         if identity.is_empty() || identity.contains('\0') {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
@@ -1113,11 +1145,17 @@ impl RuntimeState {
         if plan.http_identity.is_some() || plan.native_net {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
+        plan.charge_definition(frame_bytes)?;
         plan.http_identity = Some(identity);
         Ok(())
     }
 
-    pub fn add_connection(&self, handle: u64, definition: ConnectionAttachment) -> Result<(), u32> {
+    pub fn add_connection(
+        &self,
+        handle: u64,
+        definition: ConnectionAttachment,
+        frame_bytes: usize,
+    ) -> Result<(), u32> {
         let credential = match definition.credential_kind.as_str() {
             "none" if definition.credential_a.is_empty() && definition.credential_b.is_empty() => {
                 ConnectionCredential::None
@@ -1154,6 +1192,7 @@ impl RuntimeState {
         let (_, origins) = registry
             .egress(&definition.reference)
             .ok_or(contract::MC_HOST_INTERNAL)?;
+        plan.charge_definition(frame_bytes)?;
         plan.connection_identities
             .insert(definition.reference, origins);
         plan.connections = registry;
@@ -1165,6 +1204,7 @@ impl RuntimeState {
         &self,
         handle: u64,
         definition: ConnectionPolicyAttachment,
+        frame_bytes: usize,
     ) -> Result<(), u32> {
         let owner = match definition.owner.as_str() {
             "org" => ConnectionPolicyOwner::Org,
@@ -1193,6 +1233,7 @@ impl RuntimeState {
         });
         ConnectionPolicySet::new(policies.clone())
             .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
+        plan.charge_definition(frame_bytes)?;
         plan.policies = policies;
         plan.native_net = true;
         Ok(())
@@ -1237,7 +1278,13 @@ impl RuntimeState {
             .attachments
             .lock()
             .map_err(|_| contract::MC_HOST_INTERNAL)?;
-        Ok(live_manifest(attachments.as_ref()).encode())
+        let frame = live_manifest(attachments.as_ref()).encode();
+        if frame.len() > contract::LIVE_ATTACHMENT_MANIFEST_MAX_FRAME_BYTES
+            || frame.len() > self.limits.max_message_bytes
+        {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
+        Ok(frame)
     }
 
     pub fn vm_attach_update(&self, vm_handle: u64, plan_handle: u64) -> Result<(), u32> {
@@ -2343,18 +2390,24 @@ impl RuntimeState {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
         let length = bytes.len();
+        let attachment_manifest = SnapshotAttachmentManifest {
+            content_digest: description.content_digest.to_vec(),
+            routes: live_manifest.routes,
+            persist_identity: live_manifest.persist_identity,
+            http_identity: live_manifest.http_identity,
+            native_net: live_manifest.native_net,
+            policy_digest: live_manifest.policy_digest,
+            connections: live_manifest.connections,
+        }
+        .encode();
+        if attachment_manifest.len() > contract::SNAPSHOT_ATTACHMENT_MANIFEST_MAX_FRAME_BYTES
+            || attachment_manifest.len() > self.limits.max_message_bytes
+        {
+            return Err(contract::MC_HOST_RESOURCE_LIMIT);
+        }
         let record = Arc::new(SnapshotRecord {
             bytes,
-            attachment_manifest: SnapshotAttachmentManifest {
-                content_digest: description.content_digest.to_vec(),
-                routes: live_manifest.routes,
-                persist_identity: live_manifest.persist_identity,
-                http_identity: live_manifest.http_identity,
-                native_net: live_manifest.native_net,
-                policy_digest: live_manifest.policy_digest,
-                connections: live_manifest.connections,
-            }
-            .encode(),
+            attachment_manifest,
             kernel_handle: vm.kernel_handle,
         });
         let handle = resources.snapshots.insert(self.namespace, record)?;

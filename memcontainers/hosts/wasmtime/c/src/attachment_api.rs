@@ -44,21 +44,26 @@ unsafe extern "C" fn plan_add(
                     plan,
                     route.name,
                     route.identity,
+                    frame.len(),
                 )
             }
             contract::MC_HOST_ATTACHMENT_PERSIST => {
                 let provider = PersistAttachment::decode(&definition.payload)
                     .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
-                ActiveRuntime::acquire(runtime)?
-                    .state
-                    .add_persist_provider(plan, provider.identity)
+                ActiveRuntime::acquire(runtime)?.state.add_persist_provider(
+                    plan,
+                    provider.identity,
+                    frame.len(),
+                )
             }
             contract::MC_HOST_ATTACHMENT_HTTP_APPLICATION => {
                 let transport = HttpApplicationAttachment::decode(&definition.payload)
                     .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
-                ActiveRuntime::acquire(runtime)?
-                    .state
-                    .add_http_application(plan, transport.identity)
+                ActiveRuntime::acquire(runtime)?.state.add_http_application(
+                    plan,
+                    transport.identity,
+                    frame.len(),
+                )
             }
             contract::MC_HOST_ATTACHMENT_HOST_TOOL => {
                 let tool = HostToolAttachment::decode(&definition.payload)
@@ -74,6 +79,7 @@ unsafe extern "C" fn plan_add(
                         output_schema: tool.output_schema,
                         annotations: tool.annotations,
                     },
+                    frame.len(),
                 )
             }
             contract::MC_HOST_ATTACHMENT_CONNECTION => {
@@ -81,14 +87,14 @@ unsafe extern "C" fn plan_add(
                     .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
                 ActiveRuntime::acquire(runtime)?
                     .state
-                    .add_connection(plan, connection)
+                    .add_connection(plan, connection, frame.len())
             }
             contract::MC_HOST_ATTACHMENT_CONNECTION_POLICY => {
                 let policy = ConnectionPolicyAttachment::decode(&definition.payload)
                     .map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
                 ActiveRuntime::acquire(runtime)?
                     .state
-                    .add_connection_policy(plan, policy)
+                    .add_connection_policy(plan, policy, frame.len())
             }
             _ => Err(contract::MC_HOST_UNSUPPORTED),
         }
