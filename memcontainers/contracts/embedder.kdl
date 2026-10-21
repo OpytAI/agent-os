@@ -438,26 +438,26 @@ constant "MC_HOST_EVENT_OPERATION_CANCEL" value=13 type="u32"
 constant "MC_HOST_WS_CLOSE_GUEST" value=1 type="u32"
 constant "MC_HOST_WS_CLOSE_VM" value=2 type="u32"
 
-message "AttachmentDefinition" id=20 version=1 {
+message "AttachmentDefinition" id=20 version=1 max-bytes=1048576 {
   field "kind" type="u32"
   field "payload" type="bytes"
   doc "Versioned closed attachment variant. The generated kind table defines the payload message."
 }
 
-message "OperationRequest" id=21 version=1 {
+message "OperationRequest" id=21 version=1 max-bytes=18874368 {
   field "kind" type="u32"
   field "payload" type="bytes"
   doc "One asynchronous host-control request. Payload is the generated kind-specific message."
 }
 
-message "OperationResult" id=22 version=1 {
+message "OperationResult" id=22 version=1 max-bytes=16777216 {
   field "kind" type="u32"
   field "status" type="i32"
   field "payload" type="bytes"
   doc "One asynchronous host-control terminal value. Guest status remains data."
 }
 
-message "EffectEvent" id=23 version=1 {
+message "EffectEvent" id=23 version=1 max-bytes=4194368 {
   field "kind" type="u32"
   field "event_id" type="i64"
   field "vm_id" type="i64"
@@ -468,26 +468,26 @@ message "EffectEvent" id=23 version=1 {
   doc "Generation-bound, typed native-host effect envelope."
 }
 
-message "EffectResponse" id=24 version=1 {
+message "EffectResponse" id=24 version=1 max-bytes=16777344 {
   field "kind" type="u32"
   field "event_id" type="i64"
   field "payload" type="bytes"
   doc "Exactly one kind-matched terminal response for an effect event."
 }
 
-message "AttachmentManifestEntry" id=25 version=1 {
+message "AttachmentManifestEntry" id=25 version=1 max-bytes=1048576 {
   field "kind" type="u32"
   field "identity" type="str"
   field "digest" type="bytes"
   doc "Non-secret attachment identity included in strict-restore companion metadata."
 }
 
-message "AttachmentManifest" id=26 version=1 {
+message "AttachmentManifest" id=26 version=1 max-bytes=1048576 {
   field "entries" type="list<AttachmentManifestEntry>"
   doc "Canonical non-secret attachment manifest. Credentials and callback addresses are absent."
 }
 
-message "FilesystemRequest" id=27 version=1 {
+message "FilesystemRequest" id=27 version=1 max-bytes=18874368 {
   field "path" type="str"
   field "data" type="bytes" opt=1
   field "target" type="str" opt=1
@@ -495,114 +495,114 @@ message "FilesystemRequest" id=27 version=1 {
   doc "One native filesystem control attempt. The operation kind selects and validates the required fields."
 }
 
-message "LayerCommitResult" id=28 version=1 {
+message "LayerCommitResult" id=28 version=1 max-bytes=16777216 {
   field "digest" type="str"
   field "layer" type="bytes"
   doc "Content-addressed layer produced by mc_commit_layer."
 }
 
-message "HostCallAttachment" id=29 version=1 {
+message "HostCallAttachment" id=29 version=1 max-bytes=1048576 {
   field "name" type="str"
   field "identity" type="str"
   doc "One application-provided host-call route and its non-secret stable identity."
 }
 
-message "MountRequest" id=30 version=1 {
+message "MountRequest" id=30 version=1 max-bytes=1048576 {
   field "path" type="str"
   field "read_only" type="bool"
   doc "Mount a plan-registered host-call driver at its own path."
 }
 
-message "HostCallEvent" id=31 version=1 {
+message "HostCallEvent" id=31 version=1 max-bytes=4194304 {
   field "name" type="str"
   field "request" type="bytes"
   doc "Binary-safe request delivered to an application host-call route."
 }
 
-message "HostCallResponse" id=32 version=1 {
+message "HostCallResponse" id=32 version=1 max-bytes=16777216 {
   field "failed" type="bool"
   field "body" type="bytes"
   doc "One whole host-call response; the kernel has no body-pending sentinel."
 }
 
-message "EffectCancel" id=33 version=1 {
+message "EffectCancel" id=33 version=1 max-bytes=64 {
   field "original_event_id" type="i64"
   doc "One cancellation notice for a leased effect. Acknowledgment retires the original lease."
 }
 
-message "PersistAttachment" id=34 version=1 {
+message "PersistAttachment" id=34 version=1 max-bytes=1048576 {
   field "identity" type="str"
   doc "Non-secret identity of the application persistence provider."
 }
 
-message "PersistEffectRequest" id=35 version=1 {
+message "PersistEffectRequest" id=35 version=1 max-bytes=4194304 {
   field "key" type="bytes"
   field "value" type="bytes" opt=1
   doc "Typed persistence request. The event kind selects get, put, delete, or list."
 }
 
-message "PersistEffectResponse" id=36 version=1 {
+message "PersistEffectResponse" id=36 version=1 max-bytes=16777216 {
   field "failed" type="bool"
   field "body" type="bytes"
   doc "One complete persistence result delivered before kernel poll reports ready."
 }
 
-message "HttpApplicationAttachment" id=37 version=1 {
+message "HttpApplicationAttachment" id=37 version=1 max-bytes=1048576 {
   field "identity" type="str"
   doc "Non-secret identity of the application HTTP transport. Connection markers are refused."
 }
 
-message "HttpEffectRequest" id=38 version=1 {
+message "HttpEffectRequest" id=38 version=1 max-bytes=4194304 {
   field "request" type="bytes"
   doc "Unmarked kernel HTTP request blob. No credential is injected by this transport."
 }
 
-message "HttpEffectResponse" id=39 version=1 {
+message "HttpEffectResponse" id=39 version=1 max-bytes=16777216 {
   field "failed" type="bool"
   field "head" type="bytes"
   field "body" type="bytes"
   doc "Complete HTTP response. The head is at most the kernel HEAD_BUF size."
 }
 
-message "WsConnectRequest" id=40 version=1 {
+message "WsConnectRequest" id=40 version=1 max-bytes=4194304 {
   field "url" type="str"
   doc "Guest WebSocket URL presented to the application transport."
 }
 
-message "WsConnectResponse" id=41 version=1 {
+message "WsConnectResponse" id=41 version=1 max-bytes=1048576 {
   field "failed" type="bool"
   doc "Handshake completion. A failed handshake wakes the guest with an error."
 }
 
-message "WsSendRequest" id=42 version=1 {
+message "WsSendRequest" id=42 version=1 max-bytes=4194304 {
   field "data" type="bytes"
   doc "One guest WebSocket message held under the per-socket send credit."
 }
 
-message "WsSendResponse" id=43 version=1 {
+message "WsSendResponse" id=43 version=1 max-bytes=1048576 {
   field "failed" type="bool"
   doc "Send completion releases credit; failure closes the guest socket."
 }
 
-message "WsCloseEvent" id=44 version=1 {
+message "WsCloseEvent" id=44 version=1 max-bytes=1048576 {
   field "reason" type="u32"
   doc "Close notification for an application-owned WebSocket connection."
 }
 
-message "CatalogRecord" id=45 version=1 {
+message "CatalogRecord" id=45 version=1 max-bytes=18874368 {
   field "sha" type="str"
   field "bytes" type="bytes"
   doc "One complete content-addressed catalog shard to stage before apply."
 }
 
-message "CatalogApplyRequest" id=46 version=1 {
+message "CatalogApplyRequest" id=46 version=1 max-bytes=18874368 {
   field "index_json" type="bytes"
   field "base_digest" type="str"
   field "records" type="list<CatalogRecord>"
   doc "Transactional live catalog update. Base digest is required; every indexed shard is supplied."
 }
 
-message "HostToolAttachment" id=47 version=1 {
+message "HostToolAttachment" id=47 version=1 max-bytes=1048576 {
   field "address" type="str"
   field "description" type="str"
   field "binding_name" type="str"
@@ -613,17 +613,17 @@ message "HostToolAttachment" id=47 version=1 {
   doc "Host tool definition supplied with a strict restore plan. Its shard must match the restored catalog exactly."
 }
 
-message "ConnectionOrigin" id=54 version=1 {
+message "ConnectionOrigin" id=54 version=1 max-bytes=1048576 {
   field "value" type="str"
 }
 
-message "ConnectionIdentity" id=53 version=1 {
+message "ConnectionIdentity" id=53 version=1 max-bytes=1048576 {
   field "reference" type="str"
   field "origins" type="list<ConnectionOrigin>"
   doc "The non-secret connection authority that strict restore must reattach."
 }
 
-message "SnapshotAttachmentManifest" id=48 version=2 {
+message "SnapshotAttachmentManifest" id=48 version=2 max-bytes=1048576 {
   field "content_digest" type="bytes"
   field "routes" type="list<HostCallAttachment>"
   field "persist_identity" type="str" opt=1
@@ -634,7 +634,7 @@ message "SnapshotAttachmentManifest" id=48 version=2 {
   doc "Non-secret companion metadata for an exact MCSN and its native attachment identities."
 }
 
-message "ConnectionAttachment" id=49 version=1 {
+message "ConnectionAttachment" id=49 version=1 max-bytes=1048576 {
   field "reference" type="str"
   field "credential_kind" type="str"
   field "credential_a" type="str"
@@ -643,14 +643,14 @@ message "ConnectionAttachment" id=49 version=1 {
   doc "A private credential and its explicit allowed origins. Secret fields never enter snapshot metadata."
 }
 
-message "ConnectionPolicyAttachment" id=50 version=1 {
+message "ConnectionPolicyAttachment" id=50 version=1 max-bytes=1048576 {
   field "owner" type="str"
   field "pattern" type="str"
   field "action" type="str"
   doc "One rule for the shared host connection policy engine."
 }
 
-message "ToolApprovalRequest" id=51 version=1 {
+message "ToolApprovalRequest" id=51 version=1 max-bytes=4194304 {
   field "connection" type="str"
   field "method" type="str"
   field "url" type="str"
@@ -659,13 +659,13 @@ message "ToolApprovalRequest" id=51 version=1 {
   doc "Host-computed non-secret facts for one pending native HTTP request."
 }
 
-message "ToolApprovalResponse" id=52 version=1 {
+message "ToolApprovalResponse" id=52 version=1 max-bytes=1048576 {
   field "allow" type="bool"
   field "remember_session" type="bool"
   doc "One approval decision for the waiting native HTTP request."
 }
 
-message "LiveAttachmentManifest" id=55 version=1 {
+message "LiveAttachmentManifest" id=55 version=1 max-bytes=1048576 {
   field "routes" type="list<HostCallAttachment>"
   field "persist_identity" type="str" opt=1
   field "http_identity" type="str" opt=1

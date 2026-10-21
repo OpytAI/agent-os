@@ -12,6 +12,16 @@ static void need(int condition, const char *step) {
 }
 
 int main(int argc, char **argv) {
+  mc_host_wire_effect_cancel cancel = {17};
+  uint8_t frame[MC_HOST_WIRE_EFFECT_CANCEL_MAX_FRAME_BYTES + 1] = {0};
+  size_t required = 0;
+  need(mc_host_wire_encode_effect_cancel(&cancel, frame, sizeof(frame), &required) ==
+           MC_HOST_WIRE_OK, "encode bounded native frame");
+  need(mc_host_wire_decode_effect_cancel(frame, required, &cancel) ==
+           MC_HOST_WIRE_OK && cancel.original_event_id == 17,
+       "decode bounded native frame");
+  need(mc_host_wire_decode_effect_cancel(frame, sizeof(frame), &cancel) ==
+           MC_HOST_WIRE_TOO_LARGE, "reject oversized native frame");
   need(argc == 2, "library argument");
   void *lib = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
   need(lib != NULL, "dlopen");

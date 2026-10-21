@@ -1060,6 +1060,7 @@ struct Message {
     name: String,
     id: u16,
     version: u8,
+    max_bytes: Option<usize>,
     fields: Vec<MessageField>,
     doc: String,
 }
@@ -1104,6 +1105,14 @@ fn collect_codec_messages(nodes: &[Node]) -> Vec<Message> {
             name: n.arg_str(0).to_string(),
             id: n.props.get("id").map(Val::as_int).unwrap_or(0) as u16,
             version: n.props.get("version").map(Val::as_int).unwrap_or(1) as u8,
+            max_bytes: n.props.get("max-bytes").map(|value| {
+                let limit = value.as_int();
+                assert!(
+                    limit > 0 && limit <= u32::MAX as i64,
+                    "message max-bytes must be a positive u32"
+                );
+                limit as usize
+            }),
             fields: n
                 .children_named("field")
                 .map(|f| MessageField {
@@ -1655,7 +1664,11 @@ fn emit_rust_messages(messages: &[Message]) -> String {
     let mut o = String::new();
     o.push_str("#![allow(dead_code)]\n\nextern crate alloc;\nuse alloc::collections::BTreeMap;\nuse alloc::string::String;\nuse alloc::vec::Vec;\n\n");
     o.push_str("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n");
-    o.push_str("pub enum WireError { WrongMessage, UnsupportedVersion, Truncated, InvalidUtf8, NonCanonicalMap, InvalidPresence, TrailingBytes }\n\n");
+    if messages.iter().any(|message| message.max_bytes.is_some()) {
+        o.push_str("pub enum WireError { WrongMessage, UnsupportedVersion, Truncated, InvalidUtf8, NonCanonicalMap, InvalidPresence, TrailingBytes, TooLarge }\n\n");
+    } else {
+        o.push_str("pub enum WireError { WrongMessage, UnsupportedVersion, Truncated, InvalidUtf8, NonCanonicalMap, InvalidPresence, TrailingBytes }\n\n");
+    }
     o.push_str(
         "fn ctl_put_u16(out: &mut Vec<u8>, v: u16) { out.extend_from_slice(&v.to_le_bytes()); }\n",
     );
@@ -1713,6 +1726,11 @@ fn emit_rust_messages(messages: &[Message]) -> String {
             "pub const {const_prefix}_VERSION: u8 = {};\n",
             m.version
         ));
+        if let Some(max_bytes) = m.max_bytes {
+            o.push_str(&format!(
+                "pub const {const_prefix}_MAX_FRAME_BYTES: usize = {max_bytes};\n"
+            ));
+        }
         o.push_str(&format!("impl {} {{\n", m.name));
         o.push_str("    pub fn encode(&self) -> Vec<u8> {\n");
         o.push_str("        let mut out = Vec::new();\n");
@@ -1736,6 +1754,9 @@ fn emit_rust_messages(messages: &[Message]) -> String {
         }
         o.push_str("        out\n    }\n\n");
         o.push_str("    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {\n");
+        if m.max_bytes.is_some() {
+            o.push_str(&format!("        if bytes.len() > {const_prefix}_MAX_FRAME_BYTES {{ return Err(WireError::TooLarge); }}\n"));
+        }
         let shadows_input = m.fields.iter().any(|field| field.name == "bytes");
         if shadows_input {
             o.push_str("        let frame_len = bytes.len();\n");
@@ -2747,6 +2768,16 @@ fn emit_embedder(lang: &str, nodes: &[Node], contract: &str) -> String {
                         .get("align")
                         .expect("embedder layout align")
                         .as_int(),
+                ));
+            }
+            out.push_str("\n| Message | ID | Version | Maximum frame bytes |\n| --- | ---: | ---: | ---: |\n");
+            for message in collect_codec_messages(nodes) {
+                out.push_str(&format!(
+                    "| `{}` | {} | {} | {} |\n",
+                    message.name,
+                    message.id,
+                    message.version,
+                    message.max_bytes.expect("embedder message frame limit"),
                 ));
             }
             out

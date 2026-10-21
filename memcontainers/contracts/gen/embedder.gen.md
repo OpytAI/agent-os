@@ -198,3 +198,42 @@ ABI **1.0**.
 | `EFFECT_INFO` | 24 | 8 |
 | `EFFECT_STATS` | 80 | 8 |
 | `EFFECT_API` | 120 | 8 |
+
+| Message | ID | Version | Maximum frame bytes |
+| --- | ---: | ---: | ---: |
+| `AttachmentDefinition` | 20 | 1 | 1048576 |
+| `OperationRequest` | 21 | 1 | 18874368 |
+| `OperationResult` | 22 | 1 | 16777216 |
+| `EffectEvent` | 23 | 1 | 4194368 |
+| `EffectResponse` | 24 | 1 | 16777344 |
+| `AttachmentManifestEntry` | 25 | 1 | 1048576 |
+| `AttachmentManifest` | 26 | 1 | 1048576 |
+| `FilesystemRequest` | 27 | 1 | 18874368 |
+| `LayerCommitResult` | 28 | 1 | 16777216 |
+| `HostCallAttachment` | 29 | 1 | 1048576 |
+| `MountRequest` | 30 | 1 | 1048576 |
+| `HostCallEvent` | 31 | 1 | 4194304 |
+| `HostCallResponse` | 32 | 1 | 16777216 |
+| `EffectCancel` | 33 | 1 | 64 |
+| `PersistAttachment` | 34 | 1 | 1048576 |
+| `PersistEffectRequest` | 35 | 1 | 4194304 |
+| `PersistEffectResponse` | 36 | 1 | 16777216 |
+| `HttpApplicationAttachment` | 37 | 1 | 1048576 |
+| `HttpEffectRequest` | 38 | 1 | 4194304 |
+| `HttpEffectResponse` | 39 | 1 | 16777216 |
+| `WsConnectRequest` | 40 | 1 | 4194304 |
+| `WsConnectResponse` | 41 | 1 | 1048576 |
+| `WsSendRequest` | 42 | 1 | 4194304 |
+| `WsSendResponse` | 43 | 1 | 1048576 |
+| `WsCloseEvent` | 44 | 1 | 1048576 |
+| `CatalogRecord` | 45 | 1 | 18874368 |
+| `CatalogApplyRequest` | 46 | 1 | 18874368 |
+| `HostToolAttachment` | 47 | 1 | 1048576 |
+| `ConnectionOrigin` | 54 | 1 | 1048576 |
+| `ConnectionIdentity` | 53 | 1 | 1048576 |
+| `SnapshotAttachmentManifest` | 48 | 2 | 1048576 |
+| `ConnectionAttachment` | 49 | 1 | 1048576 |
+| `ConnectionPolicyAttachment` | 50 | 1 | 1048576 |
+| `ToolApprovalRequest` | 51 | 1 | 4194304 |
+| `ToolApprovalResponse` | 52 | 1 | 1048576 |
+| `LiveAttachmentManifest` | 55 | 1 | 1048576 |

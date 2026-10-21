@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use ctl_rust::{DirEntries, ExecArg, ExecRequest, RelayEvent, WireError as ControlWireError};
+use embedder_rust::{EffectCancel, WireError as EmbedderWireError, EFFECT_CANCEL_MAX_FRAME_BYTES};
 use llb_rust::{
     BuildArg, BuildOp, Definition, DigestEdge, LayerRef, NodeDigest, WireError as LlbWireError,
 };
@@ -31,6 +32,14 @@ fn bytes(out: &mut Vec<u8>, value: &[u8]) {
 
 fn str_bytes(out: &mut Vec<u8>, value: &str) {
     bytes(out, value.as_bytes());
+}
+
+#[test]
+fn native_frame_limit_rejects_oversized_input_before_parsing() {
+    let frame = EffectCancel { original_event_id: 17 }.encode();
+    assert_eq!(EffectCancel::decode(&frame).unwrap().original_event_id, 17);
+    let oversized = vec![0_u8; EFFECT_CANCEL_MAX_FRAME_BYTES + 1];
+    assert_eq!(EffectCancel::decode(&oversized), Err(EmbedderWireError::TooLarge));
 }
 
 fn non_canonical_exec_request_frame() -> Vec<u8> {

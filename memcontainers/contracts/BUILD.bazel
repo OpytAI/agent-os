@@ -245,6 +245,7 @@ rust_test(
     edition = "2021",
     deps = [
         ":ctl_rust",
+        ":embedder_rust",
         ":llb_rust",
     ],
 )

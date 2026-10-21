@@ -22,7 +22,8 @@ typedef enum mc_host_wire_result {
     MC_HOST_WIRE_INVALID_PRESENCE = 7,
     MC_HOST_WIRE_TRAILING_BYTES = 8,
     MC_HOST_WIRE_OVERFLOW = 9,
-    MC_HOST_WIRE_NON_CANONICAL_MAP = 10
+    MC_HOST_WIRE_NON_CANONICAL_MAP = 10,
+    MC_HOST_WIRE_TOO_LARGE = 11
 } mc_host_wire_result;
 
 typedef struct mc_host_wire_bytes {

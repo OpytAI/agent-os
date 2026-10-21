@@ -173,7 +173,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WireError { WrongMessage, UnsupportedVersion, Truncated, InvalidUtf8, NonCanonicalMap, InvalidPresence, TrailingBytes }
+pub enum WireError { WrongMessage, UnsupportedVersion, Truncated, InvalidUtf8, NonCanonicalMap, InvalidPresence, TrailingBytes, TooLarge }
 
 fn ctl_put_u16(out: &mut Vec<u8>, v: u16) { out.extend_from_slice(&v.to_le_bytes()); }
 fn ctl_put_u32(out: &mut Vec<u8>, v: u32) { out.extend_from_slice(&v.to_le_bytes()); }
@@ -206,6 +206,7 @@ pub struct AttachmentDefinition {
 
 pub const ATTACHMENT_DEFINITION_MSG_ID: u16 = 20;
 pub const ATTACHMENT_DEFINITION_VERSION: u8 = 1;
+pub const ATTACHMENT_DEFINITION_MAX_FRAME_BYTES: usize = 1048576;
 impl AttachmentDefinition {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -217,6 +218,7 @@ impl AttachmentDefinition {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > ATTACHMENT_DEFINITION_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != ATTACHMENT_DEFINITION_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != ATTACHMENT_DEFINITION_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -239,6 +241,7 @@ pub struct OperationRequest {
 
 pub const OPERATION_REQUEST_MSG_ID: u16 = 21;
 pub const OPERATION_REQUEST_VERSION: u8 = 1;
+pub const OPERATION_REQUEST_MAX_FRAME_BYTES: usize = 18874368;
 impl OperationRequest {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -250,6 +253,7 @@ impl OperationRequest {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > OPERATION_REQUEST_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != OPERATION_REQUEST_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != OPERATION_REQUEST_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -273,6 +277,7 @@ pub struct OperationResult {
 
 pub const OPERATION_RESULT_MSG_ID: u16 = 22;
 pub const OPERATION_RESULT_VERSION: u8 = 1;
+pub const OPERATION_RESULT_MAX_FRAME_BYTES: usize = 16777216;
 impl OperationResult {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -285,6 +290,7 @@ impl OperationResult {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > OPERATION_RESULT_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != OPERATION_RESULT_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != OPERATION_RESULT_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -314,6 +320,7 @@ pub struct EffectEvent {
 
 pub const EFFECT_EVENT_MSG_ID: u16 = 23;
 pub const EFFECT_EVENT_VERSION: u8 = 1;
+pub const EFFECT_EVENT_MAX_FRAME_BYTES: usize = 4194368;
 impl EffectEvent {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -342,6 +349,7 @@ impl EffectEvent {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > EFFECT_EVENT_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != EFFECT_EVENT_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != EFFECT_EVENT_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -383,6 +391,7 @@ pub struct EffectResponse {
 
 pub const EFFECT_RESPONSE_MSG_ID: u16 = 24;
 pub const EFFECT_RESPONSE_VERSION: u8 = 1;
+pub const EFFECT_RESPONSE_MAX_FRAME_BYTES: usize = 16777344;
 impl EffectResponse {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -395,6 +404,7 @@ impl EffectResponse {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > EFFECT_RESPONSE_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != EFFECT_RESPONSE_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != EFFECT_RESPONSE_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -420,6 +430,7 @@ pub struct AttachmentManifestEntry {
 
 pub const ATTACHMENT_MANIFEST_ENTRY_MSG_ID: u16 = 25;
 pub const ATTACHMENT_MANIFEST_ENTRY_VERSION: u8 = 1;
+pub const ATTACHMENT_MANIFEST_ENTRY_MAX_FRAME_BYTES: usize = 1048576;
 impl AttachmentManifestEntry {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -432,6 +443,7 @@ impl AttachmentManifestEntry {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > ATTACHMENT_MANIFEST_ENTRY_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != ATTACHMENT_MANIFEST_ENTRY_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != ATTACHMENT_MANIFEST_ENTRY_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -455,6 +467,7 @@ pub struct AttachmentManifest {
 
 pub const ATTACHMENT_MANIFEST_MSG_ID: u16 = 26;
 pub const ATTACHMENT_MANIFEST_VERSION: u8 = 1;
+pub const ATTACHMENT_MANIFEST_MAX_FRAME_BYTES: usize = 1048576;
 impl AttachmentManifest {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -465,6 +478,7 @@ impl AttachmentManifest {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > ATTACHMENT_MANIFEST_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != ATTACHMENT_MANIFEST_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != ATTACHMENT_MANIFEST_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -487,6 +501,7 @@ pub struct FilesystemRequest {
 
 pub const FILESYSTEM_REQUEST_MSG_ID: u16 = 27;
 pub const FILESYSTEM_REQUEST_VERSION: u8 = 1;
+pub const FILESYSTEM_REQUEST_MAX_FRAME_BYTES: usize = 18874368;
 impl FilesystemRequest {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -518,6 +533,7 @@ impl FilesystemRequest {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > FILESYSTEM_REQUEST_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != FILESYSTEM_REQUEST_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != FILESYSTEM_REQUEST_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -556,6 +572,7 @@ pub struct LayerCommitResult {
 
 pub const LAYER_COMMIT_RESULT_MSG_ID: u16 = 28;
 pub const LAYER_COMMIT_RESULT_VERSION: u8 = 1;
+pub const LAYER_COMMIT_RESULT_MAX_FRAME_BYTES: usize = 16777216;
 impl LayerCommitResult {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -567,6 +584,7 @@ impl LayerCommitResult {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > LAYER_COMMIT_RESULT_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != LAYER_COMMIT_RESULT_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != LAYER_COMMIT_RESULT_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -589,6 +607,7 @@ pub struct HostCallAttachment {
 
 pub const HOST_CALL_ATTACHMENT_MSG_ID: u16 = 29;
 pub const HOST_CALL_ATTACHMENT_VERSION: u8 = 1;
+pub const HOST_CALL_ATTACHMENT_MAX_FRAME_BYTES: usize = 1048576;
 impl HostCallAttachment {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -600,6 +619,7 @@ impl HostCallAttachment {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > HOST_CALL_ATTACHMENT_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != HOST_CALL_ATTACHMENT_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != HOST_CALL_ATTACHMENT_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -622,6 +642,7 @@ pub struct MountRequest {
 
 pub const MOUNT_REQUEST_MSG_ID: u16 = 30;
 pub const MOUNT_REQUEST_VERSION: u8 = 1;
+pub const MOUNT_REQUEST_MAX_FRAME_BYTES: usize = 1048576;
 impl MountRequest {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -633,6 +654,7 @@ impl MountRequest {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > MOUNT_REQUEST_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != MOUNT_REQUEST_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != MOUNT_REQUEST_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -655,6 +677,7 @@ pub struct HostCallEvent {
 
 pub const HOST_CALL_EVENT_MSG_ID: u16 = 31;
 pub const HOST_CALL_EVENT_VERSION: u8 = 1;
+pub const HOST_CALL_EVENT_MAX_FRAME_BYTES: usize = 4194304;
 impl HostCallEvent {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -666,6 +689,7 @@ impl HostCallEvent {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > HOST_CALL_EVENT_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != HOST_CALL_EVENT_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != HOST_CALL_EVENT_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -688,6 +712,7 @@ pub struct HostCallResponse {
 
 pub const HOST_CALL_RESPONSE_MSG_ID: u16 = 32;
 pub const HOST_CALL_RESPONSE_VERSION: u8 = 1;
+pub const HOST_CALL_RESPONSE_MAX_FRAME_BYTES: usize = 16777216;
 impl HostCallResponse {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -699,6 +724,7 @@ impl HostCallResponse {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > HOST_CALL_RESPONSE_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != HOST_CALL_RESPONSE_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != HOST_CALL_RESPONSE_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -720,6 +746,7 @@ pub struct EffectCancel {
 
 pub const EFFECT_CANCEL_MSG_ID: u16 = 33;
 pub const EFFECT_CANCEL_VERSION: u8 = 1;
+pub const EFFECT_CANCEL_MAX_FRAME_BYTES: usize = 64;
 impl EffectCancel {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -730,6 +757,7 @@ impl EffectCancel {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > EFFECT_CANCEL_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != EFFECT_CANCEL_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != EFFECT_CANCEL_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -749,6 +777,7 @@ pub struct PersistAttachment {
 
 pub const PERSIST_ATTACHMENT_MSG_ID: u16 = 34;
 pub const PERSIST_ATTACHMENT_VERSION: u8 = 1;
+pub const PERSIST_ATTACHMENT_MAX_FRAME_BYTES: usize = 1048576;
 impl PersistAttachment {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -759,6 +788,7 @@ impl PersistAttachment {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > PERSIST_ATTACHMENT_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != PERSIST_ATTACHMENT_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != PERSIST_ATTACHMENT_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -779,6 +809,7 @@ pub struct PersistEffectRequest {
 
 pub const PERSIST_EFFECT_REQUEST_MSG_ID: u16 = 35;
 pub const PERSIST_EFFECT_REQUEST_VERSION: u8 = 1;
+pub const PERSIST_EFFECT_REQUEST_MAX_FRAME_BYTES: usize = 4194304;
 impl PersistEffectRequest {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -796,6 +827,7 @@ impl PersistEffectRequest {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > PERSIST_EFFECT_REQUEST_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != PERSIST_EFFECT_REQUEST_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != PERSIST_EFFECT_REQUEST_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -822,6 +854,7 @@ pub struct PersistEffectResponse {
 
 pub const PERSIST_EFFECT_RESPONSE_MSG_ID: u16 = 36;
 pub const PERSIST_EFFECT_RESPONSE_VERSION: u8 = 1;
+pub const PERSIST_EFFECT_RESPONSE_MAX_FRAME_BYTES: usize = 16777216;
 impl PersistEffectResponse {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -833,6 +866,7 @@ impl PersistEffectResponse {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > PERSIST_EFFECT_RESPONSE_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != PERSIST_EFFECT_RESPONSE_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != PERSIST_EFFECT_RESPONSE_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -854,6 +888,7 @@ pub struct HttpApplicationAttachment {
 
 pub const HTTP_APPLICATION_ATTACHMENT_MSG_ID: u16 = 37;
 pub const HTTP_APPLICATION_ATTACHMENT_VERSION: u8 = 1;
+pub const HTTP_APPLICATION_ATTACHMENT_MAX_FRAME_BYTES: usize = 1048576;
 impl HttpApplicationAttachment {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -864,6 +899,7 @@ impl HttpApplicationAttachment {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > HTTP_APPLICATION_ATTACHMENT_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != HTTP_APPLICATION_ATTACHMENT_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != HTTP_APPLICATION_ATTACHMENT_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -883,6 +919,7 @@ pub struct HttpEffectRequest {
 
 pub const HTTP_EFFECT_REQUEST_MSG_ID: u16 = 38;
 pub const HTTP_EFFECT_REQUEST_VERSION: u8 = 1;
+pub const HTTP_EFFECT_REQUEST_MAX_FRAME_BYTES: usize = 4194304;
 impl HttpEffectRequest {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -893,6 +930,7 @@ impl HttpEffectRequest {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > HTTP_EFFECT_REQUEST_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != HTTP_EFFECT_REQUEST_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != HTTP_EFFECT_REQUEST_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -914,6 +952,7 @@ pub struct HttpEffectResponse {
 
 pub const HTTP_EFFECT_RESPONSE_MSG_ID: u16 = 39;
 pub const HTTP_EFFECT_RESPONSE_VERSION: u8 = 1;
+pub const HTTP_EFFECT_RESPONSE_MAX_FRAME_BYTES: usize = 16777216;
 impl HttpEffectResponse {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -926,6 +965,7 @@ impl HttpEffectResponse {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > HTTP_EFFECT_RESPONSE_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != HTTP_EFFECT_RESPONSE_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != HTTP_EFFECT_RESPONSE_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -949,6 +989,7 @@ pub struct WsConnectRequest {
 
 pub const WS_CONNECT_REQUEST_MSG_ID: u16 = 40;
 pub const WS_CONNECT_REQUEST_VERSION: u8 = 1;
+pub const WS_CONNECT_REQUEST_MAX_FRAME_BYTES: usize = 4194304;
 impl WsConnectRequest {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -959,6 +1000,7 @@ impl WsConnectRequest {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > WS_CONNECT_REQUEST_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != WS_CONNECT_REQUEST_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != WS_CONNECT_REQUEST_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -978,6 +1020,7 @@ pub struct WsConnectResponse {
 
 pub const WS_CONNECT_RESPONSE_MSG_ID: u16 = 41;
 pub const WS_CONNECT_RESPONSE_VERSION: u8 = 1;
+pub const WS_CONNECT_RESPONSE_MAX_FRAME_BYTES: usize = 1048576;
 impl WsConnectResponse {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -988,6 +1031,7 @@ impl WsConnectResponse {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > WS_CONNECT_RESPONSE_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != WS_CONNECT_RESPONSE_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != WS_CONNECT_RESPONSE_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -1007,6 +1051,7 @@ pub struct WsSendRequest {
 
 pub const WS_SEND_REQUEST_MSG_ID: u16 = 42;
 pub const WS_SEND_REQUEST_VERSION: u8 = 1;
+pub const WS_SEND_REQUEST_MAX_FRAME_BYTES: usize = 4194304;
 impl WsSendRequest {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1017,6 +1062,7 @@ impl WsSendRequest {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > WS_SEND_REQUEST_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != WS_SEND_REQUEST_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != WS_SEND_REQUEST_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -1036,6 +1082,7 @@ pub struct WsSendResponse {
 
 pub const WS_SEND_RESPONSE_MSG_ID: u16 = 43;
 pub const WS_SEND_RESPONSE_VERSION: u8 = 1;
+pub const WS_SEND_RESPONSE_MAX_FRAME_BYTES: usize = 1048576;
 impl WsSendResponse {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1046,6 +1093,7 @@ impl WsSendResponse {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > WS_SEND_RESPONSE_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != WS_SEND_RESPONSE_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != WS_SEND_RESPONSE_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -1065,6 +1113,7 @@ pub struct WsCloseEvent {
 
 pub const WS_CLOSE_EVENT_MSG_ID: u16 = 44;
 pub const WS_CLOSE_EVENT_VERSION: u8 = 1;
+pub const WS_CLOSE_EVENT_MAX_FRAME_BYTES: usize = 1048576;
 impl WsCloseEvent {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1075,6 +1124,7 @@ impl WsCloseEvent {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > WS_CLOSE_EVENT_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != WS_CLOSE_EVENT_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != WS_CLOSE_EVENT_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -1095,6 +1145,7 @@ pub struct CatalogRecord {
 
 pub const CATALOG_RECORD_MSG_ID: u16 = 45;
 pub const CATALOG_RECORD_VERSION: u8 = 1;
+pub const CATALOG_RECORD_MAX_FRAME_BYTES: usize = 18874368;
 impl CatalogRecord {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1106,6 +1157,7 @@ impl CatalogRecord {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > CATALOG_RECORD_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let frame_len = bytes.len();
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != CATALOG_RECORD_MSG_ID { return Err(WireError::WrongMessage); }
@@ -1130,6 +1182,7 @@ pub struct CatalogApplyRequest {
 
 pub const CATALOG_APPLY_REQUEST_MSG_ID: u16 = 46;
 pub const CATALOG_APPLY_REQUEST_VERSION: u8 = 1;
+pub const CATALOG_APPLY_REQUEST_MAX_FRAME_BYTES: usize = 18874368;
 impl CatalogApplyRequest {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1142,6 +1195,7 @@ impl CatalogApplyRequest {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > CATALOG_APPLY_REQUEST_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != CATALOG_APPLY_REQUEST_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != CATALOG_APPLY_REQUEST_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -1171,6 +1225,7 @@ pub struct HostToolAttachment {
 
 pub const HOST_TOOL_ATTACHMENT_MSG_ID: u16 = 47;
 pub const HOST_TOOL_ATTACHMENT_VERSION: u8 = 1;
+pub const HOST_TOOL_ATTACHMENT_MAX_FRAME_BYTES: usize = 1048576;
 impl HostToolAttachment {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1205,6 +1260,7 @@ impl HostToolAttachment {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > HOST_TOOL_ATTACHMENT_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != HOST_TOOL_ATTACHMENT_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != HOST_TOOL_ATTACHMENT_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -1247,6 +1303,7 @@ pub struct ConnectionOrigin {
 
 pub const CONNECTION_ORIGIN_MSG_ID: u16 = 54;
 pub const CONNECTION_ORIGIN_VERSION: u8 = 1;
+pub const CONNECTION_ORIGIN_MAX_FRAME_BYTES: usize = 1048576;
 impl ConnectionOrigin {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1257,6 +1314,7 @@ impl ConnectionOrigin {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > CONNECTION_ORIGIN_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != CONNECTION_ORIGIN_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != CONNECTION_ORIGIN_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -1277,6 +1335,7 @@ pub struct ConnectionIdentity {
 
 pub const CONNECTION_IDENTITY_MSG_ID: u16 = 53;
 pub const CONNECTION_IDENTITY_VERSION: u8 = 1;
+pub const CONNECTION_IDENTITY_MAX_FRAME_BYTES: usize = 1048576;
 impl ConnectionIdentity {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1288,6 +1347,7 @@ impl ConnectionIdentity {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > CONNECTION_IDENTITY_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != CONNECTION_IDENTITY_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != CONNECTION_IDENTITY_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -1315,6 +1375,7 @@ pub struct SnapshotAttachmentManifest {
 
 pub const SNAPSHOT_ATTACHMENT_MANIFEST_MSG_ID: u16 = 48;
 pub const SNAPSHOT_ATTACHMENT_MANIFEST_VERSION: u8 = 2;
+pub const SNAPSHOT_ATTACHMENT_MANIFEST_MAX_FRAME_BYTES: usize = 1048576;
 impl SnapshotAttachmentManifest {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1349,6 +1410,7 @@ impl SnapshotAttachmentManifest {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > SNAPSHOT_ATTACHMENT_MANIFEST_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != SNAPSHOT_ATTACHMENT_MANIFEST_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != SNAPSHOT_ATTACHMENT_MANIFEST_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -1396,6 +1458,7 @@ pub struct ConnectionAttachment {
 
 pub const CONNECTION_ATTACHMENT_MSG_ID: u16 = 49;
 pub const CONNECTION_ATTACHMENT_VERSION: u8 = 1;
+pub const CONNECTION_ATTACHMENT_MAX_FRAME_BYTES: usize = 1048576;
 impl ConnectionAttachment {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1410,6 +1473,7 @@ impl ConnectionAttachment {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > CONNECTION_ATTACHMENT_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != CONNECTION_ATTACHMENT_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != CONNECTION_ATTACHMENT_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -1439,6 +1503,7 @@ pub struct ConnectionPolicyAttachment {
 
 pub const CONNECTION_POLICY_ATTACHMENT_MSG_ID: u16 = 50;
 pub const CONNECTION_POLICY_ATTACHMENT_VERSION: u8 = 1;
+pub const CONNECTION_POLICY_ATTACHMENT_MAX_FRAME_BYTES: usize = 1048576;
 impl ConnectionPolicyAttachment {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1451,6 +1516,7 @@ impl ConnectionPolicyAttachment {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > CONNECTION_POLICY_ATTACHMENT_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != CONNECTION_POLICY_ATTACHMENT_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != CONNECTION_POLICY_ATTACHMENT_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -1478,6 +1544,7 @@ pub struct ToolApprovalRequest {
 
 pub const TOOL_APPROVAL_REQUEST_MSG_ID: u16 = 51;
 pub const TOOL_APPROVAL_REQUEST_VERSION: u8 = 1;
+pub const TOOL_APPROVAL_REQUEST_MAX_FRAME_BYTES: usize = 4194304;
 impl ToolApprovalRequest {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1498,6 +1565,7 @@ impl ToolApprovalRequest {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > TOOL_APPROVAL_REQUEST_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != TOOL_APPROVAL_REQUEST_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != TOOL_APPROVAL_REQUEST_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -1530,6 +1598,7 @@ pub struct ToolApprovalResponse {
 
 pub const TOOL_APPROVAL_RESPONSE_MSG_ID: u16 = 52;
 pub const TOOL_APPROVAL_RESPONSE_VERSION: u8 = 1;
+pub const TOOL_APPROVAL_RESPONSE_MAX_FRAME_BYTES: usize = 1048576;
 impl ToolApprovalResponse {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1541,6 +1610,7 @@ impl ToolApprovalResponse {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > TOOL_APPROVAL_RESPONSE_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != TOOL_APPROVAL_RESPONSE_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != TOOL_APPROVAL_RESPONSE_VERSION { return Err(WireError::UnsupportedVersion); }
@@ -1567,6 +1637,7 @@ pub struct LiveAttachmentManifest {
 
 pub const LIVE_ATTACHMENT_MANIFEST_MSG_ID: u16 = 55;
 pub const LIVE_ATTACHMENT_MANIFEST_VERSION: u8 = 1;
+pub const LIVE_ATTACHMENT_MANIFEST_MAX_FRAME_BYTES: usize = 1048576;
 impl LiveAttachmentManifest {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
@@ -1600,6 +1671,7 @@ impl LiveAttachmentManifest {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > LIVE_ATTACHMENT_MANIFEST_MAX_FRAME_BYTES { return Err(WireError::TooLarge); }
         let mut off = 0usize;
         if ctl_read_u16(bytes, &mut off)? != LIVE_ATTACHMENT_MANIFEST_MSG_ID { return Err(WireError::WrongMessage); }
         if ctl_read_u8(bytes, &mut off)? != LIVE_ATTACHMENT_MANIFEST_VERSION { return Err(WireError::UnsupportedVersion); }

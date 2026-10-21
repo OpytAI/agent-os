@@ -62,7 +62,8 @@ typedef enum mc_host_wire_result {
     MC_HOST_WIRE_INVALID_PRESENCE = 7,
     MC_HOST_WIRE_TRAILING_BYTES = 8,
     MC_HOST_WIRE_OVERFLOW = 9,
-    MC_HOST_WIRE_NON_CANONICAL_MAP = 10
+    MC_HOST_WIRE_NON_CANONICAL_MAP = 10,
+    MC_HOST_WIRE_TOO_LARGE = 11
 } mc_host_wire_result;
 
 typedef struct mc_host_wire_bytes {
@@ -290,6 +291,14 @@ static inline mc_host_wire_result mc_host_wire_list_append(mc_host_wire_list *li
 fn emit_message(out: &mut String, message: &Message) {
     let name = snake(&message.name);
     let ctype = format!("mc_host_wire_{name}");
+    if let Some(max_bytes) = message.max_bytes {
+        writeln!(
+            out,
+            "#define MC_HOST_WIRE_{}_MAX_FRAME_BYTES ((size_t)UINT32_C({max_bytes}))",
+            super::screaming_snake(&message.name)
+        )
+        .unwrap();
+    }
     writeln!(out, "\ntypedef struct {ctype} {{").unwrap();
     for field in &message.fields {
         if field.optional {
@@ -301,6 +310,13 @@ fn emit_message(out: &mut String, message: &Message) {
 
     writeln!(out, "static inline mc_host_wire_result mc_host_wire_decode_{name}(const uint8_t *data, size_t len, {ctype} *out) {{").unwrap();
     out.push_str("    if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;\n");
+    if let Some(max_bytes) = message.max_bytes {
+        writeln!(
+            out,
+            "    if (len > {max_bytes}) return MC_HOST_WIRE_TOO_LARGE;"
+        )
+        .unwrap();
+    }
     out.push_str("    memset(out, 0, sizeof(*out));\n");
     out.push_str("    mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};\n");
     writeln!(out, "    if (mc_host_wire_get_u16(&r) != {} && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;", message.id).unwrap();
@@ -353,6 +369,13 @@ fn emit_message(out: &mut String, message: &Message) {
         }
     }
     out.push_str("        if (w.error != MC_HOST_WIRE_OK) return w.error;\n");
+    if let Some(max_bytes) = message.max_bytes {
+        writeln!(
+            out,
+            "        if (w.off > {max_bytes}) return MC_HOST_WIRE_TOO_LARGE;"
+        )
+        .unwrap();
+    }
     out.push_str("        if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }\n");
     out.push_str("    }\n    return MC_HOST_WIRE_OK;\n}\n");
 }

@@ -448,7 +448,8 @@ typedef enum mc_host_wire_result {
     MC_HOST_WIRE_INVALID_PRESENCE = 7,
     MC_HOST_WIRE_TRAILING_BYTES = 8,
     MC_HOST_WIRE_OVERFLOW = 9,
-    MC_HOST_WIRE_NON_CANONICAL_MAP = 10
+    MC_HOST_WIRE_NON_CANONICAL_MAP = 10,
+    MC_HOST_WIRE_TOO_LARGE = 11
 } mc_host_wire_result;
 
 typedef struct mc_host_wire_bytes {
@@ -665,6 +666,7 @@ static inline mc_host_wire_result mc_host_wire_list_append(mc_host_wire_list *li
     return MC_HOST_WIRE_OK;
 }
 #endif /* MC_HOST_WIRE_COMMON */
+#define MC_HOST_WIRE_ATTACHMENT_DEFINITION_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_attachment_definition {
     uint32_t kind;
@@ -672,6 +674,7 @@ typedef struct mc_host_wire_attachment_definition {
 } mc_host_wire_attachment_definition;
 static inline mc_host_wire_result mc_host_wire_decode_attachment_definition(const uint8_t *data, size_t len, mc_host_wire_attachment_definition *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 20 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -690,10 +693,12 @@ static inline mc_host_wire_result mc_host_wire_encode_attachment_definition(cons
             mc_host_wire_put_u32(&w, (uint32_t)value->kind);
             mc_host_wire_put_bytes(&w, value->payload, 0);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_OPERATION_REQUEST_MAX_FRAME_BYTES ((size_t)UINT32_C(18874368))
 
 typedef struct mc_host_wire_operation_request {
     uint32_t kind;
@@ -701,6 +706,7 @@ typedef struct mc_host_wire_operation_request {
 } mc_host_wire_operation_request;
 static inline mc_host_wire_result mc_host_wire_decode_operation_request(const uint8_t *data, size_t len, mc_host_wire_operation_request *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 18874368) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 21 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -719,10 +725,12 @@ static inline mc_host_wire_result mc_host_wire_encode_operation_request(const mc
             mc_host_wire_put_u32(&w, (uint32_t)value->kind);
             mc_host_wire_put_bytes(&w, value->payload, 0);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 18874368) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_OPERATION_RESULT_MAX_FRAME_BYTES ((size_t)UINT32_C(16777216))
 
 typedef struct mc_host_wire_operation_result {
     uint32_t kind;
@@ -731,6 +739,7 @@ typedef struct mc_host_wire_operation_result {
 } mc_host_wire_operation_result;
 static inline mc_host_wire_result mc_host_wire_decode_operation_result(const uint8_t *data, size_t len, mc_host_wire_operation_result *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 16777216) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 22 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -751,10 +760,12 @@ static inline mc_host_wire_result mc_host_wire_encode_operation_result(const mc_
             mc_host_wire_put_u32(&w, (uint32_t)value->status);
             mc_host_wire_put_bytes(&w, value->payload, 0);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 16777216) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_EFFECT_EVENT_MAX_FRAME_BYTES ((size_t)UINT32_C(4194368))
 
 typedef struct mc_host_wire_effect_event {
     uint32_t kind;
@@ -769,6 +780,7 @@ typedef struct mc_host_wire_effect_event {
 } mc_host_wire_effect_event;
 static inline mc_host_wire_result mc_host_wire_decode_effect_event(const uint8_t *data, size_t len, mc_host_wire_effect_event *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 4194368) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 23 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -811,10 +823,12 @@ static inline mc_host_wire_result mc_host_wire_encode_effect_event(const mc_host
             mc_host_wire_put_u32(&w, (uint32_t)value->flags);
             mc_host_wire_put_bytes(&w, value->payload, 0);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 4194368) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_EFFECT_RESPONSE_MAX_FRAME_BYTES ((size_t)UINT32_C(16777344))
 
 typedef struct mc_host_wire_effect_response {
     uint32_t kind;
@@ -823,6 +837,7 @@ typedef struct mc_host_wire_effect_response {
 } mc_host_wire_effect_response;
 static inline mc_host_wire_result mc_host_wire_decode_effect_response(const uint8_t *data, size_t len, mc_host_wire_effect_response *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 16777344) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 24 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -843,10 +858,12 @@ static inline mc_host_wire_result mc_host_wire_encode_effect_response(const mc_h
             mc_host_wire_put_u64(&w, (uint64_t)value->event_id);
             mc_host_wire_put_bytes(&w, value->payload, 0);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 16777344) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_ATTACHMENT_MANIFEST_ENTRY_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_attachment_manifest_entry {
     uint32_t kind;
@@ -855,6 +872,7 @@ typedef struct mc_host_wire_attachment_manifest_entry {
 } mc_host_wire_attachment_manifest_entry;
 static inline mc_host_wire_result mc_host_wire_decode_attachment_manifest_entry(const uint8_t *data, size_t len, mc_host_wire_attachment_manifest_entry *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 25 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -875,16 +893,19 @@ static inline mc_host_wire_result mc_host_wire_encode_attachment_manifest_entry(
             mc_host_wire_put_bytes(&w, value->identity, 1);
             mc_host_wire_put_bytes(&w, value->digest, 0);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_ATTACHMENT_MANIFEST_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_attachment_manifest {
     mc_host_wire_list entries;
 } mc_host_wire_attachment_manifest;
 static inline mc_host_wire_result mc_host_wire_decode_attachment_manifest(const uint8_t *data, size_t len, mc_host_wire_attachment_manifest *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 26 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -921,10 +942,12 @@ static inline mc_host_wire_result mc_host_wire_encode_attachment_manifest(const 
             mc_host_wire_put(&w, value->entries.data, value->entries.len);
             }
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_FILESYSTEM_REQUEST_MAX_FRAME_BYTES ((size_t)UINT32_C(18874368))
 
 typedef struct mc_host_wire_filesystem_request {
     mc_host_wire_bytes path;
@@ -937,6 +960,7 @@ typedef struct mc_host_wire_filesystem_request {
 } mc_host_wire_filesystem_request;
 static inline mc_host_wire_result mc_host_wire_decode_filesystem_request(const uint8_t *data, size_t len, mc_host_wire_filesystem_request *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 18874368) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 27 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -980,10 +1004,12 @@ static inline mc_host_wire_result mc_host_wire_encode_filesystem_request(const m
             mc_host_wire_put_u32(&w, (uint32_t)value->mode);
         }
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 18874368) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_LAYER_COMMIT_RESULT_MAX_FRAME_BYTES ((size_t)UINT32_C(16777216))
 
 typedef struct mc_host_wire_layer_commit_result {
     mc_host_wire_bytes digest;
@@ -991,6 +1017,7 @@ typedef struct mc_host_wire_layer_commit_result {
 } mc_host_wire_layer_commit_result;
 static inline mc_host_wire_result mc_host_wire_decode_layer_commit_result(const uint8_t *data, size_t len, mc_host_wire_layer_commit_result *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 16777216) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 28 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1009,10 +1036,12 @@ static inline mc_host_wire_result mc_host_wire_encode_layer_commit_result(const 
             mc_host_wire_put_bytes(&w, value->digest, 1);
             mc_host_wire_put_bytes(&w, value->layer, 0);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 16777216) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_HOST_CALL_ATTACHMENT_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_host_call_attachment {
     mc_host_wire_bytes name;
@@ -1020,6 +1049,7 @@ typedef struct mc_host_wire_host_call_attachment {
 } mc_host_wire_host_call_attachment;
 static inline mc_host_wire_result mc_host_wire_decode_host_call_attachment(const uint8_t *data, size_t len, mc_host_wire_host_call_attachment *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 29 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1038,10 +1068,12 @@ static inline mc_host_wire_result mc_host_wire_encode_host_call_attachment(const
             mc_host_wire_put_bytes(&w, value->name, 1);
             mc_host_wire_put_bytes(&w, value->identity, 1);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_MOUNT_REQUEST_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_mount_request {
     mc_host_wire_bytes path;
@@ -1049,6 +1081,7 @@ typedef struct mc_host_wire_mount_request {
 } mc_host_wire_mount_request;
 static inline mc_host_wire_result mc_host_wire_decode_mount_request(const uint8_t *data, size_t len, mc_host_wire_mount_request *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 30 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1068,10 +1101,12 @@ static inline mc_host_wire_result mc_host_wire_encode_mount_request(const mc_hos
             if (value->read_only > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
             mc_host_wire_put_u8(&w, value->read_only);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_HOST_CALL_EVENT_MAX_FRAME_BYTES ((size_t)UINT32_C(4194304))
 
 typedef struct mc_host_wire_host_call_event {
     mc_host_wire_bytes name;
@@ -1079,6 +1114,7 @@ typedef struct mc_host_wire_host_call_event {
 } mc_host_wire_host_call_event;
 static inline mc_host_wire_result mc_host_wire_decode_host_call_event(const uint8_t *data, size_t len, mc_host_wire_host_call_event *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 4194304) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 31 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1097,10 +1133,12 @@ static inline mc_host_wire_result mc_host_wire_encode_host_call_event(const mc_h
             mc_host_wire_put_bytes(&w, value->name, 1);
             mc_host_wire_put_bytes(&w, value->request, 0);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 4194304) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_HOST_CALL_RESPONSE_MAX_FRAME_BYTES ((size_t)UINT32_C(16777216))
 
 typedef struct mc_host_wire_host_call_response {
     uint8_t failed;
@@ -1108,6 +1146,7 @@ typedef struct mc_host_wire_host_call_response {
 } mc_host_wire_host_call_response;
 static inline mc_host_wire_result mc_host_wire_decode_host_call_response(const uint8_t *data, size_t len, mc_host_wire_host_call_response *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 16777216) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 32 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1127,16 +1166,19 @@ static inline mc_host_wire_result mc_host_wire_encode_host_call_response(const m
             mc_host_wire_put_u8(&w, value->failed);
             mc_host_wire_put_bytes(&w, value->body, 0);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 16777216) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_EFFECT_CANCEL_MAX_FRAME_BYTES ((size_t)UINT32_C(64))
 
 typedef struct mc_host_wire_effect_cancel {
     int64_t original_event_id;
 } mc_host_wire_effect_cancel;
 static inline mc_host_wire_result mc_host_wire_decode_effect_cancel(const uint8_t *data, size_t len, mc_host_wire_effect_cancel *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 64) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 33 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1153,16 +1195,19 @@ static inline mc_host_wire_result mc_host_wire_encode_effect_cancel(const mc_hos
         mc_host_wire_put_u8(&w, 1);
             mc_host_wire_put_u64(&w, (uint64_t)value->original_event_id);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 64) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_PERSIST_ATTACHMENT_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_persist_attachment {
     mc_host_wire_bytes identity;
 } mc_host_wire_persist_attachment;
 static inline mc_host_wire_result mc_host_wire_decode_persist_attachment(const uint8_t *data, size_t len, mc_host_wire_persist_attachment *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 34 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1179,10 +1224,12 @@ static inline mc_host_wire_result mc_host_wire_encode_persist_attachment(const m
         mc_host_wire_put_u8(&w, 1);
             mc_host_wire_put_bytes(&w, value->identity, 1);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_PERSIST_EFFECT_REQUEST_MAX_FRAME_BYTES ((size_t)UINT32_C(4194304))
 
 typedef struct mc_host_wire_persist_effect_request {
     mc_host_wire_bytes key;
@@ -1191,6 +1238,7 @@ typedef struct mc_host_wire_persist_effect_request {
 } mc_host_wire_persist_effect_request;
 static inline mc_host_wire_result mc_host_wire_decode_persist_effect_request(const uint8_t *data, size_t len, mc_host_wire_persist_effect_request *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 4194304) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 35 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1216,10 +1264,12 @@ static inline mc_host_wire_result mc_host_wire_encode_persist_effect_request(con
             mc_host_wire_put_bytes(&w, value->value, 0);
         }
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 4194304) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_PERSIST_EFFECT_RESPONSE_MAX_FRAME_BYTES ((size_t)UINT32_C(16777216))
 
 typedef struct mc_host_wire_persist_effect_response {
     uint8_t failed;
@@ -1227,6 +1277,7 @@ typedef struct mc_host_wire_persist_effect_response {
 } mc_host_wire_persist_effect_response;
 static inline mc_host_wire_result mc_host_wire_decode_persist_effect_response(const uint8_t *data, size_t len, mc_host_wire_persist_effect_response *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 16777216) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 36 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1246,16 +1297,19 @@ static inline mc_host_wire_result mc_host_wire_encode_persist_effect_response(co
             mc_host_wire_put_u8(&w, value->failed);
             mc_host_wire_put_bytes(&w, value->body, 0);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 16777216) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_HTTP_APPLICATION_ATTACHMENT_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_http_application_attachment {
     mc_host_wire_bytes identity;
 } mc_host_wire_http_application_attachment;
 static inline mc_host_wire_result mc_host_wire_decode_http_application_attachment(const uint8_t *data, size_t len, mc_host_wire_http_application_attachment *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 37 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1272,16 +1326,19 @@ static inline mc_host_wire_result mc_host_wire_encode_http_application_attachmen
         mc_host_wire_put_u8(&w, 1);
             mc_host_wire_put_bytes(&w, value->identity, 1);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_HTTP_EFFECT_REQUEST_MAX_FRAME_BYTES ((size_t)UINT32_C(4194304))
 
 typedef struct mc_host_wire_http_effect_request {
     mc_host_wire_bytes request;
 } mc_host_wire_http_effect_request;
 static inline mc_host_wire_result mc_host_wire_decode_http_effect_request(const uint8_t *data, size_t len, mc_host_wire_http_effect_request *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 4194304) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 38 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1298,10 +1355,12 @@ static inline mc_host_wire_result mc_host_wire_encode_http_effect_request(const 
         mc_host_wire_put_u8(&w, 1);
             mc_host_wire_put_bytes(&w, value->request, 0);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 4194304) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_HTTP_EFFECT_RESPONSE_MAX_FRAME_BYTES ((size_t)UINT32_C(16777216))
 
 typedef struct mc_host_wire_http_effect_response {
     uint8_t failed;
@@ -1310,6 +1369,7 @@ typedef struct mc_host_wire_http_effect_response {
 } mc_host_wire_http_effect_response;
 static inline mc_host_wire_result mc_host_wire_decode_http_effect_response(const uint8_t *data, size_t len, mc_host_wire_http_effect_response *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 16777216) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 39 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1331,16 +1391,19 @@ static inline mc_host_wire_result mc_host_wire_encode_http_effect_response(const
             mc_host_wire_put_bytes(&w, value->head, 0);
             mc_host_wire_put_bytes(&w, value->body, 0);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 16777216) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_WS_CONNECT_REQUEST_MAX_FRAME_BYTES ((size_t)UINT32_C(4194304))
 
 typedef struct mc_host_wire_ws_connect_request {
     mc_host_wire_bytes url;
 } mc_host_wire_ws_connect_request;
 static inline mc_host_wire_result mc_host_wire_decode_ws_connect_request(const uint8_t *data, size_t len, mc_host_wire_ws_connect_request *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 4194304) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 40 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1357,16 +1420,19 @@ static inline mc_host_wire_result mc_host_wire_encode_ws_connect_request(const m
         mc_host_wire_put_u8(&w, 1);
             mc_host_wire_put_bytes(&w, value->url, 1);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 4194304) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_WS_CONNECT_RESPONSE_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_ws_connect_response {
     uint8_t failed;
 } mc_host_wire_ws_connect_response;
 static inline mc_host_wire_result mc_host_wire_decode_ws_connect_response(const uint8_t *data, size_t len, mc_host_wire_ws_connect_response *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 41 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1384,16 +1450,19 @@ static inline mc_host_wire_result mc_host_wire_encode_ws_connect_response(const 
             if (value->failed > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
             mc_host_wire_put_u8(&w, value->failed);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_WS_SEND_REQUEST_MAX_FRAME_BYTES ((size_t)UINT32_C(4194304))
 
 typedef struct mc_host_wire_ws_send_request {
     mc_host_wire_bytes data;
 } mc_host_wire_ws_send_request;
 static inline mc_host_wire_result mc_host_wire_decode_ws_send_request(const uint8_t *data, size_t len, mc_host_wire_ws_send_request *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 4194304) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 42 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1410,16 +1479,19 @@ static inline mc_host_wire_result mc_host_wire_encode_ws_send_request(const mc_h
         mc_host_wire_put_u8(&w, 1);
             mc_host_wire_put_bytes(&w, value->data, 0);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 4194304) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_WS_SEND_RESPONSE_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_ws_send_response {
     uint8_t failed;
 } mc_host_wire_ws_send_response;
 static inline mc_host_wire_result mc_host_wire_decode_ws_send_response(const uint8_t *data, size_t len, mc_host_wire_ws_send_response *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 43 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1437,16 +1509,19 @@ static inline mc_host_wire_result mc_host_wire_encode_ws_send_response(const mc_
             if (value->failed > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
             mc_host_wire_put_u8(&w, value->failed);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_WS_CLOSE_EVENT_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_ws_close_event {
     uint32_t reason;
 } mc_host_wire_ws_close_event;
 static inline mc_host_wire_result mc_host_wire_decode_ws_close_event(const uint8_t *data, size_t len, mc_host_wire_ws_close_event *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 44 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1463,10 +1538,12 @@ static inline mc_host_wire_result mc_host_wire_encode_ws_close_event(const mc_ho
         mc_host_wire_put_u8(&w, 1);
             mc_host_wire_put_u32(&w, (uint32_t)value->reason);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_CATALOG_RECORD_MAX_FRAME_BYTES ((size_t)UINT32_C(18874368))
 
 typedef struct mc_host_wire_catalog_record {
     mc_host_wire_bytes sha;
@@ -1474,6 +1551,7 @@ typedef struct mc_host_wire_catalog_record {
 } mc_host_wire_catalog_record;
 static inline mc_host_wire_result mc_host_wire_decode_catalog_record(const uint8_t *data, size_t len, mc_host_wire_catalog_record *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 18874368) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 45 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1492,10 +1570,12 @@ static inline mc_host_wire_result mc_host_wire_encode_catalog_record(const mc_ho
             mc_host_wire_put_bytes(&w, value->sha, 1);
             mc_host_wire_put_bytes(&w, value->bytes, 0);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 18874368) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_CATALOG_APPLY_REQUEST_MAX_FRAME_BYTES ((size_t)UINT32_C(18874368))
 
 typedef struct mc_host_wire_catalog_apply_request {
     mc_host_wire_bytes index_json;
@@ -1504,6 +1584,7 @@ typedef struct mc_host_wire_catalog_apply_request {
 } mc_host_wire_catalog_apply_request;
 static inline mc_host_wire_result mc_host_wire_decode_catalog_apply_request(const uint8_t *data, size_t len, mc_host_wire_catalog_apply_request *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 18874368) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 46 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1544,10 +1625,12 @@ static inline mc_host_wire_result mc_host_wire_encode_catalog_apply_request(cons
             mc_host_wire_put(&w, value->records.data, value->records.len);
             }
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 18874368) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_HOST_TOOL_ATTACHMENT_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_host_tool_attachment {
     mc_host_wire_bytes address;
@@ -1563,6 +1646,7 @@ typedef struct mc_host_wire_host_tool_attachment {
 } mc_host_wire_host_tool_attachment;
 static inline mc_host_wire_result mc_host_wire_decode_host_tool_attachment(const uint8_t *data, size_t len, mc_host_wire_host_tool_attachment *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 47 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1612,16 +1696,19 @@ static inline mc_host_wire_result mc_host_wire_encode_host_tool_attachment(const
             mc_host_wire_put_bytes(&w, value->annotations, 1);
         }
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_CONNECTION_ORIGIN_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_connection_origin {
     mc_host_wire_bytes value;
 } mc_host_wire_connection_origin;
 static inline mc_host_wire_result mc_host_wire_decode_connection_origin(const uint8_t *data, size_t len, mc_host_wire_connection_origin *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 54 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1638,10 +1725,12 @@ static inline mc_host_wire_result mc_host_wire_encode_connection_origin(const mc
         mc_host_wire_put_u8(&w, 1);
             mc_host_wire_put_bytes(&w, value->value, 1);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_CONNECTION_IDENTITY_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_connection_identity {
     mc_host_wire_bytes reference;
@@ -1649,6 +1738,7 @@ typedef struct mc_host_wire_connection_identity {
 } mc_host_wire_connection_identity;
 static inline mc_host_wire_result mc_host_wire_decode_connection_identity(const uint8_t *data, size_t len, mc_host_wire_connection_identity *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 53 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1687,10 +1777,12 @@ static inline mc_host_wire_result mc_host_wire_encode_connection_identity(const 
             mc_host_wire_put(&w, value->origins.data, value->origins.len);
             }
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_SNAPSHOT_ATTACHMENT_MANIFEST_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_snapshot_attachment_manifest {
     mc_host_wire_bytes content_digest;
@@ -1706,6 +1798,7 @@ typedef struct mc_host_wire_snapshot_attachment_manifest {
 } mc_host_wire_snapshot_attachment_manifest;
 static inline mc_host_wire_result mc_host_wire_decode_snapshot_attachment_manifest(const uint8_t *data, size_t len, mc_host_wire_snapshot_attachment_manifest *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 48 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1796,10 +1889,12 @@ static inline mc_host_wire_result mc_host_wire_encode_snapshot_attachment_manife
             if (value->native_net > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
             mc_host_wire_put_u8(&w, value->native_net);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_CONNECTION_ATTACHMENT_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_connection_attachment {
     mc_host_wire_bytes reference;
@@ -1810,6 +1905,7 @@ typedef struct mc_host_wire_connection_attachment {
 } mc_host_wire_connection_attachment;
 static inline mc_host_wire_result mc_host_wire_decode_connection_attachment(const uint8_t *data, size_t len, mc_host_wire_connection_attachment *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 49 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1854,10 +1950,12 @@ static inline mc_host_wire_result mc_host_wire_encode_connection_attachment(cons
             mc_host_wire_put(&w, value->origins.data, value->origins.len);
             }
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_CONNECTION_POLICY_ATTACHMENT_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_connection_policy_attachment {
     mc_host_wire_bytes owner;
@@ -1866,6 +1964,7 @@ typedef struct mc_host_wire_connection_policy_attachment {
 } mc_host_wire_connection_policy_attachment;
 static inline mc_host_wire_result mc_host_wire_decode_connection_policy_attachment(const uint8_t *data, size_t len, mc_host_wire_connection_policy_attachment *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 50 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1886,10 +1985,12 @@ static inline mc_host_wire_result mc_host_wire_encode_connection_policy_attachme
             mc_host_wire_put_bytes(&w, value->pattern, 1);
             mc_host_wire_put_bytes(&w, value->action, 1);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_TOOL_APPROVAL_REQUEST_MAX_FRAME_BYTES ((size_t)UINT32_C(4194304))
 
 typedef struct mc_host_wire_tool_approval_request {
     mc_host_wire_bytes connection;
@@ -1901,6 +2002,7 @@ typedef struct mc_host_wire_tool_approval_request {
 } mc_host_wire_tool_approval_request;
 static inline mc_host_wire_result mc_host_wire_decode_tool_approval_request(const uint8_t *data, size_t len, mc_host_wire_tool_approval_request *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 4194304) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 51 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1932,10 +2034,12 @@ static inline mc_host_wire_result mc_host_wire_encode_tool_approval_request(cons
             mc_host_wire_put_bytes(&w, value->args_digest, 1);
         }
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 4194304) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_TOOL_APPROVAL_RESPONSE_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_tool_approval_response {
     uint8_t allow;
@@ -1943,6 +2047,7 @@ typedef struct mc_host_wire_tool_approval_response {
 } mc_host_wire_tool_approval_response;
 static inline mc_host_wire_result mc_host_wire_decode_tool_approval_response(const uint8_t *data, size_t len, mc_host_wire_tool_approval_response *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 52 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -1963,10 +2068,12 @@ static inline mc_host_wire_result mc_host_wire_encode_tool_approval_response(con
             if (value->remember_session > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
             mc_host_wire_put_u8(&w, value->remember_session);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
 }
+#define MC_HOST_WIRE_LIVE_ATTACHMENT_MANIFEST_MAX_FRAME_BYTES ((size_t)UINT32_C(1048576))
 
 typedef struct mc_host_wire_live_attachment_manifest {
     mc_host_wire_list routes;
@@ -1981,6 +2088,7 @@ typedef struct mc_host_wire_live_attachment_manifest {
 } mc_host_wire_live_attachment_manifest;
 static inline mc_host_wire_result mc_host_wire_decode_live_attachment_manifest(const uint8_t *data, size_t len, mc_host_wire_live_attachment_manifest *out) {
     if (!out || (len && !data)) return MC_HOST_WIRE_INVALID_ARGUMENT;
+    if (len > 1048576) return MC_HOST_WIRE_TOO_LARGE;
     memset(out, 0, sizeof(*out));
     mc_host_wire_reader r = {data, len, 0, MC_HOST_WIRE_OK};
     if (mc_host_wire_get_u16(&r) != 55 && r.error == MC_HOST_WIRE_OK) return MC_HOST_WIRE_WRONG_MESSAGE;
@@ -2069,6 +2177,7 @@ static inline mc_host_wire_result mc_host_wire_encode_live_attachment_manifest(c
             if (value->native_net > 1) return MC_HOST_WIRE_INVALID_PRESENCE;
             mc_host_wire_put_u8(&w, value->native_net);
         if (w.error != MC_HOST_WIRE_OK) return w.error;
+        if (w.off > 1048576) return MC_HOST_WIRE_TOO_LARGE;
         if (!pass) { *required = w.off; if (capacity < w.off) return MC_HOST_WIRE_BUFFER_TOO_SMALL; }
     }
     return MC_HOST_WIRE_OK;
