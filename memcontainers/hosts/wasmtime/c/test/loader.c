@@ -202,56 +202,19 @@ int main(int argc, char **argv) {
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
            runtime == 0, "reject nonzero reserved message option");
   options.known.reserved_message_options = 0;
-  options.known.header.size = 112;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK && runtime != 0,
-       "pre-event-quota runtime options remain accepted");
-  need(api.runtime_close(runtime, NULL) == MC_HOST_OK,
-       "close pre-event-quota-options runtime");
-  runtime = 0;
-  options.known.header.size = sizeof(mc_host_runtime_options_v1);
   options.known.reserved_result_options = 1;
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
            runtime == 0, "reject nonzero reserved result option");
   options.known.reserved_result_options = 0;
-  options.known.header.size = 104;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK && runtime != 0,
-       "pre-message runtime options remain accepted");
-  need(api.runtime_close(runtime, NULL) == MC_HOST_OK,
-       "close pre-message-options runtime");
-  runtime = 0;
-  options.known.header.size = sizeof(mc_host_runtime_options_v1);
   options.known.reserved_resource_options = 1;
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
            runtime == 0, "reject nonzero reserved runtime option");
   options.known.reserved_resource_options = 0;
-  options.known.header.size = 96;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK && runtime != 0,
-       "pre-result runtime options remain accepted");
-  need(api.runtime_close(runtime, NULL) == MC_HOST_OK,
-       "close pre-result-options runtime");
-  runtime = 0;
-  options.known.header.size = sizeof(mc_host_runtime_options_v1);
-  options.known.header.size = 36;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK && runtime != 0,
-       "old runtime options remain accepted");
-  need(api.runtime_close(runtime, NULL) == MC_HOST_OK, "close legacy options runtime");
-  runtime = 0;
-  options.known.header.size = 56;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK && runtime != 0,
-       "pre-wake runtime options remain accepted");
-  need(api.runtime_close(runtime, NULL) == MC_HOST_OK, "close pre-wake options runtime");
-  runtime = 0;
   options.known.header.size = sizeof(options);
   options.known.wake_user_data = &runtime;
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
            runtime == 0, "reject wake user data without callback");
   options.known.wake_user_data = NULL;
-  options.known.header.size = 72;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK && runtime != 0,
-       "pre-resource runtime options remain accepted");
-  need(api.runtime_close(runtime, NULL) == MC_HOST_OK, "close pre-resource options runtime");
-  runtime = 0;
-  options.known.header.size = sizeof(options);
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK,
        "accept zero future option");
   need(runtime != 0, "runtime handle");
@@ -293,54 +256,24 @@ int main(int argc, char **argv) {
   need(api.runtime_close(runtime, NULL) == MC_HOST_OK, "close runtime");
   need(api.runtime_close(runtime, NULL) == MC_HOST_STALE_HANDLE, "stale close");
 
-  mc_host_header_v1 old_options = {sizeof(old_options), 1, 0};
-  mc_host_runtime_t old_runtime = 0;
-  need(api.runtime_create((const mc_host_runtime_options_v1 *)&old_options,
-                          &old_runtime, NULL) == MC_HOST_OK,
-       "old runtime options prefix uses defaults");
-  need(api.runtime_close(old_runtime, NULL) == MC_HOST_OK,
-       "close old-options runtime");
+  mc_host_header_v1 default_options = {sizeof(default_options), 1, 0};
+  mc_host_runtime_t default_runtime = 0;
+  need(api.runtime_create((const mc_host_runtime_options_v1 *)&default_options,
+                          &default_runtime, NULL) == MC_HOST_OK,
+       "header-only runtime options use defaults");
+  need(api.runtime_close(default_runtime, NULL) == MC_HOST_OK,
+       "close default-options runtime");
 
   struct {
     mc_host_header_v1 header;
     uint32_t max_vms;
     uint32_t max_drive_ticks;
-  } legacy_options = {{16, 1, 0}, 1, 16};
-  mc_host_runtime_t legacy_runtime = 0;
-  need(api.runtime_create((const mc_host_runtime_options_v1 *)&legacy_options,
-                          &legacy_runtime, NULL) == MC_HOST_OK,
-       "old runtime options retain default output quotas");
-  need(api.runtime_close(legacy_runtime, NULL) == MC_HOST_OK,
-       "close legacy-options runtime");
-
-  struct {
-    mc_host_header_v1 header;
-    uint32_t max_vms;
-    uint32_t max_drive_ticks;
-    uint32_t max_output_bytes;
-    uint32_t max_output_records;
-  } output_options = {{24, 1, 0}, 1, 16, 4096, 64};
-  mc_host_runtime_t output_runtime = 0;
-  need(api.runtime_create((const mc_host_runtime_options_v1 *)&output_options,
-                          &output_runtime, NULL) == MC_HOST_OK,
-       "pre-snapshot runtime options retain default snapshot quota");
-  need(api.runtime_close(output_runtime, NULL) == MC_HOST_OK,
-       "close pre-snapshot-options runtime");
-
-  struct {
-    mc_host_header_v1 header;
-    uint32_t max_vms;
-    uint32_t max_drive_ticks;
-    uint32_t max_output_bytes;
-    uint32_t max_output_records;
-    uint32_t max_snapshot_bytes;
-  } snapshot_options = {{28, 1, 0}, 1, 16, 4096, 64, 8192};
-  mc_host_runtime_t snapshot_runtime = 0;
-  need(api.runtime_create((const mc_host_runtime_options_v1 *)&snapshot_options,
-                          &snapshot_runtime, NULL) == MC_HOST_OK,
-       "pre-total runtime options retain default aggregate quota");
-  need(api.runtime_close(snapshot_runtime, NULL) == MC_HOST_OK,
-       "close pre-total-options runtime");
+  } incomplete_options = {{16, 1, 0}, 1, 16};
+  mc_host_runtime_t incomplete_runtime = 0;
+  need(api.runtime_create((const mc_host_runtime_options_v1 *)&incomplete_options,
+                          &incomplete_runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
+           incomplete_runtime == 0,
+       "reject incomplete runtime options");
 
   mc_host_runtime_t second = 0;
   need(api.runtime_create(NULL, &second, NULL) == MC_HOST_OK,

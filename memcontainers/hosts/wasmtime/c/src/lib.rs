@@ -1260,29 +1260,10 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
         return Err(contract::MC_HOST_INVALID_ARGUMENT);
     }
     let header = unsafe { ptr::read(options.cast::<Header>()) };
-    const OLD_OPTIONS_SIZE: usize = 16;
-    const PRE_SNAPSHOT_OPTIONS_SIZE: usize = 24;
-    const PRE_TOTAL_OPTIONS_SIZE: usize = 28;
-    const PRE_EFFECT_OPTIONS_SIZE: usize = 36;
-    const PRE_WAKE_OPTIONS_SIZE: usize = 56;
-    const PRE_RESOURCE_OPTIONS_SIZE: usize = 72;
-    const PRE_RESULT_OPTIONS_SIZE: usize = 96;
-    const PRE_MESSAGE_OPTIONS_SIZE: usize = 104;
-    const PRE_EFFECT_QUOTA_OPTIONS_SIZE: usize = 112;
     if !valid_header(header, size_of::<Header>())
         || header.size as usize > MAX_INPUT_STRUCT_SIZE
-        || !matches!(
-            header.size as usize,
-            8 | OLD_OPTIONS_SIZE
-                | PRE_SNAPSHOT_OPTIONS_SIZE
-                | PRE_TOTAL_OPTIONS_SIZE
-                | PRE_EFFECT_OPTIONS_SIZE
-                | PRE_WAKE_OPTIONS_SIZE
-                | PRE_RESOURCE_OPTIONS_SIZE
-                | PRE_RESULT_OPTIONS_SIZE
-                | PRE_MESSAGE_OPTIONS_SIZE
-                | PRE_EFFECT_QUOTA_OPTIONS_SIZE
-        ) && (header.size as usize) < size_of::<RuntimeOptions>()
+        || (header.size as usize != size_of::<Header>()
+            && (header.size as usize) < size_of::<RuntimeOptions>())
     {
         return Err(contract::MC_HOST_INVALID_ARGUMENT);
     }
@@ -1303,138 +1284,41 @@ unsafe fn validate_options(options: *const RuntimeOptions) -> Result<RuntimeLimi
             return Err(contract::MC_HOST_UNSUPPORTED);
         }
     }
-    let max_vms = unsafe { ptr::read((options as *const u8).add(8).cast::<u32>()) };
-    let max_drive_ticks = unsafe { ptr::read((options as *const u8).add(12).cast::<u32>()) };
-    let (max_output_bytes, max_output_records) = if header.size as usize == OLD_OPTIONS_SIZE {
-        (0, 0)
-    } else {
-        (
-            unsafe { ptr::read((options as *const u8).add(16).cast::<u32>()) },
-            unsafe { ptr::read((options as *const u8).add(20).cast::<u32>()) },
-        )
-    };
-    let max_snapshot_bytes = if (header.size as usize) < PRE_TOTAL_OPTIONS_SIZE {
-        0
-    } else {
-        unsafe { ptr::read((options as *const u8).add(24).cast::<u32>()) }
-    };
-    let (max_snapshot_total_bytes, max_operations_per_vm) =
-        if (header.size as usize) < PRE_EFFECT_OPTIONS_SIZE {
-            (0, 0)
-        } else {
-            (
-                unsafe { ptr::read((options as *const u8).add(28).cast::<u32>()) },
-                unsafe { ptr::read((options as *const u8).add(32).cast::<u32>()) },
-            )
-        };
-    let (
-        max_effect_events,
-        max_effect_bytes,
-        max_effect_response_bytes,
-        max_ws_sockets,
-        max_ws_incoming_bytes,
-    ) = if (header.size as usize) < PRE_WAKE_OPTIONS_SIZE {
-        (0, 0, 0, 0, 0)
-    } else {
-        (
-            unsafe { ptr::read((options as *const u8).add(36).cast::<u32>()) },
-            unsafe { ptr::read((options as *const u8).add(40).cast::<u32>()) },
-            unsafe { ptr::read((options as *const u8).add(44).cast::<u32>()) },
-            unsafe { ptr::read((options as *const u8).add(48).cast::<u32>()) },
-            unsafe { ptr::read((options as *const u8).add(52).cast::<u32>()) },
-        )
-    };
-    let (wake, wake_user_data) = if (header.size as usize) < PRE_RESOURCE_OPTIONS_SIZE {
-        (None, 0)
-    } else {
-        if (options as usize) % align_of::<RuntimeOptions>() != 0 {
-            return Err(contract::MC_HOST_INVALID_ARGUMENT);
-        }
-        let wake = unsafe {
-            ptr::read(
-                (options as *const u8)
-                    .add(56)
-                    .cast::<Option<notifier::WakeCallback>>(),
-            )
-        };
-        let user_data = unsafe { ptr::read((options as *const u8).add(64).cast::<*mut c_void>()) };
-        if wake.is_none() && !user_data.is_null() {
-            return Err(contract::MC_HOST_INVALID_ARGUMENT);
-        }
-        (wake, user_data as usize)
-    };
-    let (
-        max_kernels,
-        max_kernel_bytes,
-        max_compiled_modules,
-        max_image_bytes,
-        max_snapshot_handles,
-    ) = if (header.size as usize) < PRE_RESULT_OPTIONS_SIZE {
-        (0, 0, 0, 0, 0)
-    } else {
-        (
-            unsafe { ptr::read((options as *const u8).add(72).cast::<u32>()) },
-            unsafe { ptr::read((options as *const u8).add(76).cast::<u32>()) },
-            unsafe { ptr::read((options as *const u8).add(80).cast::<u32>()) },
-            unsafe { ptr::read((options as *const u8).add(84).cast::<u32>()) },
-            unsafe { ptr::read((options as *const u8).add(88).cast::<u32>()) },
-        )
-    };
-    let max_operation_result_bytes = if (header.size as usize) < PRE_MESSAGE_OPTIONS_SIZE {
-        0
-    } else {
-        let reserved = unsafe { ptr::read((options as *const u8).add(92).cast::<u32>()) };
-        if reserved != 0 {
-            return Err(contract::MC_HOST_INVALID_ARGUMENT);
-        }
-        unsafe { ptr::read((options as *const u8).add(96).cast::<u32>()) }
-    };
-    let max_message_bytes = if (header.size as usize) < PRE_EFFECT_QUOTA_OPTIONS_SIZE {
-        0
-    } else {
-        let reserved = unsafe { ptr::read((options as *const u8).add(100).cast::<u32>()) };
-        if reserved != 0 {
-            return Err(contract::MC_HOST_INVALID_ARGUMENT);
-        }
-        unsafe { ptr::read((options as *const u8).add(104).cast::<u32>()) }
-    };
-    let (max_effect_event_bytes, max_effect_single_response_bytes) =
-        if (header.size as usize) < size_of::<RuntimeOptions>() {
-            (0, 0)
-        } else {
-            let reserved = unsafe { ptr::read((options as *const u8).add(108).cast::<u32>()) };
-            if reserved != 0 {
-                return Err(contract::MC_HOST_INVALID_ARGUMENT);
-            }
-            (
-                unsafe { ptr::read((options as *const u8).add(112).cast::<u32>()) },
-                unsafe { ptr::read((options as *const u8).add(116).cast::<u32>()) },
-            )
-        };
+    if (options as usize) % align_of::<RuntimeOptions>() != 0 {
+        return Err(contract::MC_HOST_INVALID_ARGUMENT);
+    }
+    let options = unsafe { ptr::read(options) };
+    if options.reserved_resource_options != 0
+        || options.reserved_result_options != 0
+        || options.reserved_message_options != 0
+        || (options.wake.is_none() && !options.wake_user_data.is_null())
+    {
+        return Err(contract::MC_HOST_INVALID_ARGUMENT);
+    }
     RuntimeLimits::new(
-        max_vms,
-        max_drive_ticks,
-        max_output_bytes,
-        max_output_records,
-        max_snapshot_bytes,
-        max_snapshot_total_bytes,
-        max_operations_per_vm,
-        max_effect_events,
-        max_effect_bytes,
-        max_effect_response_bytes,
-        max_ws_sockets,
-        max_ws_incoming_bytes,
-        wake,
-        wake_user_data,
-        max_kernels,
-        max_kernel_bytes,
-        max_compiled_modules,
-        max_image_bytes,
-        max_snapshot_handles,
-        max_operation_result_bytes,
-        max_message_bytes,
-        max_effect_event_bytes,
-        max_effect_single_response_bytes,
+        options.max_vms,
+        options.max_drive_ticks,
+        options.max_output_bytes,
+        options.max_output_records,
+        options.max_snapshot_bytes,
+        options.max_snapshot_total_bytes,
+        options.max_operations_per_vm,
+        options.max_effect_events,
+        options.max_effect_bytes,
+        options.max_effect_response_bytes,
+        options.max_ws_sockets,
+        options.max_ws_incoming_bytes,
+        options.wake,
+        options.wake_user_data as usize,
+        options.max_kernels,
+        options.max_kernel_bytes,
+        options.max_compiled_modules,
+        options.max_image_bytes,
+        options.max_snapshot_handles,
+        options.max_operation_result_bytes,
+        options.max_message_bytes,
+        options.max_effect_event_bytes,
+        options.max_effect_single_response_bytes,
     )
 }
 
