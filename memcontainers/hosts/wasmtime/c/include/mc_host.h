@@ -171,7 +171,8 @@ typedef struct mc_host_vm_status_v1 {
   int32_t inflight_egress;
   int32_t pending_commits;
   uint32_t workers;
-  uint32_t reserved;
+  /* Effect requests that still await an application answer. */
+  uint32_t active_effects;
 } mc_host_vm_status_v1;
 
 typedef struct mc_host_drive_result_v1 {

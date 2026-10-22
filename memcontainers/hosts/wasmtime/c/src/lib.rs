@@ -193,7 +193,7 @@ struct VmStatus {
     inflight_egress: i32,
     pending_commits: i32,
     workers: u32,
-    reserved: u32,
+    active_effects: u32,
 }
 
 #[repr(C)]
@@ -715,7 +715,10 @@ const _: () = {
             == contract::MC_HOST_LAYOUT_VM_STATUS_PENDING_COMMITS_OFFSET
     );
     assert!(offset_of!(VmStatus, workers) == contract::MC_HOST_LAYOUT_VM_STATUS_WORKERS_OFFSET);
-    assert!(offset_of!(VmStatus, reserved) == contract::MC_HOST_LAYOUT_VM_STATUS_RESERVED_OFFSET);
+    assert!(
+        offset_of!(VmStatus, active_effects)
+            == contract::MC_HOST_LAYOUT_VM_STATUS_ACTIVE_EFFECTS_OFFSET
+    );
 
     assert!(size_of::<DriveResult>() == contract::MC_HOST_LAYOUT_DRIVE_RESULT_SIZE);
     assert!(align_of::<DriveResult>() == contract::MC_HOST_LAYOUT_DRIVE_RESULT_ALIGN);

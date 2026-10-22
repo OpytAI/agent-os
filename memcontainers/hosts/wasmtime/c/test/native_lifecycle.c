@@ -555,8 +555,12 @@ static void cancel_mount_relay(const mc_host_vm_api_v1 *vm_api,
   check(effect_api->response_write(runtime, event,
           (mc_host_bytes_v1){partial_errno, sizeof(partial_errno)}, NULL),
         "write partial host-call response");
-  need(vm_api->vm_cancel_and_close(runtime, vm, NULL) == MC_HOST_BUSY,
-       "cancelled VM waits for adopted effect and operation");
+  check(vm_api->vm_cancel_and_close(runtime, vm, NULL), "cancel VM with adopted effect");
+  mc_host_vm_status_v1 closing = MC_HOST_INIT(mc_host_vm_status_v1);
+  check(vm_api->vm_status(runtime, vm, &closing, NULL), "status of cancelled VM");
+  need(closing.state == MC_HOST_VM_CLOSING, "cancelled VM stays CLOSING");
+  need(vm_api->vm_close(runtime, vm, NULL) == MC_HOST_BUSY,
+       "final close waits for the cancellation notice");
   mc_host_buffer_v1 cancelled_buffer = {0};
   need(effect_api->read(runtime, event, &cancelled_buffer, NULL) == MC_HOST_CANCELLED,
        "original effect becomes cancelled");
@@ -589,8 +593,9 @@ static void cancel_mount_relay(const mc_host_vm_api_v1 *vm_api,
   mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
   check(op_api->poll(runtime, stat_op, &status, NULL), "observe cancelled filesystem call");
   need(status.state == MC_HOST_OP_CANCELLED, "filesystem operation cancelled");
-  check(op_api->close(runtime, stat_op, NULL), "close cancelled filesystem call");
   check(vm_api->vm_close(runtime, vm, NULL), "finish closing source VM");
+  need(op_api->poll(runtime, stat_op, &status, NULL) == MC_HOST_STALE_HANDLE,
+       "final close retires the cancelled operation");
 }
 
 static void run_persist_relay(const mc_host_vm_api_v1 *vm_api,
@@ -975,6 +980,20 @@ static void run_effect_pressure(const mc_host_vm_api_v1 *vm_api,
   }
   need(stats.refused_http > 0 && stats.queued_events == 8,
        "real guest exceeds configured eight-slot effect queue");
+  mc_host_vm_status_v1 pressured = MC_HOST_INIT(mc_host_vm_status_v1);
+  check(vm_api->vm_status(runtime, vm, &pressured, NULL), "status under effect pressure");
+  need(pressured.active_effects == 8 &&
+       (pressured.flags & MC_HOST_VM_FLAG_EFFECT_READY) != 0,
+       "status reports unanswered effect requests");
+  mc_host_drive_options_v1 held = MC_HOST_INIT(mc_host_drive_options_v1);
+  held.max_ticks = 128;
+  mc_host_drive_result_v1 held_drive = MC_HOST_INIT(mc_host_drive_result_v1);
+  check(vm_api->vm_drive(runtime, vm, &held, &held_drive, NULL),
+        "drive at effect high-water");
+  need(held_drive.ticks == 0 &&
+       held_drive.stop_reason == MC_HOST_DRIVE_STOP_EFFECT &&
+       held_drive.status.active_effects == 8,
+       "drive stops before ticking past the effect high-water mark");
   for (size_t i = 0; i < 8; ++i) {
     mc_host_handle_t event = 0;
     mc_host_effect_info_v1 info = MC_HOST_INIT(mc_host_effect_info_v1);
@@ -983,6 +1002,8 @@ static void run_effect_pressure(const mc_host_vm_api_v1 *vm_api,
     need(info.kind == MC_HOST_EVENT_HTTP_REQUEST, "pressure event is guest HTTP");
     check(effect_api->cancel(runtime, event, NULL), "deny pressured HTTP request");
   }
+  check(vm_api->vm_status(runtime, vm, &pressured, NULL), "status after denials");
+  need(pressured.active_effects == 0, "denied requests no longer count as active");
   for (int attempt = 0; attempt < 8192; ++attempt) {
     mc_host_drive_options_v1 drive = MC_HOST_INIT(mc_host_drive_options_v1);
     drive.max_ticks = 128;
@@ -2035,8 +2056,10 @@ static void cancel_vm_with_operation(const mc_host_vm_api_v1 *vm_api,
   check(op_api->start(runtime, vm,
                       (mc_host_bytes_v1){request.bytes, request.length},
                       &operation, NULL), "start operation before VM cancellation");
-  need(vm_api->vm_cancel_and_close(runtime, vm, NULL) == MC_HOST_BUSY,
-       "cancelled VM waits for operation close");
+  check(vm_api->vm_cancel_and_close(runtime, vm, NULL), "cancel VM with operation");
+  need(op_api->start(runtime, vm, (mc_host_bytes_v1){request.bytes, request.length},
+                     &(mc_host_handle_t){0}, NULL) == MC_HOST_INVALID_STATE,
+       "CLOSING VM admits no new operation");
   mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
   check(op_api->poll(runtime, operation, &status, NULL), "observe cancelled operation");
   need(status.state == MC_HOST_OP_CANCELLED && status.error == MC_HOST_CANCELLED,
@@ -2044,8 +2067,11 @@ static void cancel_vm_with_operation(const mc_host_vm_api_v1 *vm_api,
   mc_host_buffer_v1 result = {0};
   need(op_api->result(runtime, operation, &result, NULL) == MC_HOST_CANCELLED,
        "cancelled operation has no result");
-  check(op_api->close(runtime, operation, NULL), "close cancelled operation");
   check(vm_api->vm_close(runtime, vm, NULL), "finish closing cancelled VM");
+  need(op_api->poll(runtime, operation, &status, NULL) == MC_HOST_STALE_HANDLE,
+       "final close retires the cancelled operation");
+  need(vm_api->vm_close(runtime, vm, NULL) == MC_HOST_STALE_HANDLE,
+       "closed VM handle is stale");
 }
 
 static void drain_output(const mc_host_output_api_v1 *output_api,

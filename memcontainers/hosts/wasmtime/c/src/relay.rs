@@ -174,6 +174,17 @@ fn family_index(kind: u32) -> usize {
 }
 
 impl Inner {
+    fn awaiting_application(&self) -> usize {
+        self.events
+            .values()
+            .filter(|event| {
+                event.phase != EventPhase::Cancelled
+                    && event.original_handle.is_none()
+                    && event.kind != contract::MC_HOST_EVENT_WS_CLOSE
+            })
+            .count()
+    }
+
     fn requeue(&mut self, id: u64) {
         let index = self
             .queue
@@ -453,10 +464,19 @@ impl Relay {
         Ok(())
     }
 
+    /// Answered requests still hold bridge slots until the kernel consumes them
+    /// on a later tick, so only requests awaiting the application count here.
     pub fn above_high_water(&self) -> bool {
-        self.inner
-            .lock()
-            .is_ok_and(|inner| inner.queued_bytes >= inner.limits.max_event_bytes * 3 / 4)
+        self.inner.lock().is_ok_and(|inner| {
+            inner.queued_bytes >= inner.limits.max_event_bytes * 3 / 4
+                || inner.awaiting_application() >= (inner.limits.max_events * 3 / 4).max(1)
+        })
+    }
+
+    pub fn active_effects(&self) -> u32 {
+        self.inner.lock().map_or(0, |inner| {
+            u32::try_from(inner.awaiting_application()).unwrap_or(u32::MAX)
+        })
     }
 
     pub fn ready(&self) -> bool {

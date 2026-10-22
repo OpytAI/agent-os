@@ -426,6 +426,22 @@ impl<T> HandleTable<T> {
         self.live -= 1;
         Ok(value)
     }
+
+    fn retire_where(&mut self, mut matches: impl FnMut(&T) -> bool) {
+        for (index, slot) in self.slots.iter_mut().enumerate() {
+            if !slot.value.as_ref().is_some_and(&mut matches) {
+                continue;
+            }
+            slot.value = None;
+            if slot.generation == MAX_GENERATION {
+                slot.retired = true;
+            } else {
+                slot.generation += 1;
+                self.free.push(index);
+            }
+            self.live -= 1;
+        }
+    }
 }
 
 struct KernelRecord {
@@ -486,6 +502,7 @@ pub struct VmReport {
     pub operation_ready: bool,
     pub operation_pending: bool,
     pub effect_ready: bool,
+    pub active_effects: u32,
 }
 
 pub struct VmConfig {
@@ -648,7 +665,12 @@ impl VmRecord {
             operation_ready,
             operation_pending,
             effect_ready: self.relay.as_ref().is_some_and(|relay| relay.ready()),
+            active_effects: self.active_effects(),
         })
+    }
+
+    fn active_effects(&self) -> u32 {
+        self.relay.as_ref().map_or(0, |relay| relay.active_effects())
     }
 
     pub fn status(&self) -> Result<VmReport, u32> {
@@ -667,6 +689,7 @@ impl VmRecord {
                 operation_ready: false,
                 operation_pending: false,
                 effect_ready: self.relay.as_ref().is_some_and(|relay| relay.ready()),
+                active_effects: self.active_effects(),
             });
         }
         let mut host = self.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
@@ -678,6 +701,7 @@ impl VmRecord {
                     operation_ready,
                     operation_pending,
                     effect_ready: self.relay.as_ref().is_some_and(|relay| relay.ready()),
+                    active_effects: self.active_effects(),
                     observed: *self
                         .observed
                         .lock()
@@ -2956,88 +2980,56 @@ impl RuntimeState {
         Ok(())
     }
 
+    /// An open VM closes only without children. A CLOSING VM closes once every
+    /// cancellation notice is acknowledged; its remaining child handles retire.
     pub fn close_vm(&self, handle: u64) -> Result<(), u32> {
         let vm = self.vm(handle)?;
-        let was_closing = {
-            let mut observed = vm.observed.lock().map_err(|_| contract::MC_HOST_INTERNAL)?;
-            let was_closing = observed.closing;
-            observed.closing = true;
-            was_closing
-        };
         let host_guard = match vm.host.try_lock() {
             Ok(guard) => guard,
             Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-            Err(std::sync::TryLockError::WouldBlock) => {
-                if !was_closing {
-                    vm.observed
-                        .lock()
-                        .map_err(|_| contract::MC_HOST_INTERNAL)?
-                        .closing = false;
-                }
-                return Err(contract::MC_HOST_BUSY);
-            }
+            Err(std::sync::TryLockError::WouldBlock) => return Err(contract::MC_HOST_BUSY),
         };
         let mut resources = self
             .resources
             .lock()
             .map_err(|_| contract::MC_HOST_INTERNAL)?;
-        if vm.output.stats().leased_records != 0 {
-            if !was_closing {
-                vm.observed
-                    .lock()
-                    .map_err(|_| contract::MC_HOST_INTERNAL)?
-                    .closing = false;
-            }
-            return Err(contract::MC_HOST_BUSY);
-        }
-        if !vm.live_operations()?.is_empty() {
-            if !was_closing {
-                vm.observed
-                    .lock()
-                    .map_err(|_| contract::MC_HOST_INTERNAL)?
-                    .closing = false;
-            }
-            return Err(contract::MC_HOST_BUSY);
-        }
+        let closing = vm
+            .observed
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .closing;
+        let has_effect_children = |resources: &Resources| {
+            resources.effects.slots.iter().any(|slot| {
+                slot.value
+                    .as_ref()
+                    .is_some_and(|effect| effect.vm == handle)
+            }) || resources.sockets.slots.iter().any(|slot| {
+                slot.value
+                    .as_ref()
+                    .is_some_and(|socket| socket.vm == handle)
+            })
+        };
         if vm
             .relay
             .as_ref()
             .is_some_and(|relay| relay.has_live_events())
+            || (!closing
+                && (vm.output.stats().leased_records != 0
+                    || !vm.live_operations()?.is_empty()
+                    || has_effect_children(&*resources)))
         {
-            if !was_closing {
-                vm.observed
-                    .lock()
-                    .map_err(|_| contract::MC_HOST_INTERNAL)?
-                    .closing = false;
-            }
             return Err(contract::MC_HOST_BUSY);
         }
-        if resources.effects.slots.iter().any(|slot| {
-            slot.value
-                .as_ref()
-                .is_some_and(|effect| effect.vm == handle)
-        }) {
-            if !was_closing {
-                vm.observed
-                    .lock()
-                    .map_err(|_| contract::MC_HOST_INTERNAL)?
-                    .closing = false;
-            }
-            return Err(contract::MC_HOST_BUSY);
-        }
-        if resources.sockets.slots.iter().any(|slot| {
-            slot.value
-                .as_ref()
-                .is_some_and(|socket| socket.vm == handle)
-        }) {
-            if !was_closing {
-                vm.observed
-                    .lock()
-                    .map_err(|_| contract::MC_HOST_INTERNAL)?
-                    .closing = false;
-            }
-            return Err(contract::MC_HOST_BUSY);
-        }
+        vm.observed
+            .lock()
+            .map_err(|_| contract::MC_HOST_INTERNAL)?
+            .closing = true;
+        resources.outputs.retire_where(|lease| lease.vm == handle);
+        resources
+            .operations
+            .retire_where(|operation| operation.vm == handle);
+        resources.effects.retire_where(|effect| effect.vm == handle);
+        resources.sockets.retire_where(|socket| socket.vm == handle);
         resources.vms.remove(self.namespace, handle)?;
         let kernel = resources
             .kernels
@@ -3056,6 +3048,8 @@ impl RuntimeState {
         Ok(())
     }
 
+    /// First phase of two-phase close. The VM stays in CLOSING until `close_vm`
+    /// observes that every cancellation notice has been acknowledged.
     pub fn cancel_and_close_vm(&self, handle: u64) -> Result<(), u32> {
         let vm = self.vm(handle)?;
         let mut host = match vm.host.try_lock() {
@@ -3074,7 +3068,6 @@ impl RuntimeState {
         for operation in vm.live_operations()? {
             operation.cancel_after_store_drop()?;
         }
-        drop(host);
-        self.close_vm(handle)
+        Ok(())
     }
 }

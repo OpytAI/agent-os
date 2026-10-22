@@ -376,7 +376,8 @@ fn status_value(report: VmReport, size: usize) -> VmStatus {
             | u32::from(output.record_count != 0) * contract::MC_HOST_VM_FLAG_OUTPUT_READY
             | u32::from(report.operation_ready) * contract::MC_HOST_VM_FLAG_OPERATION_READY
             | u32::from(report.operation_pending) * contract::MC_HOST_VM_FLAG_OPERATION_PENDING
-            | u32::from(report.effect_ready) * contract::MC_HOST_VM_FLAG_EFFECT_READY,
+            | u32::from(report.effect_ready) * contract::MC_HOST_VM_FLAG_EFFECT_READY
+            | u32::from(output.poisoned) * contract::MC_HOST_VM_FLAG_OUTPUT_LOST,
         exit_code: observed.exit_code.unwrap_or(0),
         output_records: output.record_count as u64,
         output_bytes: output.retained_bytes as u64,
@@ -384,7 +385,7 @@ fn status_value(report: VmReport, size: usize) -> VmStatus {
         inflight_egress: report.inflight_egress,
         pending_commits: report.pending_commits,
         workers: report.workers,
-        reserved: 0,
+        active_effects: report.active_effects,
     }
 }
 

@@ -119,7 +119,7 @@ layout "VM_STATUS" size=64 align=8 {
   offset "inflight_egress" value=48
   offset "pending_commits" value=52
   offset "workers" value=56
-  offset "reserved" value=60
+  offset "active_effects" value=60
 }
 layout "DRIVE_RESULT" size=80 align=8 {
   offset "header" value=0
@@ -390,6 +390,7 @@ constant "MC_HOST_VM_FLAG_OUTPUT_READY" value=4 type="u32"
 constant "MC_HOST_VM_FLAG_OPERATION_READY" value=8 type="u32"
 constant "MC_HOST_VM_FLAG_OPERATION_PENDING" value=16 type="u32"
 constant "MC_HOST_VM_FLAG_EFFECT_READY" value=32 type="u32"
+constant "MC_HOST_VM_FLAG_OUTPUT_LOST" value=64 type="u32"
 constant "MC_HOST_OUTPUT_DATA" value=1 type="u32"
 constant "MC_HOST_OUTPUT_GAP" value=2 type="u32"
 constant "MC_HOST_OUTPUT_ABOVE_HIGH_WATER" value=1 type="u32"
