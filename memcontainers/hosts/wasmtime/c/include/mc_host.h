@@ -65,8 +65,10 @@ typedef struct mc_host_error_v1 {
 
 typedef struct mc_host_runtime_options_v1 {
   mc_host_header_v1 header;
-  /* Zero selects the published default. A nonzero value may not exceed the
-   * hard limit of the same name. */
+  /* Every limit below belongs to the application. Zero selects the published
+   * default; any other value is taken as given. Only the four frame limits
+   * (operation result, message, effect event, single effect response) have a
+   * hard maximum, because the wire format bounds one frame. */
   uint32_t max_vms;
   uint32_t max_drive_ticks;
   /* Zero selects the default. At least 4 bytes and 4 records otherwise. */
@@ -145,8 +147,9 @@ typedef struct mc_host_vm_create_options_v1 {
   uint32_t terminal_rows;
   /* Ambient inputs of a DETERMINISTIC VM; all three are zero otherwise.
    * The guest reads wall_ms as its wall clock. Its monotonic clock starts at
-   * monotonic_ms and advances one millisecond per read. Its entropy is the
-   * SplitMix64 stream of entropy_seed. Neither clock value may be negative. */
+   * monotonic_ms and advances one millisecond per read; vm_status reports its
+   * position. Its entropy is the SplitMix64 stream of entropy_seed. Neither
+   * clock value may be negative. */
   int64_t wall_ms;
   int64_t monotonic_ms;
   uint64_t entropy_seed;
@@ -192,6 +195,11 @@ typedef struct mc_host_vm_status_v1 {
   uint32_t workers;
   /* Effect requests that still await an application answer. */
   uint32_t active_effects;
+  /* The value a DETERMINISTIC VM's next monotonic clock read returns; zero for
+   * any other VM. SET_AMBIENT refuses a monotonic_ms below it, so the guest
+   * never sees its monotonic clock step back. Record it before a snapshot and
+   * supply at least that value on restore. */
+  int64_t monotonic_ms;
 } mc_host_vm_status_v1;
 
 typedef struct mc_host_drive_result_v1 {

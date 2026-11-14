@@ -52,11 +52,23 @@ impl Ambient {
         self.0.lock().unwrap_or_else(|poison| poison.into_inner())
     }
 
-    pub fn set(&self, inputs: AmbientInputs) {
+    /// Replace the inputs. A monotonic base behind the clock's position is
+    /// refused and changes nothing: the guest may already have read a later
+    /// value.
+    pub fn set(&self, inputs: AmbientInputs) -> Result<(), ()> {
         let mut state = self.state();
+        if inputs.monotonic_ms < state.monotonic_ms {
+            return Err(());
+        }
         state.wall_ms = inputs.wall_ms;
         state.monotonic_ms = inputs.monotonic_ms;
         state.rng = SeededRng::new(inputs.entropy_seed);
+        Ok(())
+    }
+
+    /// The value the next monotonic read returns.
+    pub fn monotonic_ms(&self) -> i64 {
+        self.state().monotonic_ms
     }
 
     /// Inputs for a fork of this VM. The child keeps the parent's clock and

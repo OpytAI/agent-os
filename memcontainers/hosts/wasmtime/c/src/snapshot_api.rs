@@ -5,17 +5,12 @@ use std::mem::{align_of, size_of};
 use embedder_rust as contract;
 use host::{inspect_snapshot_bytes, SnapshotDescription};
 
-use super::vm_api::{bytes, copy_output, input, output_size};
+use super::vm_api::{bytes, copy_output, input, output_size, MAX_LIMITED_BYTES};
 use super::*;
 
-const MAX_SNAPSHOT_BYTES: u64 = 512 * 1024 * 1024;
-
+/// The snapshot contract bounds the memory image; the parser enforces it.
 pub(super) fn check_snapshot_memory(snapshot: &[u8]) -> Result<(), ResultCode> {
-    let view =
-        snapshot_rust::parse_snapshot(snapshot).map_err(|_| contract::MC_HOST_SNAPSHOT_ERROR)?;
-    if view.memory_len > MAX_SNAPSHOT_BYTES as usize {
-        return Err(contract::MC_HOST_RESOURCE_LIMIT);
-    }
+    snapshot_rust::parse_snapshot(snapshot).map_err(|_| contract::MC_HOST_SNAPSHOT_ERROR)?;
     Ok(())
 }
 
@@ -61,7 +56,7 @@ pub unsafe extern "C" fn baseline_import(
         ) {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
-        let bytes = unsafe { bytes(bytes_in, MAX_SNAPSHOT_BYTES)? };
+        let bytes = unsafe { bytes(bytes_in, MAX_LIMITED_BYTES)? };
         if ranges_overlap(
             bytes.as_ptr() as usize,
             bytes.len(),
@@ -228,12 +223,12 @@ pub unsafe extern "C" fn inspect(
 ) -> ResultCode {
     guard(error, || {
         let size = unsafe { output_size(out_info)? };
-        let snapshot = unsafe { bytes(snapshot, MAX_SNAPSHOT_BYTES)? };
+        let snapshot = unsafe { bytes(snapshot, MAX_LIMITED_BYTES)? };
         check_snapshot_memory(snapshot)?;
         let baseline = if baseline.len == 0 {
             None
         } else {
-            Some(unsafe { bytes(baseline, MAX_SNAPSHOT_BYTES)? })
+            Some(unsafe { bytes(baseline, MAX_LIMITED_BYTES)? })
         };
         if let Some(base) = baseline {
             check_snapshot_memory(base)?;

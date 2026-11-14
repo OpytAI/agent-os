@@ -98,82 +98,57 @@ int main(int argc, char **argv) {
        "reject unknown nonzero option");
   need(runtime == 0, "failure clears output");
   options.future[0] = 0;
-  options.known.max_vms = MC_HOST_HARD_MAX_VMS + 1;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
-           runtime == 0, "reject VM limit above hard cap");
-  options.known.max_vms = 0;
-  options.known.max_drive_ticks = 1001;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
-           runtime == 0, "reject drive limit above hard cap");
-  options.known.max_drive_ticks = 0;
-  options.known.max_output_bytes = MC_HOST_HARD_MAX_OUTPUT_BYTES + 1;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
-           runtime == 0, "reject output byte limit above hard cap");
   options.known.max_output_bytes = 3;
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
            runtime == 0, "reject output byte limit too small for high water");
   options.known.max_output_bytes = 0;
-  options.known.max_output_records = MC_HOST_HARD_MAX_OUTPUT_RECORDS + 1;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
-           runtime == 0, "reject output record limit above hard cap");
   options.known.max_output_records = 3;
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
            runtime == 0, "reject output record limit too small for high water");
   options.known.max_output_records = 0;
-  options.known.max_snapshot_bytes = MC_HOST_HARD_MAX_SNAPSHOT_BYTES + 1;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
-           runtime == 0, "reject snapshot limit above hard cap");
-  options.known.max_snapshot_bytes = 0;
-  options.known.max_snapshot_total_bytes = MC_HOST_HARD_MAX_SNAPSHOT_TOTAL_BYTES + 1;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
-           runtime == 0, "reject total snapshot quota above hard cap");
-  options.known.max_snapshot_total_bytes = 0;
-  options.known.max_operations_per_vm = MC_HOST_HARD_MAX_OPERATIONS_PER_VM + 1;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
-           runtime == 0, "reject operation limit above hard cap");
-  options.known.max_operations_per_vm = 0;
-  options.known.max_effect_events = MC_HOST_HARD_MAX_EFFECT_EVENTS + 1;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
-           runtime == 0, "reject effect slot limit above hard cap");
-  options.known.max_effect_events = 0;
-  options.known.max_effect_bytes = MC_HOST_HARD_MAX_EFFECT_BYTES + 1;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
-           runtime == 0, "reject effect queue bytes above hard cap");
   options.known.max_effect_bytes = 3;
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_INVALID_ARGUMENT &&
            runtime == 0, "reject effect queue smaller than high water");
   options.known.max_effect_bytes = 0;
-  options.known.max_effect_response_bytes = MC_HOST_HARD_MAX_EFFECT_RESPONSE_BYTES + 1;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
-           runtime == 0, "reject response quota above hard cap");
+  /* Counts and aggregate quotas have no hard maximum: the application's value
+   * is taken as given. */
+  options.known.max_vms = 100000;
+  options.known.max_drive_ticks = 1000000;
+  options.known.max_output_bytes = UINT32_MAX;
+  options.known.max_output_records = UINT32_MAX;
+  options.known.max_snapshot_bytes = UINT32_MAX;
+  options.known.max_snapshot_total_bytes = UINT32_MAX;
+  options.known.max_operations_per_vm = UINT32_MAX;
+  options.known.max_effect_events = UINT32_MAX;
+  options.known.max_effect_bytes = UINT32_MAX;
+  options.known.max_effect_response_bytes = UINT32_MAX;
+  options.known.max_ws_sockets = UINT32_MAX;
+  options.known.max_ws_incoming_bytes = UINT32_MAX;
+  options.known.max_kernels = UINT32_MAX;
+  options.known.max_kernel_bytes = UINT32_MAX;
+  options.known.max_compiled_modules = UINT32_MAX;
+  options.known.max_image_bytes = UINT32_MAX;
+  options.known.max_snapshot_handles = UINT32_MAX;
+  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_OK && runtime != 0,
+       "accept application-chosen counts and quotas of any size");
+  need(api.runtime_close(runtime, NULL) == MC_HOST_OK, "close wide-limit runtime");
+  runtime = 99;
+  options.known.max_vms = 0;
+  options.known.max_drive_ticks = 0;
+  options.known.max_output_bytes = 0;
+  options.known.max_output_records = 0;
+  options.known.max_snapshot_bytes = 0;
+  options.known.max_snapshot_total_bytes = 0;
+  options.known.max_operations_per_vm = 0;
+  options.known.max_effect_events = 0;
+  options.known.max_effect_bytes = 0;
   options.known.max_effect_response_bytes = 0;
-  options.known.max_ws_sockets = MC_HOST_HARD_MAX_WS_SOCKETS + 1;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
-           runtime == 0, "reject socket quota above hard cap");
   options.known.max_ws_sockets = 0;
-  options.known.max_ws_incoming_bytes = MC_HOST_HARD_MAX_WS_INCOMING_BYTES + 1;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
-           runtime == 0, "reject inbound socket bytes above hard cap");
   options.known.max_ws_incoming_bytes = 0;
-  options.known.max_kernels = MC_HOST_HARD_MAX_KERNELS + 1;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
-           runtime == 0, "reject kernel handle limit above hard cap");
   options.known.max_kernels = 0;
-  options.known.max_kernel_bytes = MC_HOST_HARD_MAX_KERNEL_BYTES + 1;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
-           runtime == 0, "reject kernel byte limit above hard cap");
   options.known.max_kernel_bytes = 0;
-  options.known.max_compiled_modules = MC_HOST_HARD_MAX_COMPILED_MODULES + 1;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
-           runtime == 0, "reject module limit above hard cap");
   options.known.max_compiled_modules = 0;
-  options.known.max_image_bytes = MC_HOST_HARD_MAX_IMAGE_BYTES + 1;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
-           runtime == 0, "reject image limit above hard cap");
   options.known.max_image_bytes = 0;
-  options.known.max_snapshot_handles = MC_HOST_HARD_MAX_SNAPSHOT_HANDLES + 1;
-  need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
-           runtime == 0, "reject snapshot handle limit above hard cap");
   options.known.max_snapshot_handles = 0;
   options.known.max_operation_result_bytes = MC_HOST_HARD_MAX_OPERATION_RESULT_BYTES + 1;
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&

@@ -9,7 +9,9 @@ use super::ambient::AmbientInputs;
 use super::resources::{VmConfig, VmReport};
 use super::*;
 
-const MAX_KERNEL_BYTES: u64 = 256 * 1024 * 1024;
+// The runtime's own limits decide what is accepted. This only bounds a caller's
+// length by the width of those limits before a slice is formed over it.
+pub(super) const MAX_LIMITED_BYTES: u64 = u32::MAX as u64;
 const MAX_INPUT_BYTES: u64 = 16 * 1024 * 1024;
 
 pub(super) unsafe fn bytes<'a>(value: Bytes, maximum: u64) -> Result<&'a [u8], ResultCode> {
@@ -97,7 +99,7 @@ pub unsafe extern "C" fn kernel_load(
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
         let info_size = unsafe { output_size(out_info)? };
-        let wasm = unsafe { bytes(wasm, MAX_KERNEL_BYTES)? };
+        let wasm = unsafe { bytes(wasm, MAX_LIMITED_BYTES)? };
         if ranges_overlap(
             out_kernel as usize,
             size_of::<u64>(),
@@ -317,12 +319,12 @@ fn vm_restore_common(
             options.monotonic_ms,
             options.entropy_seed,
         )?;
-        let snapshot = unsafe { bytes(options.snapshot, 512 * 1024 * 1024)? };
+        let snapshot = unsafe { bytes(options.snapshot, MAX_LIMITED_BYTES)? };
         super::snapshot_api::check_snapshot_memory(snapshot)?;
         let baseline = if options.baseline.len == 0 {
             None
         } else {
-            Some(unsafe { bytes(options.baseline, 512 * 1024 * 1024)? })
+            Some(unsafe { bytes(options.baseline, MAX_LIMITED_BYTES)? })
         };
         if let Some(base) = baseline {
             super::snapshot_api::check_snapshot_memory(base)?;
@@ -424,6 +426,7 @@ fn status_value(report: VmReport, size: usize) -> VmStatus {
         pending_commits: report.pending_commits,
         workers: report.workers,
         active_effects: report.active_effects,
+        monotonic_ms: report.monotonic_ms,
     }
 }
 

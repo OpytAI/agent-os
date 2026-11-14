@@ -33,8 +33,6 @@ pub const OPERATION_KIND: u8 = 7;
 pub const PLAN_KIND: u8 = 8;
 pub const EFFECT_KIND: u8 = 9;
 pub const SOCKET_KIND: u8 = 10;
-const MAX_VMS: usize = contract::MC_HOST_HARD_MAX_VMS as usize;
-const MAX_DRIVE_TICKS: u32 = contract::MC_HOST_HARD_MAX_DRIVE_TICKS;
 const MAX_PLANS: usize = 64;
 const MAX_PLAN_DEFINITION_BYTES: usize = contract::MC_HOST_HARD_MAX_PLAN_DEFINITION_BYTES as usize;
 
@@ -85,24 +83,9 @@ impl RuntimeLimits {
         max_effect_event_bytes: u32,
         max_effect_single_response_bytes: u32,
     ) -> Result<Self, u32> {
-        if max_vms > MAX_VMS as u32
-            || max_drive_ticks > MAX_DRIVE_TICKS
-            || max_output_bytes > contract::MC_HOST_HARD_MAX_OUTPUT_BYTES
-            || max_output_records > contract::MC_HOST_HARD_MAX_OUTPUT_RECORDS
-            || max_snapshot_bytes > contract::MC_HOST_HARD_MAX_SNAPSHOT_BYTES
-            || max_snapshot_total_bytes > contract::MC_HOST_HARD_MAX_SNAPSHOT_TOTAL_BYTES
-            || max_operations_per_vm > contract::MC_HOST_HARD_MAX_OPERATIONS_PER_VM
-            || max_effect_events > contract::MC_HOST_HARD_MAX_EFFECT_EVENTS
-            || max_effect_bytes > contract::MC_HOST_HARD_MAX_EFFECT_BYTES
-            || max_effect_response_bytes > contract::MC_HOST_HARD_MAX_EFFECT_RESPONSE_BYTES
-            || max_ws_sockets > contract::MC_HOST_HARD_MAX_WS_SOCKETS
-            || max_ws_incoming_bytes > contract::MC_HOST_HARD_MAX_WS_INCOMING_BYTES
-            || max_kernels > contract::MC_HOST_HARD_MAX_KERNELS
-            || max_kernel_bytes > contract::MC_HOST_HARD_MAX_KERNEL_BYTES
-            || max_compiled_modules > contract::MC_HOST_HARD_MAX_COMPILED_MODULES
-            || max_image_bytes > contract::MC_HOST_HARD_MAX_IMAGE_BYTES
-            || max_snapshot_handles > contract::MC_HOST_HARD_MAX_SNAPSHOT_HANDLES
-            || max_operation_result_bytes > contract::MC_HOST_HARD_MAX_OPERATION_RESULT_BYTES
+        // Counts and aggregate byte quotas are the application's to set. Only a
+        // single frame has a hard maximum, because the wire format bounds it.
+        if max_operation_result_bytes > contract::MC_HOST_HARD_MAX_OPERATION_RESULT_BYTES
             || max_message_bytes > contract::MC_HOST_HARD_MAX_MESSAGE_BYTES
             || max_effect_event_bytes > contract::MC_HOST_HARD_MAX_EFFECT_EVENT_BYTES
             || max_effect_single_response_bytes
@@ -505,6 +488,7 @@ pub struct VmReport {
     pub operation_pending: bool,
     pub effect_ready: bool,
     pub active_effects: u32,
+    pub monotonic_ms: i64,
 }
 
 pub struct VmConfig {
@@ -518,6 +502,10 @@ pub struct VmConfig {
 }
 
 impl VmRecord {
+    fn monotonic_ms(&self) -> i64 {
+        self.ambient.as_ref().map_or(0, Ambient::monotonic_ms)
+    }
+
     pub fn snapshot_readiness(&self) -> Result<VmSnapshotReadiness, u32> {
         let mut host = self.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
         let host = host.as_mut().ok_or(contract::MC_HOST_INVALID_STATE)?;
@@ -668,6 +656,7 @@ impl VmRecord {
             operation_pending,
             effect_ready: self.relay.as_ref().is_some_and(|relay| relay.ready()),
             active_effects: self.active_effects(),
+            monotonic_ms: self.monotonic_ms(),
         })
     }
 
@@ -694,6 +683,7 @@ impl VmRecord {
                 operation_pending: false,
                 effect_ready: self.relay.as_ref().is_some_and(|relay| relay.ready()),
                 active_effects: self.active_effects(),
+                monotonic_ms: self.monotonic_ms(),
             });
         }
         let mut host = self.host.try_lock().map_err(|_| contract::MC_HOST_BUSY)?;
@@ -706,6 +696,7 @@ impl VmRecord {
                     operation_pending,
                     effect_ready: self.relay.as_ref().is_some_and(|relay| relay.ready()),
                     active_effects: self.active_effects(),
+                    monotonic_ms: self.monotonic_ms(),
                     observed: *self
                         .observed
                         .lock()
@@ -803,7 +794,9 @@ impl VmRecord {
             }
         }
         if let (Some(current), Some(inputs)) = (&self.ambient, ambient) {
-            current.set(inputs);
+            current
+                .set(inputs)
+                .map_err(|()| contract::MC_HOST_INVALID_ARGUMENT)?;
         }
         let mut ticks = 0;
         let mut stop_reason = contract::MC_HOST_DRIVE_STOP_BUDGET;

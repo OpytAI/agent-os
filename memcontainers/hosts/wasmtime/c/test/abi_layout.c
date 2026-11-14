@@ -128,6 +128,7 @@ CHECK_FIELD(mc_host_vm_status_v1, VM_STATUS, inflight_egress, INFLIGHT_EGRESS);
 CHECK_FIELD(mc_host_vm_status_v1, VM_STATUS, pending_commits, PENDING_COMMITS);
 CHECK_FIELD(mc_host_vm_status_v1, VM_STATUS, workers, WORKERS);
 CHECK_FIELD(mc_host_vm_status_v1, VM_STATUS, active_effects, ACTIVE_EFFECTS);
+CHECK_FIELD(mc_host_vm_status_v1, VM_STATUS, monotonic_ms, MONOTONIC_MS);
 
 CHECK_LAYOUT(mc_host_drive_result_v1, DRIVE_RESULT);
 CHECK_FIELD(mc_host_drive_result_v1, DRIVE_RESULT, header, HEADER);

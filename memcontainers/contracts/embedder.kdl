@@ -6,7 +6,7 @@
 // Layout entries are the stable v1 manifest for the public C declarations and
 // their Rust FFI mirrors. Generated constants are checked by both compilers.
 
-abi-version major=1 minor=2
+abi-version major=1 minor=3
 
 layout "HEADER" size=8 align=4 {
   offset "size" value=0
@@ -116,7 +116,7 @@ layout "DRIVE_OPTIONS" size=48 align=8 {
   offset "monotonic_ms" value=32
   offset "entropy_seed" value=40
 }
-layout "VM_STATUS" size=64 align=8 {
+layout "VM_STATUS" size=72 align=8 {
   offset "header" value=0
   offset "state" value=8
   offset "last_tick" value=12
@@ -129,8 +129,9 @@ layout "VM_STATUS" size=64 align=8 {
   offset "pending_commits" value=52
   offset "workers" value=56
   offset "active_effects" value=60
+  offset "monotonic_ms" value=64
 }
-layout "DRIVE_RESULT" size=80 align=8 {
+layout "DRIVE_RESULT" size=88 align=8 {
   offset "header" value=0
   offset "ticks" value=8
   offset "stop_reason" value=12
@@ -327,40 +328,23 @@ constant "MC_HOST_FEATURE_WS_EFFECT" value=8192 type="u64"
 constant "MC_HOST_FEATURE_NATIVE_CONNECTION" value=16384 type="u64"
 constant "MC_HOST_FEATURE_LIVE_ATTACHMENT" value=32768 type="u64"
 constant "MC_HOST_DEFAULT_MAX_VMS" value=16 type="u32"
-constant "MC_HOST_HARD_MAX_VMS" value=4096 type="u32"
 constant "MC_HOST_DEFAULT_MAX_DRIVE_TICKS" value=1000 type="u32"
-constant "MC_HOST_HARD_MAX_DRIVE_TICKS" value=1000 type="u32"
 constant "MC_HOST_DEFAULT_MAX_OUTPUT_BYTES" value=4194304 type="u32"
-constant "MC_HOST_HARD_MAX_OUTPUT_BYTES" value=4194304 type="u32"
 constant "MC_HOST_DEFAULT_MAX_OUTPUT_RECORDS" value=4096 type="u32"
-constant "MC_HOST_HARD_MAX_OUTPUT_RECORDS" value=4096 type="u32"
 constant "MC_HOST_DEFAULT_MAX_SNAPSHOT_BYTES" value=536870912 type="u32"
-constant "MC_HOST_HARD_MAX_SNAPSHOT_BYTES" value=536870912 type="u32"
 constant "MC_HOST_DEFAULT_MAX_SNAPSHOT_TOTAL_BYTES" value=1073741824 type="u32"
-constant "MC_HOST_HARD_MAX_SNAPSHOT_TOTAL_BYTES" value=1073741824 type="u32"
 constant "MC_HOST_DEFAULT_MAX_OPERATIONS_PER_VM" value=64 type="u32"
-constant "MC_HOST_HARD_MAX_OPERATIONS_PER_VM" value=64 type="u32"
 constant "MC_HOST_DEFAULT_MAX_EFFECT_EVENTS" value=256 type="u32"
-constant "MC_HOST_HARD_MAX_EFFECT_EVENTS" value=256 type="u32"
 constant "MC_HOST_DEFAULT_MAX_EFFECT_BYTES" value=4194304 type="u32"
-constant "MC_HOST_HARD_MAX_EFFECT_BYTES" value=4194304 type="u32"
 constant "MC_HOST_DEFAULT_MAX_EFFECT_RESPONSE_BYTES" value=67108864 type="u32"
-constant "MC_HOST_HARD_MAX_EFFECT_RESPONSE_BYTES" value=67108864 type="u32"
 constant "MC_HOST_DEFAULT_MAX_WS_SOCKETS" value=256 type="u32"
-constant "MC_HOST_HARD_MAX_WS_SOCKETS" value=256 type="u32"
 constant "MC_HOST_DEFAULT_MAX_WS_INCOMING_BYTES" value=16777216 type="u32"
-constant "MC_HOST_HARD_MAX_WS_INCOMING_BYTES" value=16777216 type="u32"
 constant "MC_HOST_MIN_NATIVE_STACK_BYTES" value=8388608 type="u32"
 constant "MC_HOST_DEFAULT_MAX_KERNELS" value=64 type="u32"
-constant "MC_HOST_HARD_MAX_KERNELS" value=64 type="u32"
 constant "MC_HOST_DEFAULT_MAX_KERNEL_BYTES" value=268435456 type="u32"
-constant "MC_HOST_HARD_MAX_KERNEL_BYTES" value=268435456 type="u32"
 constant "MC_HOST_DEFAULT_MAX_COMPILED_MODULES" value=64 type="u32"
-constant "MC_HOST_HARD_MAX_COMPILED_MODULES" value=64 type="u32"
 constant "MC_HOST_DEFAULT_MAX_IMAGE_BYTES" value=268435456 type="u32"
-constant "MC_HOST_HARD_MAX_IMAGE_BYTES" value=268435456 type="u32"
 constant "MC_HOST_DEFAULT_MAX_SNAPSHOT_HANDLES" value=64 type="u32"
-constant "MC_HOST_HARD_MAX_SNAPSHOT_HANDLES" value=64 type="u32"
 constant "MC_HOST_DEFAULT_MAX_OPERATION_RESULT_BYTES" value=16777216 type="u32"
 constant "MC_HOST_HARD_MAX_OPERATION_RESULT_BYTES" value=16777216 type="u32"
 constant "MC_HOST_DEFAULT_MAX_MESSAGE_BYTES" value=18874368 type="u32"

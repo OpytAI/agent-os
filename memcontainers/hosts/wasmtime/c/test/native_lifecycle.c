@@ -2323,14 +2323,18 @@ static void guest_stdout(const mc_host_vm_api_v1 *vm_api,
   check(op_api->close(runtime, operation, NULL), "close ambient probe");
 }
 
-/* Replace a deterministic VM's ambient inputs with a one-tick drive. */
+/* Replace a deterministic VM's ambient inputs with a one-tick drive. The
+ * monotonic clock continues from the position the VM reports. */
 static mc_host_result_t set_ambient(const mc_host_vm_api_v1 *vm_api,
                                     mc_host_runtime_t runtime, mc_host_handle_t vm,
                                     int64_t wall_ms, uint64_t entropy_seed) {
+  mc_host_vm_status_v1 status = MC_HOST_INIT(mc_host_vm_status_v1);
+  check(vm_api->vm_status(runtime, vm, &status, NULL), "read monotonic position");
   mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
   options.max_ticks = 1;
   options.flags = MC_HOST_DRIVE_SET_AMBIENT;
   options.wall_ms = wall_ms;
+  options.monotonic_ms = status.monotonic_ms;
   options.entropy_seed = entropy_seed;
   mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
   return vm_api->vm_drive(runtime, vm, &options, &driven, NULL);
@@ -2404,6 +2408,26 @@ static void verify_ambient_inputs(const mc_host_api_v1 *api,
   need(vm_api->vm_drive(runtime, vm, &stray, &driven, NULL) == MC_HOST_UNSUPPORTED,
        "unknown drive flag is refused");
 
+  mc_host_vm_status_v1 position = MC_HOST_INIT(mc_host_vm_status_v1);
+  mc_host_drive_options_v1 jump = MC_HOST_INIT(mc_host_drive_options_v1);
+  jump.max_ticks = 1;
+  jump.flags = MC_HOST_DRIVE_SET_AMBIENT;
+  jump.wall_ms = INT64_C(1800000000000);
+  jump.monotonic_ms = INT64_C(5000000);
+  jump.entropy_seed = 7;
+  check(vm_api->vm_drive(runtime, vm, &jump, &driven, NULL), "move the monotonic base forward");
+  need(driven.status.monotonic_ms >= INT64_C(5000000),
+       "drive result reports the monotonic position");
+  guest_stdout(vm_api, op_api, runtime, vm, "cat /proc/uptime || date +%s", first, sizeof(first));
+  check(vm_api->vm_status(runtime, vm, &position, NULL), "read monotonic position");
+  need(position.monotonic_ms >= driven.status.monotonic_ms,
+       "the monotonic position never moves back");
+  jump.monotonic_ms = position.monotonic_ms - 1;
+  need(vm_api->vm_drive(runtime, vm, &jump, &driven, NULL) == MC_HOST_INVALID_ARGUMENT,
+       "a monotonic base behind the position is refused");
+  check(vm_api->vm_status(runtime, vm, &driven.status, NULL), "read position after refusal");
+  need(driven.status.monotonic_ms == position.monotonic_ms,
+       "a refused set changes nothing");
   check(set_ambient(vm_api, runtime, vm, INT64_C(1900000000000), 42),
         "replace ambient inputs at a drive");
   guest_stdout(vm_api, op_api, runtime, vm, clock_command, first, sizeof(first));
@@ -2453,6 +2477,8 @@ static void verify_ambient_inputs(const mc_host_api_v1 *api,
   create.entropy_seed = 0;
   check(vm_api->vm_create(runtime, kernel, 0, &create, &vm, NULL),
         "boot VM that reads the machine clock");
+  check(vm_api->vm_status(runtime, vm, &position, NULL), "read machine-clock VM status");
+  need(position.monotonic_ms == 0, "a machine-clock VM reports no monotonic position");
   need(set_ambient(vm_api, runtime, vm, 1, 1) == MC_HOST_INVALID_ARGUMENT,
        "SET_AMBIENT is refused for a VM that reads the machine clock");
   check(vm_api->vm_close(runtime, vm, NULL), "close machine-clock VM");
@@ -2874,7 +2900,7 @@ int main(int argc, char **argv) {
   check(api.runtime_close(tight_runtime, NULL), "close quota runtime");
 
   need(full_info.length > 1024 * 1024 &&
-           full_info.length + 1024 * 1024 <= MC_HOST_HARD_MAX_SNAPSHOT_TOTAL_BYTES,
+           full_info.length + 1024 * 1024 <= UINT32_MAX,
        "real snapshot fits aggregate quota test");
   mc_host_runtime_options_v1 aggregate_options = MC_HOST_INIT(mc_host_runtime_options_v1);
   aggregate_options.max_snapshot_total_bytes = (uint32_t)full_info.length + 1024 * 1024;

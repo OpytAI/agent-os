@@ -204,6 +204,7 @@ struct VmStatus {
     pending_commits: i32,
     workers: u32,
     active_effects: u32,
+    monotonic_ms: i64,
 }
 
 #[repr(C)]
@@ -729,6 +730,10 @@ const _: () = {
             == contract::MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_ENTROPY_SEED_OFFSET
     );
 
+    assert!(
+        offset_of!(VmStatus, monotonic_ms)
+            == contract::MC_HOST_LAYOUT_VM_STATUS_MONOTONIC_MS_OFFSET
+    );
     assert!(size_of::<VmStatus>() == contract::MC_HOST_LAYOUT_VM_STATUS_SIZE);
     assert!(align_of::<VmStatus>() == contract::MC_HOST_LAYOUT_VM_STATUS_ALIGN);
     assert!(offset_of!(VmStatus, header) == contract::MC_HOST_LAYOUT_VM_STATUS_HEADER_OFFSET);
