@@ -65,7 +65,8 @@ typedef struct mc_host_error_v1 {
 
 typedef struct mc_host_runtime_options_v1 {
   mc_host_header_v1 header;
-  /* Zero selects the published default. Nonzero values may lower the limit. */
+  /* Zero selects the published default. A nonzero value may not exceed the
+   * hard limit of the same name. */
   uint32_t max_vms;
   uint32_t max_drive_ticks;
   /* Zero selects the default. At least 4 bytes and 4 records otherwise. */
@@ -142,6 +143,13 @@ typedef struct mc_host_vm_create_options_v1 {
   uint32_t flags;
   uint32_t terminal_cols;
   uint32_t terminal_rows;
+  /* Ambient inputs of a DETERMINISTIC VM; all three are zero otherwise.
+   * The guest reads wall_ms as its wall clock. Its monotonic clock starts at
+   * monotonic_ms and advances one millisecond per read. Its entropy is the
+   * SplitMix64 stream of entropy_seed. Neither clock value may be negative. */
+  int64_t wall_ms;
+  int64_t monotonic_ms;
+  uint64_t entropy_seed;
 } mc_host_vm_create_options_v1;
 
 typedef struct mc_host_vm_restore_options_v1 {
@@ -150,13 +158,24 @@ typedef struct mc_host_vm_restore_options_v1 {
   mc_host_bytes_v1 baseline;
   uint32_t mode;
   uint32_t flags; /* DETERMINISTIC requires application-managed effects. */
+  /* Ambient inputs of a DETERMINISTIC VM, as in vm_create. A snapshot does not
+   * carry them: the restored VM reads exactly the values given here. */
+  int64_t wall_ms;
+  int64_t monotonic_ms;
+  uint64_t entropy_seed;
 } mc_host_vm_restore_options_v1;
 
 typedef struct mc_host_drive_options_v1 {
   mc_host_header_v1 header;
   uint32_t max_ticks;
-  uint32_t reserved;
+  /* SET_AMBIENT replaces a DETERMINISTIC VM's ambient inputs before the first
+   * tick of this drive. Without it the three fields are zero and the clock and
+   * entropy stream continue from where the previous call left them. */
+  uint32_t flags;
   uint64_t stop_mask;
+  int64_t wall_ms;
+  int64_t monotonic_ms;
+  uint64_t entropy_seed;
 } mc_host_drive_options_v1;
 
 typedef struct mc_host_vm_status_v1 {

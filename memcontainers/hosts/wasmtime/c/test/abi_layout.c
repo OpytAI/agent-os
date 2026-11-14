@@ -92,6 +92,9 @@ CHECK_FIELD(mc_host_vm_create_options_v1, VM_CREATE_OPTIONS, requested_workers, 
 CHECK_FIELD(mc_host_vm_create_options_v1, VM_CREATE_OPTIONS, flags, FLAGS);
 CHECK_FIELD(mc_host_vm_create_options_v1, VM_CREATE_OPTIONS, terminal_cols, TERMINAL_COLS);
 CHECK_FIELD(mc_host_vm_create_options_v1, VM_CREATE_OPTIONS, terminal_rows, TERMINAL_ROWS);
+CHECK_FIELD(mc_host_vm_create_options_v1, VM_CREATE_OPTIONS, wall_ms, WALL_MS);
+CHECK_FIELD(mc_host_vm_create_options_v1, VM_CREATE_OPTIONS, monotonic_ms, MONOTONIC_MS);
+CHECK_FIELD(mc_host_vm_create_options_v1, VM_CREATE_OPTIONS, entropy_seed, ENTROPY_SEED);
 
 CHECK_LAYOUT(mc_host_vm_restore_options_v1, VM_RESTORE_OPTIONS);
 CHECK_FIELD(mc_host_vm_restore_options_v1, VM_RESTORE_OPTIONS, header, HEADER);
@@ -99,12 +102,18 @@ CHECK_FIELD(mc_host_vm_restore_options_v1, VM_RESTORE_OPTIONS, snapshot, SNAPSHO
 CHECK_FIELD(mc_host_vm_restore_options_v1, VM_RESTORE_OPTIONS, baseline, BASELINE);
 CHECK_FIELD(mc_host_vm_restore_options_v1, VM_RESTORE_OPTIONS, mode, MODE);
 CHECK_FIELD(mc_host_vm_restore_options_v1, VM_RESTORE_OPTIONS, flags, FLAGS);
+CHECK_FIELD(mc_host_vm_restore_options_v1, VM_RESTORE_OPTIONS, wall_ms, WALL_MS);
+CHECK_FIELD(mc_host_vm_restore_options_v1, VM_RESTORE_OPTIONS, monotonic_ms, MONOTONIC_MS);
+CHECK_FIELD(mc_host_vm_restore_options_v1, VM_RESTORE_OPTIONS, entropy_seed, ENTROPY_SEED);
 
 CHECK_LAYOUT(mc_host_drive_options_v1, DRIVE_OPTIONS);
 CHECK_FIELD(mc_host_drive_options_v1, DRIVE_OPTIONS, header, HEADER);
 CHECK_FIELD(mc_host_drive_options_v1, DRIVE_OPTIONS, max_ticks, MAX_TICKS);
-CHECK_FIELD(mc_host_drive_options_v1, DRIVE_OPTIONS, reserved, RESERVED);
+CHECK_FIELD(mc_host_drive_options_v1, DRIVE_OPTIONS, flags, FLAGS);
 CHECK_FIELD(mc_host_drive_options_v1, DRIVE_OPTIONS, stop_mask, STOP_MASK);
+CHECK_FIELD(mc_host_drive_options_v1, DRIVE_OPTIONS, wall_ms, WALL_MS);
+CHECK_FIELD(mc_host_drive_options_v1, DRIVE_OPTIONS, monotonic_ms, MONOTONIC_MS);
+CHECK_FIELD(mc_host_drive_options_v1, DRIVE_OPTIONS, entropy_seed, ENTROPY_SEED);
 
 CHECK_LAYOUT(mc_host_vm_status_v1, VM_STATUS);
 CHECK_FIELD(mc_host_vm_status_v1, VM_STATUS, header, HEADER);

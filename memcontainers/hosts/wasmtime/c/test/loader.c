@@ -98,7 +98,7 @@ int main(int argc, char **argv) {
        "reject unknown nonzero option");
   need(runtime == 0, "failure clears output");
   options.future[0] = 0;
-  options.known.max_vms = 17;
+  options.known.max_vms = MC_HOST_HARD_MAX_VMS + 1;
   need(api.runtime_create(&options.known, &runtime, NULL) == MC_HOST_RESOURCE_LIMIT &&
            runtime == 0, "reject VM limit above hard cap");
   options.known.max_vms = 0;

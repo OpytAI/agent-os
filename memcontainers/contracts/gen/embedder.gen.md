@@ -1,6 +1,6 @@
 # Native embedder contract
 
-ABI **1.1**.
+ABI **1.2**.
 
 | Constant | Type | Value |
 | --- | --- | ---: |
@@ -50,7 +50,7 @@ ABI **1.1**.
 | `MC_HOST_FEATURE_NATIVE_CONNECTION` | `u64` | 16384 |
 | `MC_HOST_FEATURE_LIVE_ATTACHMENT` | `u64` | 32768 |
 | `MC_HOST_DEFAULT_MAX_VMS` | `u32` | 16 |
-| `MC_HOST_HARD_MAX_VMS` | `u32` | 16 |
+| `MC_HOST_HARD_MAX_VMS` | `u32` | 4096 |
 | `MC_HOST_DEFAULT_MAX_DRIVE_TICKS` | `u32` | 1000 |
 | `MC_HOST_HARD_MAX_DRIVE_TICKS` | `u32` | 1000 |
 | `MC_HOST_DEFAULT_MAX_OUTPUT_BYTES` | `u32` | 4194304 |
@@ -117,6 +117,7 @@ ABI **1.1**.
 | `MC_HOST_DRIVE_ON_OUTPUT` | `u64` | 1 |
 | `MC_HOST_DRIVE_ON_OPERATION` | `u64` | 2 |
 | `MC_HOST_DRIVE_ON_EFFECT` | `u64` | 4 |
+| `MC_HOST_DRIVE_SET_AMBIENT` | `u32` | 1 |
 | `MC_HOST_VM_FLAG_OUTPUT_READY` | `u32` | 4 |
 | `MC_HOST_VM_FLAG_OPERATION_READY` | `u32` | 8 |
 | `MC_HOST_VM_FLAG_OPERATION_PENDING` | `u32` | 16 |
@@ -186,9 +187,9 @@ ABI **1.1**.
 | `API` | 56 | 8 |
 | `BYTES` | 16 | 8 |
 | `KERNEL_INFO` | 40 | 4 |
-| `VM_CREATE_OPTIONS` | 56 | 8 |
-| `VM_RESTORE_OPTIONS` | 48 | 8 |
-| `DRIVE_OPTIONS` | 24 | 8 |
+| `VM_CREATE_OPTIONS` | 80 | 8 |
+| `VM_RESTORE_OPTIONS` | 72 | 8 |
+| `DRIVE_OPTIONS` | 48 | 8 |
 | `VM_STATUS` | 64 | 8 |
 | `DRIVE_RESULT` | 80 | 8 |
 | `VM_API` | 104 | 8 |

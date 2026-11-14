@@ -5,6 +5,7 @@ use std::ptr;
 
 use embedder_rust as contract;
 
+use super::ambient::AmbientInputs;
 use super::resources::{VmConfig, VmReport};
 use super::*;
 
@@ -23,6 +24,31 @@ pub(super) unsafe fn bytes<'a>(value: Bytes, maximum: u64) -> Result<&'a [u8], R
     }
     let length = usize::try_from(value.len).map_err(|_| contract::MC_HOST_INVALID_ARGUMENT)?;
     Ok(unsafe { std::slice::from_raw_parts(value.data, length) })
+}
+
+/// The ambient inputs of one call. A deterministic VM takes them as given; any
+/// other VM reads the machine's clock and entropy, so they must be zero.
+fn ambient(
+    deterministic: bool,
+    wall_ms: i64,
+    monotonic_ms: i64,
+    entropy_seed: u64,
+) -> Result<Option<AmbientInputs>, ResultCode> {
+    let inputs = AmbientInputs {
+        wall_ms,
+        monotonic_ms,
+        entropy_seed,
+    };
+    if deterministic {
+        if !inputs.is_valid() {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        Ok(Some(inputs))
+    } else if inputs.is_zero() {
+        Ok(None)
+    } else {
+        Err(contract::MC_HOST_INVALID_ARGUMENT)
+    }
 }
 
 pub(super) unsafe fn input<T: Copy>(ptr: *const T) -> Result<T, ResultCode> {
@@ -143,6 +169,12 @@ pub unsafe extern "C" fn vm_create(
         if (options.terminal_cols == 0) != (options.terminal_rows == 0) {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
+        let ambient = ambient(
+            options.flags & contract::MC_HOST_VM_CREATE_DETERMINISTIC != 0,
+            options.wall_ms,
+            options.monotonic_ms,
+            options.entropy_seed,
+        )?;
         let terminal_size = if options.terminal_cols != 0 {
             Some((
                 i32::try_from(options.terminal_cols)
@@ -192,7 +224,7 @@ pub unsafe extern "C" fn vm_create(
         }
         let config = VmConfig {
             layers,
-            deterministic: options.flags & contract::MC_HOST_VM_CREATE_DETERMINISTIC != 0,
+            ambient,
             requested_workers: if options.requested_workers == -1 {
                 None
             } else if options.requested_workers >= 0 {
@@ -279,6 +311,12 @@ fn vm_restore_common(
         if options.mode == contract::MC_HOST_RESTORE_DETACHED && manifest.len != 0 {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
+        let ambient = ambient(
+            options.flags & contract::MC_HOST_VM_RESTORE_DETERMINISTIC != 0,
+            options.wall_ms,
+            options.monotonic_ms,
+            options.entropy_seed,
+        )?;
         let snapshot = unsafe { bytes(options.snapshot, 512 * 1024 * 1024)? };
         super::snapshot_api::check_snapshot_memory(snapshot)?;
         let baseline = if options.baseline.len == 0 {
@@ -325,7 +363,7 @@ fn vm_restore_common(
             snapshot,
             baseline,
             manifest,
-            options.flags & contract::MC_HOST_VM_RESTORE_DETERMINISTIC != 0,
+            ambient,
         )?;
         unsafe { *out_vm = vm };
         Ok(())
@@ -415,14 +453,20 @@ pub unsafe extern "C" fn vm_drive(
     guard_vm(error, runtime, vm, || {
         let options = unsafe { input(options)? };
         let size = unsafe { output_size(out)? };
-        if options.reserved != 0 {
+        if options.flags & !contract::MC_HOST_DRIVE_SET_AMBIENT != 0 {
             return Err(contract::MC_HOST_UNSUPPORTED);
         }
+        let ambient = ambient(
+            options.flags & contract::MC_HOST_DRIVE_SET_AMBIENT != 0,
+            options.wall_ms,
+            options.monotonic_ms,
+            options.entropy_seed,
+        )?;
         let active = ActiveRuntime::acquire(runtime)?;
         let driven = active
             .state
             .vm(vm)?
-            .drive(options.max_ticks, options.stop_mask)?;
+            .drive(options.max_ticks, options.stop_mask, ambient)?;
         let value = DriveResult {
             header: Header {
                 size: size as u32,

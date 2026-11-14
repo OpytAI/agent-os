@@ -18,6 +18,7 @@ use host::{
 };
 use sha2::{Digest, Sha256};
 
+use super::ambient::{Ambient, AmbientInputs};
 use super::notifier::{Notifier, WakeCallback};
 use super::operations::OperationRecord;
 use super::relay::{EffectBody, Relay, RelayLimits};
@@ -452,7 +453,8 @@ struct KernelRecord {
 
 pub struct VmRecord {
     kernel_handle: u64,
-    deterministic: bool,
+    // Present exactly for deterministic VMs.
+    ambient: Option<Ambient>,
     host: Mutex<Option<KernelHost>>,
     pub output: Arc<OutputQueue>,
     observed: Mutex<VmObserved>,
@@ -507,7 +509,7 @@ pub struct VmReport {
 
 pub struct VmConfig {
     pub layers: Vec<Vec<u8>>,
-    pub deterministic: bool,
+    pub ambient: Option<AmbientInputs>,
     pub requested_workers: Option<i32>,
     pub contract_tier: i32,
     pub contract_budget_mib: i32,
@@ -670,7 +672,9 @@ impl VmRecord {
     }
 
     fn active_effects(&self) -> u32 {
-        self.relay.as_ref().map_or(0, |relay| relay.active_effects())
+        self.relay
+            .as_ref()
+            .map_or(0, |relay| relay.active_effects())
     }
 
     pub fn status(&self) -> Result<VmReport, u32> {
@@ -764,8 +768,16 @@ impl VmRecord {
             .map_err(|_| contract::MC_HOST_KERNEL_ERROR)
     }
 
-    pub fn drive(&self, max_ticks: u32, stop_mask: u64) -> Result<VmDriveResult, u32> {
+    pub fn drive(
+        &self,
+        max_ticks: u32,
+        stop_mask: u64,
+        ambient: Option<AmbientInputs>,
+    ) -> Result<VmDriveResult, u32> {
         if max_ticks == 0 || max_ticks > self.max_drive_ticks {
+            return Err(contract::MC_HOST_INVALID_ARGUMENT);
+        }
+        if ambient.is_some() && self.ambient.is_none() {
             return Err(contract::MC_HOST_INVALID_ARGUMENT);
         }
         if stop_mask
@@ -789,6 +801,9 @@ impl VmRecord {
             if observed.poisoned {
                 return Err(contract::MC_HOST_POISONED);
             }
+        }
+        if let (Some(current), Some(inputs)) = (&self.ambient, ambient) {
+            current.set(inputs);
         }
         let mut ticks = 0;
         let mut stop_reason = contract::MC_HOST_DRIVE_STOP_BUDGET;
@@ -1820,7 +1835,8 @@ impl RuntimeState {
             return Err(contract::MC_HOST_RESOURCE_LIMIT);
         }
         let capabilities = self.plan_capabilities(plan_handle)?;
-        if config.deterministic && capabilities.as_ref().is_some_and(|plan| plan.native_net) {
+        let deterministic = config.ambient.is_some();
+        if deterministic && capabilities.as_ref().is_some_and(|plan| plan.native_net) {
             return Err(contract::MC_HOST_UNSUPPORTED);
         }
         let native_net = capabilities
@@ -1878,7 +1894,7 @@ impl RuntimeState {
                     .is_some_and(|plan| plan.http_identity.is_some()),
                 self.limits.relay,
                 self.notifier.clone(),
-                config.deterministic,
+                deterministic,
             )
         });
         if let Some(relay) = &relay {
@@ -1893,8 +1909,9 @@ impl RuntimeState {
                 builder = builder.with_net(Box::new(net));
             }
         }
-        if config.deterministic {
-            builder = builder.deterministic();
+        let ambient = config.ambient.map(Ambient::new);
+        if let Some(ambient) = &ambient {
+            builder = builder.with_clock(ambient.clock()).with_rng(ambient.rng());
         }
         if let Some(workers) = config.requested_workers {
             builder = builder.with_workers(workers);
@@ -1915,7 +1932,7 @@ impl RuntimeState {
         let exit_code = host.exit_code();
         let vm = Arc::new(VmRecord {
             kernel_handle,
-            deterministic: config.deterministic,
+            ambient,
             host: Mutex::new(Some(host)),
             output,
             observed: Mutex::new(VmObserved {
@@ -1959,7 +1976,7 @@ impl RuntimeState {
         snapshot: &[u8],
         baseline: Option<&[u8]>,
         manifest_bytes: Option<&[u8]>,
-        deterministic: bool,
+        ambient: Option<AmbientInputs>,
     ) -> Result<u64, u32> {
         self.restore_vm_inner(
             kernel_handle,
@@ -1968,7 +1985,7 @@ impl RuntimeState {
             snapshot,
             baseline,
             manifest_bytes,
-            deterministic,
+            ambient,
             false,
         )
     }
@@ -1981,9 +1998,10 @@ impl RuntimeState {
         snapshot: &[u8],
         baseline: Option<&[u8]>,
         manifest_bytes: Option<&[u8]>,
-        deterministic: bool,
+        ambient: Option<AmbientInputs>,
         fork_catalog: bool,
     ) -> Result<u64, u32> {
+        let deterministic = ambient.is_some();
         if snapshot.is_empty()
             || snapshot.len() > self.limits.max_snapshot_bytes
             || baseline
@@ -2141,8 +2159,9 @@ impl RuntimeState {
                 builder = builder.with_net(Box::new(net));
             }
         }
-        if deterministic {
-            builder = builder.deterministic();
+        let ambient = ambient.map(Ambient::new);
+        if let Some(ambient) = &ambient {
+            builder = builder.with_clock(ambient.clock()).with_rng(ambient.rng());
         }
         let restored = match baseline.as_deref() {
             Some(base) => builder.restore_incremental(&snapshot, base),
@@ -2192,7 +2211,7 @@ impl RuntimeState {
         let exit_code = host.exit_code();
         let vm = Arc::new(VmRecord {
             kernel_handle,
-            deterministic,
+            ambient,
             host: Mutex::new(Some(host)),
             output,
             observed: Mutex::new(VmObserved {
@@ -2260,7 +2279,7 @@ impl RuntimeState {
                 &snapshot.bytes,
                 None,
                 Some(&snapshot.attachment_manifest),
-                source.deterministic,
+                source.ambient.as_ref().map(Ambient::fork_inputs),
                 true,
             );
             let closed_plan = if plan_handle == 0 {

@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use embedder_rust as contract;
 
+mod ambient;
 mod attachment_api;
 mod effect_api;
 mod notifier;
@@ -158,6 +159,9 @@ struct VmCreateOptions {
     flags: u32,
     terminal_cols: u32,
     terminal_rows: u32,
+    wall_ms: i64,
+    monotonic_ms: i64,
+    entropy_seed: u64,
 }
 
 #[repr(C)]
@@ -168,6 +172,9 @@ struct VmRestoreOptions {
     baseline: Bytes,
     mode: u32,
     flags: u32,
+    wall_ms: i64,
+    monotonic_ms: i64,
+    entropy_seed: u64,
 }
 
 #[repr(C)]
@@ -175,8 +182,11 @@ struct VmRestoreOptions {
 struct DriveOptions {
     header: Header,
     max_ticks: u32,
-    reserved: u32,
+    flags: u32,
     stop_mask: u64,
+    wall_ms: i64,
+    monotonic_ms: i64,
+    entropy_seed: u64,
 }
 
 #[repr(C)]
@@ -678,13 +688,45 @@ const _: () = {
         offset_of!(DriveOptions, max_ticks)
             == contract::MC_HOST_LAYOUT_DRIVE_OPTIONS_MAX_TICKS_OFFSET
     );
-    assert!(
-        offset_of!(DriveOptions, reserved)
-            == contract::MC_HOST_LAYOUT_DRIVE_OPTIONS_RESERVED_OFFSET
-    );
+    assert!(offset_of!(DriveOptions, flags) == contract::MC_HOST_LAYOUT_DRIVE_OPTIONS_FLAGS_OFFSET);
     assert!(
         offset_of!(DriveOptions, stop_mask)
             == contract::MC_HOST_LAYOUT_DRIVE_OPTIONS_STOP_MASK_OFFSET
+    );
+    assert!(
+        offset_of!(DriveOptions, wall_ms) == contract::MC_HOST_LAYOUT_DRIVE_OPTIONS_WALL_MS_OFFSET
+    );
+    assert!(
+        offset_of!(DriveOptions, monotonic_ms)
+            == contract::MC_HOST_LAYOUT_DRIVE_OPTIONS_MONOTONIC_MS_OFFSET
+    );
+    assert!(
+        offset_of!(DriveOptions, entropy_seed)
+            == contract::MC_HOST_LAYOUT_DRIVE_OPTIONS_ENTROPY_SEED_OFFSET
+    );
+    assert!(
+        offset_of!(VmCreateOptions, wall_ms)
+            == contract::MC_HOST_LAYOUT_VM_CREATE_OPTIONS_WALL_MS_OFFSET
+    );
+    assert!(
+        offset_of!(VmCreateOptions, monotonic_ms)
+            == contract::MC_HOST_LAYOUT_VM_CREATE_OPTIONS_MONOTONIC_MS_OFFSET
+    );
+    assert!(
+        offset_of!(VmCreateOptions, entropy_seed)
+            == contract::MC_HOST_LAYOUT_VM_CREATE_OPTIONS_ENTROPY_SEED_OFFSET
+    );
+    assert!(
+        offset_of!(VmRestoreOptions, wall_ms)
+            == contract::MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_WALL_MS_OFFSET
+    );
+    assert!(
+        offset_of!(VmRestoreOptions, monotonic_ms)
+            == contract::MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_MONOTONIC_MS_OFFSET
+    );
+    assert!(
+        offset_of!(VmRestoreOptions, entropy_seed)
+            == contract::MC_HOST_LAYOUT_VM_RESTORE_OPTIONS_ENTROPY_SEED_OFFSET
     );
 
     assert!(size_of::<VmStatus>() == contract::MC_HOST_LAYOUT_VM_STATUS_SIZE);

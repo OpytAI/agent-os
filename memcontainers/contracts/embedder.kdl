@@ -6,7 +6,7 @@
 // Layout entries are the stable v1 manifest for the public C declarations and
 // their Rust FFI mirrors. Generated constants are checked by both compilers.
 
-abi-version major=1 minor=1
+abi-version major=1 minor=2
 
 layout "HEADER" size=8 align=4 {
   offset "size" value=0
@@ -82,7 +82,7 @@ layout "KERNEL_INFO" size=40 align=4 {
   offset "header" value=0
   offset "digest" value=8
 }
-layout "VM_CREATE_OPTIONS" size=56 align=8 {
+layout "VM_CREATE_OPTIONS" size=80 align=8 {
   offset "header" value=0
   offset "layers" value=8
   offset "layer_count" value=16
@@ -93,19 +93,28 @@ layout "VM_CREATE_OPTIONS" size=56 align=8 {
   offset "flags" value=44
   offset "terminal_cols" value=48
   offset "terminal_rows" value=52
+  offset "wall_ms" value=56
+  offset "monotonic_ms" value=64
+  offset "entropy_seed" value=72
 }
-layout "VM_RESTORE_OPTIONS" size=48 align=8 {
+layout "VM_RESTORE_OPTIONS" size=72 align=8 {
   offset "header" value=0
   offset "snapshot" value=8
   offset "baseline" value=24
   offset "mode" value=40
   offset "flags" value=44
+  offset "wall_ms" value=48
+  offset "monotonic_ms" value=56
+  offset "entropy_seed" value=64
 }
-layout "DRIVE_OPTIONS" size=24 align=8 {
+layout "DRIVE_OPTIONS" size=48 align=8 {
   offset "header" value=0
   offset "max_ticks" value=8
-  offset "reserved" value=12
+  offset "flags" value=12
   offset "stop_mask" value=16
+  offset "wall_ms" value=24
+  offset "monotonic_ms" value=32
+  offset "entropy_seed" value=40
 }
 layout "VM_STATUS" size=64 align=8 {
   offset "header" value=0
@@ -318,7 +327,7 @@ constant "MC_HOST_FEATURE_WS_EFFECT" value=8192 type="u64"
 constant "MC_HOST_FEATURE_NATIVE_CONNECTION" value=16384 type="u64"
 constant "MC_HOST_FEATURE_LIVE_ATTACHMENT" value=32768 type="u64"
 constant "MC_HOST_DEFAULT_MAX_VMS" value=16 type="u32"
-constant "MC_HOST_HARD_MAX_VMS" value=16 type="u32"
+constant "MC_HOST_HARD_MAX_VMS" value=4096 type="u32"
 constant "MC_HOST_DEFAULT_MAX_DRIVE_TICKS" value=1000 type="u32"
 constant "MC_HOST_HARD_MAX_DRIVE_TICKS" value=1000 type="u32"
 constant "MC_HOST_DEFAULT_MAX_OUTPUT_BYTES" value=4194304 type="u32"
@@ -386,6 +395,7 @@ constant "MC_HOST_DRIVE_STOP_OPERATION" value=7 type="u32"
 constant "MC_HOST_DRIVE_ON_OUTPUT" value=1 type="u64"
 constant "MC_HOST_DRIVE_ON_OPERATION" value=2 type="u64"
 constant "MC_HOST_DRIVE_ON_EFFECT" value=4 type="u64"
+constant "MC_HOST_DRIVE_SET_AMBIENT" value=1 type="u32"
 constant "MC_HOST_VM_FLAG_OUTPUT_READY" value=4 type="u32"
 constant "MC_HOST_VM_FLAG_OPERATION_READY" value=8 type="u32"
 constant "MC_HOST_VM_FLAG_OPERATION_PENDING" value=16 type="u32"

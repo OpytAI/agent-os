@@ -15,6 +15,11 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+/* Ambient inputs that match the Rust host's fixed deterministic sources, so a
+ * capture taken here is byte-identical to a Rust-host fixture. */
+#define FIXTURE_WALL_MS INT64_C(1700000000000)
+#define FIXTURE_ENTROPY_SEED UINT64_C(0xDEADBEEFCAFEF00D)
+
 static void need(int condition, const char *step) {
   if (condition) return;
   fprintf(stderr, "native lifecycle failed: %s\n", step);
@@ -1280,6 +1285,9 @@ static void run_native_connection(const mc_host_vm_api_v1 *vm_api,
 
   mc_host_vm_create_options_v1 native_create = *create;
   native_create.flags &= ~MC_HOST_VM_CREATE_DETERMINISTIC;
+  native_create.wall_ms = 0;
+  native_create.monotonic_ms = 0;
+  native_create.entropy_seed = 0;
   mc_host_handle_t vm = 0;
   check(vm_api->vm_create(runtime, kernel, plan, &native_create, &vm, NULL),
         "boot native connection VM");
@@ -2219,6 +2227,8 @@ static void verify_identical_capture(const mc_host_vm_api_v1 *vm_api,
   create.layer_count = 1;
   create.requested_workers = -1;
   create.flags = MC_HOST_VM_CREATE_DETERMINISTIC;
+  create.wall_ms = FIXTURE_WALL_MS;
+  create.entropy_seed = FIXTURE_ENTROPY_SEED;
   mc_host_handle_t vm = 0;
   check(vm_api->vm_create(runtime, kernel, 0, &create, &vm, NULL),
         "boot deterministic base image under C API");
@@ -2273,6 +2283,181 @@ static void verify_identical_capture(const mc_host_vm_api_v1 *vm_api,
         "finish deterministic C capture");
   check(vm_api->vm_close(runtime, vm, NULL),
         "close deterministic C VM");
+}
+
+/* Run one shell command to completion and copy its stdout, NUL-terminated. */
+static void guest_stdout(const mc_host_vm_api_v1 *vm_api,
+                         const mc_host_operation_api_v1 *op_api,
+                         mc_host_runtime_t runtime, mc_host_handle_t vm,
+                         const char *command, char *out, size_t capacity) {
+  wire envelope = shell_request(command);
+  mc_host_handle_t operation = 0;
+  check(op_api->start(runtime, vm, (mc_host_bytes_v1){envelope.bytes, envelope.length},
+                      &operation, NULL), "start ambient probe command");
+  mc_host_operation_status_v1 status = MC_HOST_INIT(mc_host_operation_status_v1);
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+    options.max_ticks = 128;
+    options.stop_mask = MC_HOST_DRIVE_ON_OPERATION;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &options, &driven, NULL), "drive ambient probe");
+    check(op_api->poll(runtime, operation, &status, NULL), "poll ambient probe");
+    if (status.state == MC_HOST_OP_READY) break;
+  }
+  uint8_t result[4096];
+  need(status.state == MC_HOST_OP_READY && status.result_length < sizeof(result),
+       "ambient probe completes");
+  mc_host_buffer_v1 buffer = {result, sizeof(result), 0};
+  check(op_api->result(runtime, operation, &buffer, NULL), "read ambient probe result");
+  mc_host_wire_operation_result decoded;
+  mc_host_wire_exec_outcome outcome;
+  need(mc_host_wire_decode_operation_result(result, buffer.required, &decoded) ==
+           MC_HOST_WIRE_OK && decoded.status == 0 &&
+           mc_host_wire_decode_exec_outcome(decoded.payload.data, decoded.payload.len,
+                                            &outcome) == MC_HOST_WIRE_OK &&
+           outcome.exit_code == 0 && outcome.stdout.len > 0 &&
+           outcome.stdout.len < capacity,
+       "ambient probe prints a value");
+  memcpy(out, outcome.stdout.data, outcome.stdout.len);
+  out[outcome.stdout.len] = 0;
+  check(op_api->close(runtime, operation, NULL), "close ambient probe");
+}
+
+/* Replace a deterministic VM's ambient inputs with a one-tick drive. */
+static mc_host_result_t set_ambient(const mc_host_vm_api_v1 *vm_api,
+                                    mc_host_runtime_t runtime, mc_host_handle_t vm,
+                                    int64_t wall_ms, uint64_t entropy_seed) {
+  mc_host_drive_options_v1 options = MC_HOST_INIT(mc_host_drive_options_v1);
+  options.max_ticks = 1;
+  options.flags = MC_HOST_DRIVE_SET_AMBIENT;
+  options.wall_ms = wall_ms;
+  options.entropy_seed = entropy_seed;
+  mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+  return vm_api->vm_drive(runtime, vm, &options, &driven, NULL);
+}
+
+static void boot_to_prompt(const mc_host_vm_api_v1 *vm_api, mc_host_runtime_t runtime,
+                           mc_host_handle_t vm) {
+  mc_host_vm_status_v1 status = MC_HOST_INIT(mc_host_vm_status_v1);
+  for (int attempt = 0; attempt < 8192; ++attempt) {
+    check(vm_api->vm_status(runtime, vm, &status, NULL), "observe ambient VM prompt");
+    if (status.flags & MC_HOST_VM_FLAG_AT_PROMPT) return;
+    mc_host_drive_options_v1 drive = MC_HOST_INIT(mc_host_drive_options_v1);
+    drive.max_ticks = 128;
+    mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+    check(vm_api->vm_drive(runtime, vm, &drive, &driven, NULL), "drive ambient VM to prompt");
+  }
+  need(0, "ambient VM reaches its prompt");
+}
+
+/* A deterministic VM reads the clock and entropy its caller supplies: on
+ * create, on restore, and whenever a drive replaces them. */
+static void verify_ambient_inputs(const mc_host_api_v1 *api,
+                                  const mc_host_vm_api_v1 *vm_api,
+                                  const mc_host_operation_api_v1 *op_api,
+                                  const mc_host_snapshot_api_v1 *snap_api,
+                                  const uint8_t *kernel_bytes, size_t kernel_length,
+                                  const uint8_t *image, size_t image_length) {
+  const char clock_command[] = "date +%s";
+  const char entropy_command[] = "od -An -tx1 -N16 /dev/random";
+  mc_host_runtime_options_v1 runtime_options = MC_HOST_INIT(mc_host_runtime_options_v1);
+  mc_host_runtime_t runtime = 0;
+  check(api->runtime_create(&runtime_options, &runtime, NULL), "create ambient runtime");
+  mc_host_handle_t kernel = 0;
+  mc_host_kernel_info_v1 kernel_info = MC_HOST_INIT(mc_host_kernel_info_v1);
+  check(vm_api->kernel_load(runtime, (mc_host_bytes_v1){kernel_bytes, kernel_length},
+                            &kernel, &kernel_info, NULL), "load ambient kernel");
+  mc_host_bytes_v1 layer = {image, image_length};
+  mc_host_vm_create_options_v1 create = MC_HOST_INIT(mc_host_vm_create_options_v1);
+  create.layers = &layer;
+  create.layer_count = 1;
+  create.requested_workers = -1;
+  mc_host_handle_t vm = 0;
+
+  create.wall_ms = 1;
+  need(vm_api->vm_create(runtime, kernel, 0, &create, &vm, NULL) ==
+           MC_HOST_INVALID_ARGUMENT && vm == 0,
+       "ambient inputs are refused for a VM that reads the machine clock");
+  create.flags = MC_HOST_VM_CREATE_DETERMINISTIC;
+  create.wall_ms = -1;
+  need(vm_api->vm_create(runtime, kernel, 0, &create, &vm, NULL) ==
+           MC_HOST_INVALID_ARGUMENT && vm == 0,
+       "negative wall clock is refused");
+
+  create.wall_ms = INT64_C(1800000000000);
+  create.entropy_seed = 7;
+  check(vm_api->vm_create(runtime, kernel, 0, &create, &vm, NULL),
+        "boot VM with caller-supplied ambient inputs");
+  boot_to_prompt(vm_api, runtime, vm);
+  char first[128], second[128];
+  guest_stdout(vm_api, op_api, runtime, vm, clock_command, first, sizeof(first));
+  need(strncmp(first, "1800000000", 10) == 0, "guest reads the wall clock given on create");
+
+  mc_host_drive_options_v1 stray = MC_HOST_INIT(mc_host_drive_options_v1);
+  stray.max_ticks = 1;
+  stray.wall_ms = 5;
+  mc_host_drive_result_v1 driven = MC_HOST_INIT(mc_host_drive_result_v1);
+  need(vm_api->vm_drive(runtime, vm, &stray, &driven, NULL) == MC_HOST_INVALID_ARGUMENT,
+       "ambient inputs without SET_AMBIENT are refused");
+  stray.wall_ms = 0;
+  stray.flags = 2;
+  need(vm_api->vm_drive(runtime, vm, &stray, &driven, NULL) == MC_HOST_UNSUPPORTED,
+       "unknown drive flag is refused");
+
+  check(set_ambient(vm_api, runtime, vm, INT64_C(1900000000000), 42),
+        "replace ambient inputs at a drive");
+  guest_stdout(vm_api, op_api, runtime, vm, clock_command, first, sizeof(first));
+  need(strncmp(first, "1900000000", 10) == 0, "guest reads the wall clock given at a drive");
+  guest_stdout(vm_api, op_api, runtime, vm, entropy_command, first, sizeof(first));
+  check(set_ambient(vm_api, runtime, vm, INT64_C(1900000000000), 42),
+        "repeat the same entropy seed");
+  guest_stdout(vm_api, op_api, runtime, vm, entropy_command, second, sizeof(second));
+  need(strcmp(first, second) == 0, "the same seed gives the same entropy");
+  check(set_ambient(vm_api, runtime, vm, INT64_C(1900000000000), 43),
+        "supply a different entropy seed");
+  guest_stdout(vm_api, op_api, runtime, vm, entropy_command, second, sizeof(second));
+  need(strcmp(first, second) != 0, "a different seed gives different entropy");
+
+  mc_host_snapshot_begin_options_v1 capture = MC_HOST_INIT(mc_host_snapshot_begin_options_v1);
+  capture.mode = MC_HOST_SNAPSHOT_FULL;
+  mc_host_handle_t snapshot = 0;
+  mc_host_snapshot_info_v1 info = MC_HOST_INIT(mc_host_snapshot_info_v1);
+  check(snap_api->begin(runtime, vm, &capture, &snapshot, &info, NULL),
+        "capture VM with caller-supplied ambient inputs");
+  uint8_t *bytes = snapshot_bytes(snap_api, runtime, snapshot, info.length);
+  check(snap_api->finish(runtime, snapshot, NULL), "finish ambient capture");
+  check(vm_api->vm_close(runtime, vm, NULL), "close ambient source VM");
+
+  mc_host_vm_restore_options_v1 restore = MC_HOST_INIT(mc_host_vm_restore_options_v1);
+  restore.snapshot = (mc_host_bytes_v1){bytes, info.length};
+  restore.mode = MC_HOST_RESTORE_DETACHED;
+  restore.wall_ms = 1;
+  mc_host_handle_t restored = 0;
+  need(vm_api->vm_restore(runtime, kernel, 0, &restore, &restored, NULL) ==
+           MC_HOST_INVALID_ARGUMENT && restored == 0,
+       "restore refuses ambient inputs for a VM that reads the machine clock");
+  restore.flags = MC_HOST_VM_RESTORE_DETERMINISTIC;
+  restore.wall_ms = INT64_C(2000000000000);
+  restore.entropy_seed = 42;
+  check(vm_api->vm_restore(runtime, kernel, 0, &restore, &restored, NULL),
+        "restore with caller-supplied ambient inputs");
+  guest_stdout(vm_api, op_api, runtime, restored, clock_command, second, sizeof(second));
+  need(strncmp(second, "2000000000", 10) == 0, "guest reads the wall clock given on restore");
+  guest_stdout(vm_api, op_api, runtime, restored, entropy_command, second, sizeof(second));
+  need(strcmp(first, second) == 0, "a restore given the same seed reads the same entropy");
+  check(vm_api->vm_close(runtime, restored, NULL), "close ambient restored VM");
+  free(bytes);
+
+  create.flags = 0;
+  create.wall_ms = 0;
+  create.entropy_seed = 0;
+  check(vm_api->vm_create(runtime, kernel, 0, &create, &vm, NULL),
+        "boot VM that reads the machine clock");
+  need(set_ambient(vm_api, runtime, vm, 1, 1) == MC_HOST_INVALID_ARGUMENT,
+       "SET_AMBIENT is refused for a VM that reads the machine clock");
+  check(vm_api->vm_close(runtime, vm, NULL), "close machine-clock VM");
+  check(vm_api->kernel_close(runtime, kernel, NULL), "close ambient kernel");
+  check(api->runtime_close(runtime, NULL), "close ambient runtime");
 }
 
 static void verify_operation_result_quota(const mc_host_api_v1 *api,
@@ -2596,6 +2781,8 @@ int main(int argc, char **argv) {
   create.layer_count = 1;
   create.requested_workers = -1;
   create.flags = MC_HOST_VM_CREATE_DETERMINISTIC;
+  create.wall_ms = FIXTURE_WALL_MS;
+  create.entropy_seed = FIXTURE_ENTROPY_SEED;
   mc_host_handle_t vm = 0;
   check(vm_api.vm_create(runtime, kernel_handle, plan, &create, &vm, NULL), "boot real image");
   mc_host_drive_options_v1 over_limit = MC_HOST_INIT(mc_host_drive_options_v1);
@@ -2843,6 +3030,8 @@ int main(int argc, char **argv) {
   restore.baseline = (mc_host_bytes_v1){full, full_info.length};
   restore.mode = MC_HOST_RESTORE_STRICT;
   restore.flags = MC_HOST_VM_RESTORE_DETERMINISTIC;
+  restore.wall_ms = FIXTURE_WALL_MS;
+  restore.entropy_seed = FIXTURE_ENTROPY_SEED;
   mc_host_handle_t restored = 0;
   mc_host_bytes_v1 manifest_bytes = {manifest, manifest_buffer.required};
   need(vm_api.vm_restore(runtime, kernel_handle, plan, &restore,
@@ -3023,6 +3212,8 @@ int main(int argc, char **argv) {
   uint8_t *base_image = read_artifact(argv[4], &base_image_length);
   verify_identical_capture(&vm_api, &op_api, &snap_api, runtime, kernel_handle,
                            base_image, base_image_length, rust_full, rust_full_length);
+  verify_ambient_inputs(&api, &vm_api, &op_api, &snap_api, kernel, kernel_len,
+                        image, image_len);
   verify_operation_result_quota(&api, &vm_api, &op_api, &output_api,
                                 kernel, kernel_len, base_image, base_image_length);
   free(base_image);
