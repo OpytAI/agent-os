@@ -2,11 +2,12 @@
 
 #include <stddef.h>
 
-#define CHECK_LAYOUT(type_, name_) \
-  _Static_assert(sizeof(type_) == MC_HOST_LAYOUT_##name_##_SIZE, #type_ " size"); \
-  _Static_assert(_Alignof(type_) == MC_HOST_LAYOUT_##name_##_ALIGN, #type_ " align")
-#define CHECK_FIELD(type_, name_, field_, constant_) \
-  _Static_assert(offsetof(type_, field_) == MC_HOST_LAYOUT_##name_##_##constant_##_OFFSET, #type_ "." #field_ " offset")
+#define CHECK_LAYOUT(type_, name_)                                                                 \
+    _Static_assert(sizeof(type_) == MC_HOST_LAYOUT_##name_##_SIZE, #type_ " size");                \
+    _Static_assert(_Alignof(type_) == MC_HOST_LAYOUT_##name_##_ALIGN, #type_ " align")
+#define CHECK_FIELD(type_, name_, field_, constant_)                                               \
+    _Static_assert(offsetof(type_, field_) == MC_HOST_LAYOUT_##name_##_##constant_##_OFFSET,       \
+                   #type_ "." #field_ " offset")
 
 CHECK_LAYOUT(mc_host_header_v1, HEADER);
 CHECK_FIELD(mc_host_header_v1, HEADER, size, SIZE);
@@ -34,33 +35,46 @@ CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_drive_ticks, MAX_DR
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_output_bytes, MAX_OUTPUT_BYTES);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_output_records, MAX_OUTPUT_RECORDS);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_snapshot_bytes, MAX_SNAPSHOT_BYTES);
-CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_snapshot_total_bytes, MAX_SNAPSHOT_TOTAL_BYTES);
-CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_operations_per_vm, MAX_OPERATIONS_PER_VM);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_snapshot_total_bytes,
+            MAX_SNAPSHOT_TOTAL_BYTES);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_operations_per_vm,
+            MAX_OPERATIONS_PER_VM);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_effect_events, MAX_EFFECT_EVENTS);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_effect_bytes, MAX_EFFECT_BYTES);
-CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_effect_response_bytes, MAX_EFFECT_RESPONSE_BYTES);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_effect_response_bytes,
+            MAX_EFFECT_RESPONSE_BYTES);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_ws_sockets, MAX_WS_SOCKETS);
-CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_ws_incoming_bytes, MAX_WS_INCOMING_BYTES);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_ws_incoming_bytes,
+            MAX_WS_INCOMING_BYTES);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, wake, WAKE);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, wake_user_data, WAKE_USER_DATA);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_kernels, MAX_KERNELS);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_kernel_bytes, MAX_KERNEL_BYTES);
-CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_compiled_modules, MAX_COMPILED_MODULES);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_compiled_modules,
+            MAX_COMPILED_MODULES);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_image_bytes, MAX_IMAGE_BYTES);
-CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_snapshot_handles, MAX_SNAPSHOT_HANDLES);
-CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, reserved_resource_options, RESERVED_RESOURCE_OPTIONS);
-CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_operation_result_bytes, MAX_OPERATION_RESULT_BYTES);
-CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, reserved_result_options, RESERVED_RESULT_OPTIONS);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_snapshot_handles,
+            MAX_SNAPSHOT_HANDLES);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, reserved_resource_options,
+            RESERVED_RESOURCE_OPTIONS);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_operation_result_bytes,
+            MAX_OPERATION_RESULT_BYTES);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, reserved_result_options,
+            RESERVED_RESULT_OPTIONS);
 CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_message_bytes, MAX_MESSAGE_BYTES);
-CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, reserved_message_options, RESERVED_MESSAGE_OPTIONS);
-CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_effect_event_bytes, MAX_EFFECT_EVENT_BYTES);
-CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_effect_single_response_bytes, MAX_EFFECT_SINGLE_RESPONSE_BYTES);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, reserved_message_options,
+            RESERVED_MESSAGE_OPTIONS);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_effect_event_bytes,
+            MAX_EFFECT_EVENT_BYTES);
+CHECK_FIELD(mc_host_runtime_options_v1, RUNTIME_OPTIONS, max_effect_single_response_bytes,
+            MAX_EFFECT_SINGLE_RESPONSE_BYTES);
 
 CHECK_LAYOUT(mc_host_library_info_v1, LIBRARY_INFO);
 CHECK_FIELD(mc_host_library_info_v1, LIBRARY_INFO, header, HEADER);
 CHECK_FIELD(mc_host_library_info_v1, LIBRARY_INFO, abi_major, ABI_MAJOR);
 CHECK_FIELD(mc_host_library_info_v1, LIBRARY_INFO, abi_minor, ABI_MINOR);
-CHECK_FIELD(mc_host_library_info_v1, LIBRARY_INFO, implementation_table_size, IMPLEMENTATION_TABLE_SIZE);
+CHECK_FIELD(mc_host_library_info_v1, LIBRARY_INFO, implementation_table_size,
+            IMPLEMENTATION_TABLE_SIZE);
 CHECK_FIELD(mc_host_library_info_v1, LIBRARY_INFO, feature_bits, FEATURE_BITS);
 
 CHECK_LAYOUT(mc_host_api_v1, API);
@@ -86,7 +100,8 @@ CHECK_FIELD(mc_host_vm_create_options_v1, VM_CREATE_OPTIONS, header, HEADER);
 CHECK_FIELD(mc_host_vm_create_options_v1, VM_CREATE_OPTIONS, layers, LAYERS);
 CHECK_FIELD(mc_host_vm_create_options_v1, VM_CREATE_OPTIONS, layer_count, LAYER_COUNT);
 CHECK_FIELD(mc_host_vm_create_options_v1, VM_CREATE_OPTIONS, contract_tier, CONTRACT_TIER);
-CHECK_FIELD(mc_host_vm_create_options_v1, VM_CREATE_OPTIONS, contract_budget_mib, CONTRACT_BUDGET_MIB);
+CHECK_FIELD(mc_host_vm_create_options_v1, VM_CREATE_OPTIONS, contract_budget_mib,
+            CONTRACT_BUDGET_MIB);
 CHECK_FIELD(mc_host_vm_create_options_v1, VM_CREATE_OPTIONS, contract_fuel, CONTRACT_FUEL);
 CHECK_FIELD(mc_host_vm_create_options_v1, VM_CREATE_OPTIONS, requested_workers, REQUESTED_WORKERS);
 CHECK_FIELD(mc_host_vm_create_options_v1, VM_CREATE_OPTIONS, flags, FLAGS);
@@ -197,9 +212,11 @@ CHECK_LAYOUT(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS);
 CHECK_FIELD(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS, header, HEADER);
 CHECK_FIELD(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS, inflight_egress, INFLIGHT_EGRESS);
 CHECK_FIELD(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS, pending_commits, PENDING_COMMITS);
-CHECK_FIELD(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS, pending_operations, PENDING_OPERATIONS);
+CHECK_FIELD(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS, pending_operations,
+            PENDING_OPERATIONS);
 CHECK_FIELD(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS, pending_effects, PENDING_EFFECTS);
-CHECK_FIELD(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS, pending_transactions, PENDING_TRANSACTIONS);
+CHECK_FIELD(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS, pending_transactions,
+            PENDING_TRANSACTIONS);
 CHECK_FIELD(mc_host_snapshot_readiness_v1, SNAPSHOT_READINESS, reserved, RESERVED);
 
 CHECK_LAYOUT(mc_host_snapshot_api_v1, SNAPSHOT_API);
@@ -230,7 +247,8 @@ CHECK_FIELD(mc_host_attachment_api_v1, ATTACHMENT_API, plan_add, PLAN_ADD);
 CHECK_FIELD(mc_host_attachment_api_v1, ATTACHMENT_API, plan_seal, PLAN_SEAL);
 CHECK_FIELD(mc_host_attachment_api_v1, ATTACHMENT_API, plan_close, PLAN_CLOSE);
 CHECK_FIELD(mc_host_attachment_api_v1, ATTACHMENT_API, vm_attach_update, VM_ATTACH_UPDATE);
-CHECK_FIELD(mc_host_attachment_api_v1, ATTACHMENT_API, vm_attachment_manifest, VM_ATTACHMENT_MANIFEST);
+CHECK_FIELD(mc_host_attachment_api_v1, ATTACHMENT_API, vm_attachment_manifest,
+            VM_ATTACHMENT_MANIFEST);
 
 CHECK_LAYOUT(mc_host_effect_info_v1, EFFECT_INFO);
 CHECK_FIELD(mc_host_effect_info_v1, EFFECT_INFO, header, HEADER);
@@ -269,9 +287,5 @@ CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, result, RESULT);
 CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, peek, PEEK);
 CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, cancel, CANCEL);
 CHECK_FIELD(mc_host_operation_api_v1, OPERATION_API, close, CLOSE);
-
-
-
-
 
 int main(void) { return 0; }
